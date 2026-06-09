@@ -1,0 +1,297 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { isPidAlive, startDaemon } from "@pickforge/picklab-core";
+import {
+  getUiTree,
+  listDevices,
+  logcat,
+  resolveAdb,
+  runAdb,
+  screenshot,
+  stopEmulator,
+  tap,
+  waitForBoot,
+} from "../src/index.js";
+
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-android-adb-"));
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const SERIAL = "emulator-5554";
+
+afterAll(() => {
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+let binCounter = 0;
+
+function fakeAdbDir(script: string): string {
+  binCounter += 1;
+  const dir = path.join(tmpRoot, `bin-${binCounter}`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "adb"),
+    `#!/bin/sh\nPATH="/usr/bin:/bin:$PATH"\n${script}\n`,
+    { mode: 0o755 },
+  );
+  return dir;
+}
+
+describe("resolveAdb", () => {
+  it("throws an actionable error when adb is missing", () => {
+    expect(() => resolveAdb({ sdk: null, env: { PATH: "" } })).toThrow(
+      /platform-tools/,
+    );
+  });
+});
+
+describe("screenshot via exec-out", () => {
+  it("writes binary stdout to the out path and verifies the PNG magic", async () => {
+    const helper = path.join(tmpRoot, "png.cjs");
+    fs.writeFileSync(
+      helper,
+      "process.stdout.write(Buffer.concat([" +
+        "Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])," +
+        "Buffer.from([0x00,0xff,0x00,0xfe,0x80,0x81])]))",
+    );
+    const bin = fakeAdbDir(`exec '${process.execPath}' '${helper}'`);
+    const outPath = path.join(tmpRoot, "shots", "screen.png");
+    const result = await screenshot({
+      serial: SERIAL,
+      outPath,
+      env: { PATH: bin },
+    });
+    expect(result.path).toBe(outPath);
+    const data = fs.readFileSync(outPath);
+    expect(data.length).toBe(14);
+    expect(data.subarray(0, 8).equals(PNG_MAGIC)).toBe(true);
+    expect([...data.subarray(8)]).toEqual([0x00, 0xff, 0x00, 0xfe, 0x80, 0x81]);
+  });
+
+  it("rejects non-PNG output", async () => {
+    const bin = fakeAdbDir('printf "not a png"');
+    await expect(
+      screenshot({
+        serial: SERIAL,
+        outPath: path.join(tmpRoot, "bad.png"),
+        env: { PATH: bin },
+      }),
+    ).rejects.toThrow(/did not produce a PNG/);
+  });
+
+  it("surfaces adb failures with the invocation", async () => {
+    const bin = fakeAdbDir('echo "device offline" >&2; exit 1');
+    await expect(
+      screenshot({
+        serial: SERIAL,
+        outPath: path.join(tmpRoot, "fail.png"),
+        env: { PATH: bin },
+      }),
+    ).rejects.toThrow(/screenshot failed[\s\S]*device offline/);
+  });
+});
+
+describe("getUiTree", () => {
+  it("dumps, reads back, and cleans up the remote xml", async () => {
+    const callLog = path.join(tmpRoot, "ui-calls.log");
+    const bin = fakeAdbDir(
+      [
+        `echo "$*" >> '${callLog}'`,
+        'case "$*" in',
+        '  *"uiautomator dump"*) echo "UI hierchary dumped to: /sdcard/picklab-ui.xml" ;;',
+        '  *"cat /sdcard/picklab-ui.xml"*) printf \'<?xml version="1.0"?><hierarchy rotation="0"><node text="hi"/></hierarchy>\' ;;',
+        "esac",
+      ].join("\n"),
+    );
+    const xml = await getUiTree({ serial: SERIAL, env: { PATH: bin } });
+    expect(xml).toContain("<hierarchy");
+    expect(xml).toContain('text="hi"');
+    const calls = fs.readFileSync(callLog, "utf8").trim().split("\n");
+    expect(calls).toEqual([
+      `-s ${SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
+      `-s ${SERIAL} exec-out cat /sdcard/picklab-ui.xml`,
+      `-s ${SERIAL} shell rm -f /sdcard/picklab-ui.xml`,
+    ]);
+  });
+
+  it("cleans up the remote file even when the dump output is not xml", async () => {
+    const callLog = path.join(tmpRoot, "ui-fail-calls.log");
+    const bin = fakeAdbDir(
+      [
+        `echo "$*" >> '${callLog}'`,
+        'case "$*" in *"cat "*) printf "ERROR: null root node returned" ;; esac',
+      ].join("\n"),
+    );
+    await expect(
+      getUiTree({ serial: SERIAL, env: { PATH: bin }, attempts: 1 }),
+    ).rejects.toThrow(/did not return XML/);
+    const calls = fs.readFileSync(callLog, "utf8");
+    expect(calls).toContain("rm -f /sdcard/picklab-ui.xml");
+  });
+
+  it("retries transient null-root dump failures", async () => {
+    const countFile = path.join(tmpRoot, "ui-retry-count");
+    const bin = fakeAdbDir(
+      [
+        'case "$*" in',
+        '  *"uiautomator dump"*)',
+        `    n=$(cat '${countFile}' 2>/dev/null || echo 0)`,
+        "    n=$((n+1))",
+        `    echo "$n" > '${countFile}'`,
+        '    if [ "$n" -lt 3 ]; then',
+        '      echo "ERROR: null root node returned by UiTestAutomationBridge." >&2',
+        "      exit 1",
+        "    fi",
+        '    echo "UI hierchary dumped to: /sdcard/picklab-ui.xml" ;;',
+        '  *"cat /sdcard/picklab-ui.xml"*) printf \'<?xml version="1.0"?><hierarchy/>\' ;;',
+        "esac",
+      ].join("\n"),
+    );
+    const xml = await getUiTree({
+      serial: SERIAL,
+      env: { PATH: bin },
+      retryDelayMs: 10,
+    });
+    expect(xml).toContain("<hierarchy");
+    expect(fs.readFileSync(countFile, "utf8").trim()).toBe("3");
+  });
+
+  it("rejects a non-positive attempts option", async () => {
+    await expect(
+      getUiTree({ serial: SERIAL, env: { PATH: "" }, attempts: 0 }),
+    ).rejects.toThrow(/Invalid attempts/);
+  });
+});
+
+describe("logcat and devices", () => {
+  it("returns the dumped log", async () => {
+    const bin = fakeAdbDir('echo "06-09 19:00:00.000 I/Picklab: hello"');
+    const output = await logcat({ serial: SERIAL, lines: 10, env: { PATH: bin } });
+    expect(output).toContain("I/Picklab: hello");
+  });
+
+  it("lists devices through the real parser", async () => {
+    const bin = fakeAdbDir(
+      'printf "List of devices attached\\nemulator-5554\\tdevice\\n"',
+    );
+    expect(await listDevices({ env: { PATH: bin } })).toEqual([
+      { serial: "emulator-5554", state: "device" },
+    ]);
+  });
+});
+
+describe("runAdb passthrough", () => {
+  it("passes raw args as argv without a shell and prepends the serial", async () => {
+    const bin = fakeAdbDir(
+      'for a in "$@"; do echo "ARG:$a"; done',
+    );
+    const result = await runAdb({
+      serial: SERIAL,
+      args: ["shell", "echo", "; rm -rf /"],
+      env: { PATH: bin },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.stdout.split("\n").filter((l) => l !== "")).toEqual([
+      "ARG:-s",
+      `ARG:${SERIAL}`,
+      "ARG:shell",
+      "ARG:echo",
+      "ARG:; rm -rf /",
+    ]);
+  });
+
+  it("validates the serial but passes failures through without throwing", async () => {
+    const bin = fakeAdbDir("exit 5");
+    await expect(
+      runAdb({ serial: "bad serial", args: ["devices"], env: { PATH: bin } }),
+    ).rejects.toThrow(/Invalid device serial/);
+    const result = await runAdb({ args: ["devices"], env: { PATH: bin } });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(5);
+  });
+});
+
+describe("input ops against a fake adb", () => {
+  it("taps through adb shell input", async () => {
+    const callLog = path.join(tmpRoot, "tap-calls.log");
+    const bin = fakeAdbDir(`echo "$*" >> '${callLog}'`);
+    await tap({ serial: SERIAL, x: 12, y: 34, env: { PATH: bin } });
+    expect(fs.readFileSync(callLog, "utf8").trim()).toBe(
+      `-s ${SERIAL} shell input tap 12 34`,
+    );
+  });
+});
+
+describe("waitForBoot polling", () => {
+  it("polls getprop until sys.boot_completed is 1", async () => {
+    const countFile = path.join(tmpRoot, "boot-count");
+    const bin = fakeAdbDir(
+      [
+        `n=$(cat '${countFile}' 2>/dev/null || echo 0)`,
+        "n=$((n+1))",
+        `echo "$n" > '${countFile}'`,
+        'if [ "$n" -ge 3 ]; then echo 1; else echo 0; fi',
+      ].join("\n"),
+    );
+    await waitForBoot({
+      serial: SERIAL,
+      adbPath: path.join(bin, "adb"),
+      timeoutMs: 5_000,
+      pollIntervalMs: 20,
+    });
+    expect(fs.readFileSync(countFile, "utf8").trim()).toBe("3");
+  });
+
+  it("fails with the log path when the deadline passes", async () => {
+    const bin = fakeAdbDir("echo 0");
+    await expect(
+      waitForBoot({
+        serial: SERIAL,
+        adbPath: path.join(bin, "adb"),
+        timeoutMs: 150,
+        pollIntervalMs: 50,
+        logPath: "/tmp/emulator.log",
+      }),
+    ).rejects.toThrow(/did not finish booting within 150ms.*\/tmp\/emulator\.log/);
+  });
+
+  it("fails fast when the emulator process dies", async () => {
+    const bin = fakeAdbDir("echo 0");
+    await expect(
+      waitForBoot({
+        serial: SERIAL,
+        adbPath: path.join(bin, "adb"),
+        timeoutMs: 5_000,
+        pollIntervalMs: 50,
+        isEmulatorAlive: () => false,
+        logPath: "/tmp/emulator.log",
+      }),
+    ).rejects.toThrow(/exited before finishing boot.*\/tmp\/emulator\.log/);
+  });
+});
+
+describe("stopEmulator", () => {
+  it("falls back to stopPid when adb emu kill does not stop the process", async () => {
+    const bin = fakeAdbDir("exit 0");
+    const daemon = await startDaemon(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { logDir: path.join(tmpRoot, "stop-logs"), name: "fake-emulator" },
+    );
+    expect(isPidAlive(daemon.pid)).toBe(true);
+    const stopped = await stopEmulator({
+      serial: SERIAL,
+      pid: daemon.pid,
+      env: { PATH: bin },
+      timeoutMs: 300,
+    });
+    expect(stopped).toBe(true);
+    expect(isPidAlive(daemon.pid)).toBe(false);
+  });
+
+  it("returns true for an already-dead pid without adb", async () => {
+    expect(
+      await stopEmulator({ pid: 999_999_2, env: { PATH: "" }, timeoutMs: 200 }),
+    ).toBe(true);
+  });
+});

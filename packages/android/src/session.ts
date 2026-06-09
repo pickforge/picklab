@@ -1,0 +1,178 @@
+import path from "node:path";
+import {
+  createSession,
+  destroySessionRecord,
+  getSession,
+  isPidAlive,
+  sessionsDir,
+  updateSession,
+  type AndroidSessionInfo,
+  type EnvLike,
+  type SessionRecord,
+} from "@pickforge/picklab-core";
+import { listDevices } from "./adb.js";
+import { DEFAULT_AVD_NAME } from "./avd.js";
+import { startEmulator, stopEmulator, type EmulatorHandle } from "./emulator.js";
+
+export interface CreateAndroidSessionOptions {
+  projectDir: string;
+  avdName?: string;
+  registryEnv?: EnvLike;
+  env?: EnvLike;
+  sdk?: string | null;
+  headless?: boolean;
+  port?: number;
+  bootTimeoutMs?: number;
+  bootPollIntervalMs?: number;
+}
+
+export interface AndroidSessionHandle {
+  id: string;
+  avdName: string;
+  serial: string;
+  consolePort: number;
+  emulatorPid: number;
+  logPath: string;
+  logDir: string;
+}
+
+export interface AndroidSessionStatus {
+  record: SessionRecord;
+  emulatorAlive: boolean;
+  deviceState: string | null;
+}
+
+export interface AndroidSessionTeardownOptions {
+  sdk?: string | null;
+  env?: EnvLike;
+  timeoutMs?: number;
+}
+
+export function androidSessionLogDir(
+  id: string,
+  registryEnv: EnvLike = process.env,
+): string {
+  return path.join(sessionsDir(registryEnv), id);
+}
+
+export async function createAndroidSession(
+  opts: CreateAndroidSessionOptions,
+): Promise<AndroidSessionHandle> {
+  const registryEnv = opts.registryEnv ?? process.env;
+  const avdName = opts.avdName ?? DEFAULT_AVD_NAME;
+  const record = await createSession(
+    { type: "android", projectDir: opts.projectDir, android: { avdName } },
+    registryEnv,
+  );
+  const logDir = androidSessionLogDir(record.id, registryEnv);
+
+  let emulator: EmulatorHandle | undefined;
+  try {
+    emulator = await startEmulator({
+      avdName,
+      sdk: opts.sdk,
+      headless: opts.headless,
+      port: opts.port,
+      logDir,
+      env: opts.env,
+      bootTimeoutMs: opts.bootTimeoutMs,
+      bootPollIntervalMs: opts.bootPollIntervalMs,
+    });
+
+    const android: AndroidSessionInfo = {
+      avdName,
+      serial: emulator.serial,
+      emulatorPid: emulator.pid,
+      consolePort: emulator.consolePort,
+    };
+    await updateSession(record.id, { status: "running", android }, registryEnv);
+
+    return {
+      id: record.id,
+      avdName,
+      serial: emulator.serial,
+      consolePort: emulator.consolePort,
+      emulatorPid: emulator.pid,
+      logPath: emulator.logPath,
+      logDir,
+    };
+  } catch (error) {
+    if (emulator !== undefined) {
+      await stopEmulator({
+        serial: emulator.serial,
+        pid: emulator.pid,
+        sdk: opts.sdk,
+        env: opts.env,
+      }).catch(() => {});
+    }
+    await updateSession(record.id, { status: "error" }, registryEnv).catch(
+      () => {},
+    );
+    throw error;
+  }
+}
+
+export async function destroyAndroidSession(
+  id: string,
+  registryEnv: EnvLike = process.env,
+  opts: AndroidSessionTeardownOptions = {},
+): Promise<void> {
+  const record = await getSession(id, registryEnv);
+  if (record === undefined) {
+    throw new Error(`Android session not found: ${id}`);
+  }
+  const android = record.android;
+  if (android?.emulatorPid !== undefined || android?.serial !== undefined) {
+    let stopped: boolean;
+    let failure: Error | undefined;
+    try {
+      stopped = await stopEmulator({
+        serial: android.serial,
+        pid: android.emulatorPid,
+        sdk: opts.sdk,
+        env: opts.env,
+        timeoutMs: opts.timeoutMs,
+      });
+    } catch (error) {
+      stopped = false;
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+    if (!stopped) {
+      await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+      throw new Error(
+        `Failed to stop emulator of android session ${id} ` +
+          `(serial ${android.serial ?? "unknown"}, pid ${android.emulatorPid ?? "unknown"})` +
+          (failure !== undefined ? `: ${failure.message}` : ""),
+      );
+    }
+  }
+  await destroySessionRecord(id, registryEnv);
+}
+
+export async function getAndroidSessionStatus(
+  id: string,
+  registryEnv: EnvLike = process.env,
+  opts: AndroidSessionTeardownOptions = {},
+): Promise<AndroidSessionStatus> {
+  const record = await getSession(id, registryEnv);
+  if (record === undefined) {
+    throw new Error(`Android session not found: ${id}`);
+  }
+  const android = record.android;
+  const emulatorAlive =
+    android?.emulatorPid !== undefined && isPidAlive(android.emulatorPid);
+
+  let deviceState: string | null = null;
+  if (android?.serial !== undefined) {
+    try {
+      const devices = await listDevices(opts);
+      deviceState =
+        devices.find((device) => device.serial === android.serial)?.state ??
+        null;
+    } catch {
+      deviceState = null;
+    }
+  }
+
+  return { record, emulatorAlive, deviceState };
+}

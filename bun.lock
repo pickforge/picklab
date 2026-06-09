@@ -18,6 +18,9 @@
     "packages/android": {
       "name": "@pickforge/picklab-android",
       "version": "0.1.0",
+      "dependencies": {
+        "@pickforge/picklab-core": "*",
+      },
     },
     "packages/cli": {
       "name": "@pickforge/picklab",
