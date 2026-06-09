@@ -34,6 +34,9 @@
         "commander": "^14.0.0",
       },
       "devDependencies": {
+        "@pickforge/picklab-android": "*",
+        "@pickforge/picklab-core": "*",
+        "@pickforge/picklab-desktop-linux": "*",
         "@pickforge/picklab-mcp-server": "*",
       },
     },

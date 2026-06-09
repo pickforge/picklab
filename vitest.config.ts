@@ -7,6 +7,12 @@ export default defineConfig({
       "@pickforge/picklab-core": fileURLToPath(
         new URL("packages/core/src/index.ts", import.meta.url),
       ),
+      "@pickforge/picklab-desktop-linux": fileURLToPath(
+        new URL("packages/desktop-linux/src/index.ts", import.meta.url),
+      ),
+      "@pickforge/picklab-android": fileURLToPath(
+        new URL("packages/android/src/index.ts", import.meta.url),
+      ),
     },
   },
   test: {
