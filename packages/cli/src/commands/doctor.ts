@@ -6,7 +6,10 @@ import {
 } from "../provision/checks.js";
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
 import { executePlan, type StepResult } from "../provision/executor.js";
-import type { ProvisioningStep } from "../provision/plan.js";
+import {
+  planHasCommandSteps,
+  type ProvisioningStep,
+} from "../provision/plan.js";
 import {
   planCreateAvd,
   planLabUser,
@@ -27,13 +30,24 @@ export interface DoctorFixReport {
   steps: ProvisioningStep[];
   skipped: string[];
   results: StepResult[];
-  error?: string;
 }
 
 export interface DoctorReport {
   ok: boolean;
   checks: DoctorCheck[];
+  errors: string[];
   fix?: DoctorFixReport;
+}
+
+async function consentToRepair(
+  question: string,
+  opts: DoctorCliOptions,
+): Promise<boolean> {
+  if (opts.dryRun === true) {
+    return true;
+  }
+  const answer = await confirm(question, { yes: opts.yes });
+  return answer === "yes";
 }
 
 async function buildFixPlan(
@@ -42,6 +56,8 @@ async function buildFixPlan(
 ): Promise<{ steps: ProvisioningStep[]; skipped: string[] }> {
   const steps: ProvisioningStep[] = [];
   const skipped: string[] = [];
+  const consentHint =
+    "skipped (requires consent; re-run with --yes or confirm interactively)";
 
   steps.push(
     ...planPicklabHome({
@@ -58,10 +74,18 @@ async function buildFixPlan(
       installedImages: snapshot.android.systemImages,
       existingAvds: snapshot.android.avds,
     });
-    if (result.ok) {
+    if (!result.ok) {
+      skipped.push(`avd: ${result.error}`);
+    } else if (
+      !planHasCommandSteps(result.plan) ||
+      (await consentToRepair(
+        `Create AVD "${snapshot.android.avdName}" (runs avdmanager)?`,
+        opts,
+      ))
+    ) {
       steps.push(...result.plan.steps);
     } else {
-      skipped.push(`avd: ${result.error}`);
+      skipped.push(`avd: ${consentHint}`);
     }
   }
 
@@ -77,21 +101,16 @@ async function buildFixPlan(
     });
     if (!result.ok) {
       skipped.push(`lab-user: ${result.error}`);
+    } else if (
+      !planHasCommandSteps(result.plan) ||
+      (await consentToRepair(
+        `Create lab user "${snapshot.labUser.name}" (privileged, runs sudo)?`,
+        opts,
+      ))
+    ) {
+      steps.push(...result.plan.steps);
     } else {
-      const answer =
-        opts.dryRun === true
-          ? "yes"
-          : await confirm(
-              `Create lab user "${snapshot.labUser.name}" (privileged, runs sudo)?`,
-              { yes: opts.yes },
-            );
-      if (answer === "yes") {
-        steps.push(...result.plan.steps);
-      } else {
-        skipped.push(
-          `lab-user: skipped (requires consent; re-run with --yes or confirm interactively)`,
-        );
-      }
+      skipped.push(`lab-user: ${consentHint}`);
     }
   }
 
@@ -108,6 +127,7 @@ export async function runDoctor(
   const report: DoctorReport = {
     ok: !checks.some((check) => check.status === "missing"),
     checks,
+    errors: [],
   };
 
   if (opts.json !== true) {
@@ -132,19 +152,21 @@ export async function runDoctor(
       results: execution.results,
     };
     if (!execution.ok) {
-      report.fix.error = execution.error;
+      report.errors.push(execution.error ?? "repairs failed");
       exitCode = 1;
     }
   }
 
   if (opts.json === true) {
     console.log(JSON.stringify(report, null, 2));
-  } else if (report.fix !== undefined) {
-    for (const entry of report.fix.skipped) {
-      console.log(`[skipped] ${entry}`);
+  } else {
+    if (report.fix !== undefined) {
+      for (const entry of report.fix.skipped) {
+        console.log(`[skipped] ${entry}`);
+      }
     }
-    if (report.fix.error !== undefined) {
-      console.error(report.fix.error);
+    for (const error of report.errors) {
+      console.error(`error: ${error}`);
     }
   }
   return exitCode;

@@ -177,6 +177,37 @@ describe("picklab doctor", () => {
     expect(skipped).toContain("lab-user:");
   });
 
+  it("skips AVD creation under --fix without consent in a non-interactive session", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    const env = makeEnv(tmpDir, { sdk });
+    const result = await runCli(["doctor", "--json", "--fix"], env, tmpDir);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(fs.existsSync(path.join(sdk, "avdmanager.log"))).toBe(false);
+    expect(fs.statSync(env.PICKLAB_HOME!).isDirectory()).toBe(true);
+    const skipped = (report.fix.skipped as string[]).join("\n");
+    expect(skipped).toContain("avd: skipped (requires consent");
+    expect(skipped).toContain("--yes");
+    expect(
+      (report.fix.steps as Array<{ id: string }>).map((step) => step.id),
+    ).not.toContain("create-avd");
+  });
+
+  it("creates the AVD under --fix when consent is given via --yes", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    const env = makeEnv(tmpDir, { sdk });
+    const result = await runCli(
+      ["doctor", "--json", "--fix", "--yes"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    const log = fs.readFileSync(path.join(sdk, "avdmanager.log"), "utf8");
+    expect(log.trim()).toBe(`create avd -n picklab-avd -k ${IMAGE}`);
+    expect((report.fix.skipped as string[]).join("\n")).not.toContain("avd:");
+  });
+
   it("prints the repair plan without applying it under --fix --dry-run", async () => {
     const env = makeEnv(tmpDir);
     const result = await runCli(
@@ -226,6 +257,61 @@ describe("picklab init", () => {
     expect(result.code).toBe(0);
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("fails closed when --create-lab-user lacks --yes in a non-interactive session", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const env = makeEnv(tmpDir, {
+      bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      ["init", "--profile", "generic", "--create-lab-user", "--json"],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect((report.errors as string[]).join("\n")).toContain("--yes");
+    expect(fs.existsSync(sudoLog)).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
+    expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("fails closed when --create-avd lacks --yes in a non-interactive session", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    const env = makeEnv(tmpDir, { sdk });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      ["init", "--profile", "generic", "--create-avd", "--json"],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect((report.errors as string[]).join("\n")).toContain("--yes");
+    expect(fs.existsSync(path.join(sdk, "avdmanager.log"))).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
+    expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("prints the check snapshot before executor logs in non-JSON mode", async () => {
+    const env = makeEnv(tmpDir);
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      ["init", "--profile", "generic"],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(0);
+    const checkIndex = result.stdout.indexOf("picklab-home");
+    const doneIndex = result.stdout.indexOf("[done]");
+    expect(checkIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(checkIndex);
   });
 
   it("fails closed with the exact sdkmanager command when system images are missing", async () => {
@@ -379,7 +465,7 @@ describe("picklab setup lab-user", () => {
     const result = await runCli(["setup", "lab-user", "--json"], env, tmpDir);
     expect(result.code).toBe(1);
     const report = parseJson(result);
-    expect(report.error).toContain("--yes");
+    expect((report.errors as string[]).join("\n")).toContain("--yes");
   });
 
   it("fails closed when sudo is unavailable", async () => {
@@ -391,7 +477,7 @@ describe("picklab setup lab-user", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
-    expect(report.error).toContain("sudo not found");
+    expect((report.errors as string[]).join("\n")).toContain("sudo not found");
   });
 
   it("runs each provisioning step through sudo and persists the config", async () => {
@@ -459,7 +545,7 @@ describe("picklab setup android", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
-    expect(report.error).toContain(
+    expect((report.errors as string[]).join("\n")).toContain(
       'sdkmanager "system-images;android-36;google_apis;x86_64"',
     );
   });
@@ -490,7 +576,7 @@ describe("picklab setup android", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
-    expect(report.error).toContain("--yes");
+    expect((report.errors as string[]).join("\n")).toContain("--yes");
   });
 
   it("is a no-op (config persistence only) when the AVD already exists", async () => {

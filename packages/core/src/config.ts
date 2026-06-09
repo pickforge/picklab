@@ -33,7 +33,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function deepMerge(
+export function deepMerge(
   base: Record<string, unknown>,
   overlay: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -50,7 +50,7 @@ function deepMerge(
   return result;
 }
 
-async function readConfigFile(filePath: string): Promise<PicklabConfig> {
+export async function readConfigFile(filePath: string): Promise<PicklabConfig> {
   let raw: string;
   try {
     raw = await fs.promises.readFile(filePath, "utf8");

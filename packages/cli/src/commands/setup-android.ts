@@ -33,7 +33,7 @@ export interface SetupAndroidReport {
   dryRun: boolean;
   plan: ProvisioningStep[];
   results: StepResult[];
-  error?: string;
+  errors: string[];
 }
 
 function describe(report: SetupAndroidReport): string[] {
@@ -68,8 +68,8 @@ function emit(report: SetupAndroidReport, json: boolean): void {
   for (const line of describe(report)) {
     console.log(line);
   }
-  if (report.error !== undefined) {
-    console.error(`error: ${report.error}`);
+  for (const error of report.errors) {
+    console.error(`error: ${error}`);
   }
 }
 
@@ -91,6 +91,7 @@ export async function runSetupAndroid(
     dryRun: opts.dryRun === true,
     plan: [],
     results: [],
+    errors: [],
   };
 
   if (opts.createAvd !== true) {
@@ -108,7 +109,7 @@ export async function runSetupAndroid(
   });
   if (!result.ok) {
     report.ok = false;
-    report.error = result.error;
+    report.errors.push(result.error);
     emit(report, opts.json === true);
     return 1;
   }
@@ -120,15 +121,16 @@ export async function runSetupAndroid(
     });
     if (answer === "non-interactive") {
       report.ok = false;
-      report.error =
+      report.errors.push(
         "Refusing to create the AVD without consent in a non-interactive " +
-        "session. Re-run with --yes.";
+          "session. Re-run with --yes.",
+      );
       emit(report, opts.json === true);
       return 1;
     }
     if (answer === "no") {
       report.ok = false;
-      report.error = "Aborted: AVD creation was declined.";
+      report.errors.push("Aborted: AVD creation was declined.");
       emit(report, opts.json === true);
       return 1;
     }
@@ -147,7 +149,7 @@ export async function runSetupAndroid(
   report.results = execution.results;
   report.ok = execution.ok;
   if (!execution.ok) {
-    report.error = execution.error;
+    report.errors.push(execution.error ?? "provisioning failed");
   }
   emit(report, opts.json === true);
   return execution.ok ? 0 : 1;

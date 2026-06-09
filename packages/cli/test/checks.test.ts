@@ -190,6 +190,12 @@ describe("requiredChecksForProfile", () => {
     expect(ids).toContain("lab-user");
   });
 
+  it("requires the lab user only for desktop profiles, not android", () => {
+    expect(PROFILE_REQUIRED_CHECKS.android).not.toContain("lab-user");
+    expect(PROFILE_REQUIRED_CHECKS["flutter-desktop"]).toContain("lab-user");
+    expect(PROFILE_REQUIRED_CHECKS["desktop+android"]).toContain("lab-user");
+  });
+
   it("covers every profile", () => {
     expect(Object.keys(PROFILE_REQUIRED_CHECKS).sort()).toEqual([
       "android",

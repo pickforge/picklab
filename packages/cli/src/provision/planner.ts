@@ -82,23 +82,30 @@ export function planLabUser(input: LabUserPlanInput): PlanResult {
     });
   }
 
-  if (privilegedSpecs.length > 0 && input.sudoPath === null) {
-    return {
-      ok: false,
-      error:
-        `sudo not found on PATH; cannot provision lab user "${input.name}". ` +
-        `Install sudo, or create the user manually as root: ` +
-        `useradd -r -M -s ${NOLOGIN_SHELL} ${input.name}`,
-    };
+  const steps: ProvisioningStep[] = [];
+  if (privilegedSpecs.length > 0) {
+    const sudoPath = input.sudoPath;
+    if (sudoPath === null) {
+      return {
+        ok: false,
+        error:
+          `sudo not found on PATH; cannot provision lab user "${input.name}". ` +
+          `Install sudo, or create the user manually as root: ` +
+          `useradd -r -M -s ${NOLOGIN_SHELL} ${input.name}`,
+      };
+    }
+    steps.push(
+      ...privilegedSpecs.map(
+        (spec): ProvisioningStep => ({
+          id: spec.id,
+          title: spec.title,
+          kind: "command",
+          privileged: true,
+          command: { cmd: sudoPath, args: sudoArgs(spec.args) },
+        }),
+      ),
+    );
   }
-
-  const steps: ProvisioningStep[] = privilegedSpecs.map((spec) => ({
-    id: spec.id,
-    title: spec.title,
-    kind: "command",
-    privileged: true,
-    command: { cmd: input.sudoPath as string, args: sudoArgs(spec.args) },
-  }));
   steps.push({
     id: "persist-lab-user",
     title: "Persist lab user in global PickLab config",

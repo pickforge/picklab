@@ -12,7 +12,9 @@ export {
 } from "./paths.js";
 
 export {
+  deepMerge,
   loadConfig,
+  readConfigFile,
   resolvedDefaults,
   saveGlobalConfig,
   saveProjectConfig,

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SystemImage } from "@pickforge/picklab-android";
+import type {
+  PicklabConfig,
+} from "@pickforge/picklab-core";
+import type { ProvisioningStep, StepCommand } from "../src/provision/plan.js";
 import {
   chooseSystemImage,
   planCreateAvd,
@@ -7,6 +11,22 @@ import {
   planPicklabHome,
   RECOMMENDED_SYSTEM_IMAGE,
 } from "../src/provision/planner.js";
+
+function commandOf(step: ProvisioningStep): StepCommand {
+  expect(step.kind).toBe("command");
+  if (step.kind !== "command") throw new Error("unreachable");
+  return step.command;
+}
+
+function configOf(step: ProvisioningStep): PicklabConfig {
+  if (
+    step.kind !== "write-global-config" &&
+    step.kind !== "write-project-config"
+  ) {
+    throw new Error(`expected a config step, got ${step.kind}`);
+  }
+  return step.config;
+}
 
 function image(packageId: string): SystemImage {
   const [, api, tag, abi] = packageId.split(";") as [
@@ -42,16 +62,16 @@ describe("planLabUser", () => {
     ]);
     const useradd = result.plan.steps[0]!;
     expect(useradd.privileged).toBe(true);
-    expect(useradd.command).toEqual({
+    expect(commandOf(useradd)).toEqual({
       cmd: "/usr/bin/sudo",
       args: ["useradd", "-r", "-M", "-s", "/usr/sbin/nologin", "picklab-lab"],
     });
-    expect(result.plan.steps[3]!.command?.args).toEqual([
+    expect(commandOf(result.plan.steps[3]!).args).toEqual([
       "chmod",
       "750",
       "/var/lib/picklab/lab-home",
     ]);
-    expect(result.plan.steps[4]!.command?.args).toEqual([
+    expect(commandOf(result.plan.steps[4]!).args).toEqual([
       "usermod",
       "-aG",
       "kvm",
@@ -60,7 +80,7 @@ describe("planLabUser", () => {
     const persist = result.plan.steps[5]!;
     expect(persist.kind).toBe("write-global-config");
     expect(persist.privileged).toBe(false);
-    expect(persist.config).toEqual({
+    expect(configOf(persist)).toEqual({
       labUser: { name: "picklab-lab", home: "/var/lib/picklab/lab-home" },
     });
   });
@@ -78,7 +98,7 @@ describe("planLabUser", () => {
     const result = planLabUser({ ...baseLabUser, nonInteractive: true });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.plan.steps[0]!.command?.args[0]).toBe("-n");
+    expect(commandOf(result.plan.steps[0]!).args[0]).toBe("-n");
   });
 
   it("is a config-only no-op when user and home already exist", () => {
@@ -214,7 +234,7 @@ describe("planCreateAvd", () => {
     ]);
     const create = result.plan.steps[0]!;
     expect(create.privileged).toBe(false);
-    expect(create.command).toEqual({
+    expect(commandOf(create)).toEqual({
       cmd: "/sdk/cmdline-tools/latest/bin/avdmanager",
       args: [
         "create",
@@ -227,7 +247,7 @@ describe("planCreateAvd", () => {
       env: { ANDROID_HOME: "/sdk", ANDROID_SDK_ROOT: "/sdk" },
       input: "no\n",
     });
-    expect(result.plan.steps[1]!.config).toEqual({
+    expect(configOf(result.plan.steps[1]!)).toEqual({
       android: { avdName: "picklab-avd" },
     });
   });

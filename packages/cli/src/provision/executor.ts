@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import {
+  deepMerge,
   globalConfigPath,
   projectConfigPath,
+  readConfigFile,
   runCommand,
   saveGlobalConfig,
   saveProjectConfig,
@@ -32,61 +34,23 @@ export interface ExecutePlanResult {
   error?: string;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function deepMerge(
-  base: Record<string, unknown>,
-  overlay: Record<string, unknown>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(overlay)) {
-    if (value === undefined) continue;
-    const existing = result[key];
-    if (isPlainObject(existing) && isPlainObject(value)) {
-      result[key] = deepMerge(existing, value);
-    } else {
-      result[key] = isPlainObject(value) ? deepMerge({}, value) : value;
-    }
-  }
-  return result;
-}
-
-async function readJsonObject(
-  filePath: string,
-): Promise<Record<string, unknown>> {
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(filePath, "utf8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return {};
-    }
-    throw error;
-  }
-  const parsed: unknown = JSON.parse(raw);
-  if (!isPlainObject(parsed)) {
-    throw new Error(`Expected a JSON object in ${filePath}`);
-  }
-  return parsed;
-}
-
 export async function patchGlobalConfig(
   patch: PicklabConfig,
   env: EnvLike = process.env,
 ): Promise<void> {
-  const existing = await readJsonObject(globalConfigPath(env));
-  await saveGlobalConfig(deepMerge(existing, patch), env);
+  const existing = await readConfigFile(globalConfigPath(env));
+  await saveGlobalConfig(deepMerge(existing, patch) as PicklabConfig, env);
 }
 
 export async function patchProjectConfig(
   projectDir: string,
   patch: PicklabConfig,
 ): Promise<void> {
-  const existing = await readJsonObject(projectConfigPath(projectDir));
-  await saveProjectConfig(projectDir, deepMerge(existing, patch));
+  const existing = await readConfigFile(projectConfigPath(projectDir));
+  await saveProjectConfig(
+    projectDir,
+    deepMerge(existing, patch) as PicklabConfig,
+  );
 }
 
 async function executeStep(
@@ -95,17 +59,11 @@ async function executeStep(
 ): Promise<void> {
   switch (step.kind) {
     case "mkdir": {
-      if (step.dir === undefined) {
-        throw new Error("mkdir step is missing a target directory");
-      }
       await fs.promises.mkdir(step.dir, { recursive: true });
       return;
     }
     case "command": {
       const command = step.command;
-      if (command === undefined) {
-        throw new Error("command step is missing its command");
-      }
       const result = await runCommand(command.cmd, command.args, {
         env: { ...opts.env, ...command.env },
         input: command.input,
@@ -123,14 +81,14 @@ async function executeStep(
       return;
     }
     case "write-global-config": {
-      await patchGlobalConfig(step.config ?? {}, opts.env);
+      await patchGlobalConfig(step.config, opts.env);
       return;
     }
     case "write-project-config": {
       if (opts.projectDir === undefined) {
         throw new Error("write-project-config step requires a project directory");
       }
-      await patchProjectConfig(opts.projectDir, step.config ?? {});
+      await patchProjectConfig(opts.projectDir, step.config);
       return;
     }
   }

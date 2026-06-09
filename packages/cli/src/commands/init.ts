@@ -8,7 +8,10 @@ import {
 } from "../provision/checks.js";
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
 import { executePlan, type StepResult } from "../provision/executor.js";
-import type { ProvisioningStep } from "../provision/plan.js";
+import {
+  planHasCommandSteps,
+  type ProvisioningStep,
+} from "../provision/plan.js";
 import {
   planCreateAvd,
   planLabUser,
@@ -39,11 +42,10 @@ export interface InitReport {
 
 async function consentTo(
   what: string,
-  explicit: boolean,
   opts: InitCliOptions,
   remediation: string,
 ): Promise<{ granted: boolean; error?: string }> {
-  if (explicit || opts.yes === true || opts.dryRun === true) {
+  if (opts.yes === true || opts.dryRun === true) {
     return { granted: true };
   }
   const answer = await confirm(`Provision ${what}?`, {});
@@ -55,7 +57,9 @@ async function consentTo(
   }
   return {
     granted: false,
-    error: `Required ${what} is missing and cannot be provisioned without consent. ${remediation}`,
+    error:
+      `Refusing to provision ${what} without consent in a non-interactive ` +
+      `session. ${remediation}`,
   };
 }
 
@@ -64,6 +68,7 @@ async function planAvdProvisioning(
   opts: InitCliOptions,
   steps: ProvisioningStep[],
   errors: string[],
+  handledCheckIds: Set<string>,
 ): Promise<void> {
   const result = planCreateAvd({
     avdName: snapshot.android.avdName,
@@ -76,17 +81,19 @@ async function planAvdProvisioning(
     errors.push(result.error);
     return;
   }
-  const consent = await consentTo(
-    `dedicated AVD "${snapshot.android.avdName}"`,
-    opts.createAvd === true,
-    opts,
-    "Re-run with --yes --create-avd or run: picklab setup android --create-avd",
-  );
-  if (!consent.granted) {
-    errors.push(consent.error ?? "AVD provisioning was not approved");
-    return;
+  if (planHasCommandSteps(result.plan)) {
+    const consent = await consentTo(
+      `dedicated AVD "${snapshot.android.avdName}" (runs avdmanager)`,
+      opts,
+      "Re-run with --yes --create-avd or run: picklab setup android --create-avd",
+    );
+    if (!consent.granted) {
+      errors.push(consent.error ?? "AVD provisioning was not approved");
+      return;
+    }
   }
   steps.push(...result.plan.steps);
+  handledCheckIds.add("avd");
 }
 
 async function planLabUserProvisioning(
@@ -94,6 +101,7 @@ async function planLabUserProvisioning(
   opts: InitCliOptions,
   steps: ProvisioningStep[],
   errors: string[],
+  handledCheckIds: Set<string>,
 ): Promise<void> {
   const result = planLabUser({
     name: snapshot.labUser.name,
@@ -108,17 +116,19 @@ async function planLabUserProvisioning(
     errors.push(result.error);
     return;
   }
-  const consent = await consentTo(
-    `lab user "${snapshot.labUser.name}" (privileged, runs sudo)`,
-    opts.createLabUser === true,
-    opts,
-    "Re-run with --yes --create-lab-user or run: picklab setup lab-user",
-  );
-  if (!consent.granted) {
-    errors.push(consent.error ?? "Lab user provisioning was not approved");
-    return;
+  if (planHasCommandSteps(result.plan)) {
+    const consent = await consentTo(
+      `lab user "${snapshot.labUser.name}" (privileged, runs sudo)`,
+      opts,
+      "Re-run with --yes --create-lab-user or run: picklab setup lab-user",
+    );
+    if (!consent.granted) {
+      errors.push(consent.error ?? "Lab user provisioning was not approved");
+      return;
+    }
   }
   steps.push(...result.plan.steps);
+  handledCheckIds.add("lab-user");
 }
 
 export async function runInit(
@@ -132,7 +142,14 @@ export async function runInit(
   const requiredIds = requiredChecksForProfile(profile);
   const checks = allChecks.filter((check) => requiredIds.includes(check.id));
 
+  if (opts.json !== true) {
+    for (const check of checks) {
+      console.log(formatCheckLine(check));
+    }
+  }
+
   const errors: string[] = [];
+  const handledCheckIds = new Set<string>();
   const steps: ProvisioningStep[] = [
     {
       id: "project-config",
@@ -141,27 +158,37 @@ export async function runInit(
       privileged: false,
       config: { profile },
     },
-    ...planPicklabHome({
-      path: snapshot.picklabHome.path,
-      exists: snapshot.picklabHome.exists,
-    }).steps,
   ];
+  const homePlan = planPicklabHome({
+    path: snapshot.picklabHome.path,
+    exists: snapshot.picklabHome.exists,
+  });
+  if (homePlan.steps.length > 0) {
+    steps.push(...homePlan.steps);
+    handledCheckIds.add("picklab-home");
+  }
 
   const avdRequired = requiredIds.includes("avd");
   const labUserRequired = requiredIds.includes("lab-user");
   if (!snapshot.android.avdExists && (avdRequired || opts.createAvd === true)) {
-    await planAvdProvisioning(snapshot, opts, steps, errors);
+    await planAvdProvisioning(snapshot, opts, steps, errors, handledCheckIds);
   }
   if (
     !snapshot.labUser.exists &&
     (labUserRequired || opts.createLabUser === true)
   ) {
-    await planLabUserProvisioning(snapshot, opts, steps, errors);
+    await planLabUserProvisioning(
+      snapshot,
+      opts,
+      steps,
+      errors,
+      handledCheckIds,
+    );
   }
 
   for (const check of checks) {
     if (check.status !== "missing") continue;
-    if (["picklab-home", "avd", "lab-user"].includes(check.id)) continue;
+    if (handledCheckIds.has(check.id)) continue;
     errors.push(
       `Required check "${check.id}" failed: ${check.detail}.` +
         (check.hint === undefined ? "" : ` Hint: ${check.hint}`),
@@ -203,9 +230,6 @@ function emit(report: InitReport, opts: InitCliOptions): void {
   if (opts.json === true) {
     console.log(JSON.stringify(report, null, 2));
     return;
-  }
-  for (const check of report.checks) {
-    console.log(formatCheckLine(check));
   }
   for (const error of report.errors) {
     console.error(`error: ${error}`);

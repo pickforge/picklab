@@ -2,7 +2,7 @@ import type { EnvLike } from "@pickforge/picklab-core";
 import { collectSnapshot } from "../provision/detect.js";
 import { executePlan, type StepResult } from "../provision/executor.js";
 import {
-  planHasPrivilegedSteps,
+  planHasCommandSteps,
   type ProvisioningStep,
 } from "../provision/plan.js";
 import { planLabUser } from "../provision/planner.js";
@@ -24,7 +24,7 @@ export interface SetupLabUserReport {
   dryRun: boolean;
   plan: ProvisioningStep[];
   results: StepResult[];
-  error?: string;
+  errors: string[];
 }
 
 function emit(report: SetupLabUserReport, json: boolean): void {
@@ -32,8 +32,8 @@ function emit(report: SetupLabUserReport, json: boolean): void {
     console.log(JSON.stringify(report, null, 2));
     return;
   }
-  if (report.error !== undefined) {
-    console.error(`error: ${report.error}`);
+  for (const error of report.errors) {
+    console.error(`error: ${error}`);
   }
 }
 
@@ -54,6 +54,7 @@ export async function runSetupLabUser(
     dryRun: opts.dryRun === true,
     plan: [],
     results: [],
+    errors: [],
   };
 
   const result = planLabUser({
@@ -66,27 +67,28 @@ export async function runSetupLabUser(
     nonInteractive: process.stdin.isTTY !== true,
   });
   if (!result.ok) {
-    report.error = result.error;
+    report.errors.push(result.error);
     emit(report, opts.json === true);
     return 1;
   }
   report.plan = result.plan.steps;
 
-  if (planHasPrivilegedSteps(result.plan) && opts.dryRun !== true) {
+  if (planHasCommandSteps(result.plan) && opts.dryRun !== true) {
     const answer = await confirm(
       `Create system user "${snapshot.labUser.name}" with home ` +
         `${snapshot.labUser.home} (privileged, runs sudo)?`,
       { yes: opts.yes },
     );
     if (answer === "non-interactive") {
-      report.error =
+      report.errors.push(
         "Refusing to provision the lab user without consent in a " +
-        "non-interactive session. Re-run with --yes.";
+          "non-interactive session. Re-run with --yes.",
+      );
       emit(report, opts.json === true);
       return 1;
     }
     if (answer === "no") {
-      report.error = "Aborted: lab user provisioning was declined.";
+      report.errors.push("Aborted: lab user provisioning was declined.");
       emit(report, opts.json === true);
       return 1;
     }
@@ -105,7 +107,7 @@ export async function runSetupLabUser(
   report.results = execution.results;
   report.ok = execution.ok;
   if (!execution.ok) {
-    report.error = execution.error;
+    report.errors.push(execution.error ?? "provisioning failed");
   }
   emit(report, opts.json === true);
   if (opts.json !== true && execution.ok && opts.dryRun !== true) {
