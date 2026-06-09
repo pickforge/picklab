@@ -101,9 +101,40 @@ describe("buildScreenshotCommand", () => {
     ]);
   });
 
-  it("builds the scrot command", () => {
+  it("accepts an explicit xwd dump path for unique temp files", () => {
+    expect(
+      buildScreenshotCommand(
+        "xwd",
+        ":92",
+        "/tmp/out.png",
+        "/tmp/out.png.123-abcd.xwd",
+      ),
+    ).toEqual([
+      {
+        cmd: "xwd",
+        args: [
+          "-root",
+          "-silent",
+          "-display",
+          ":92",
+          "-out",
+          "/tmp/out.png.123-abcd.xwd",
+        ],
+      },
+      {
+        cmd: "convert",
+        args: ["xwd:/tmp/out.png.123-abcd.xwd", "png:/tmp/out.png"],
+      },
+    ]);
+  });
+
+  it("builds the scrot command, which targets the display via the DISPLAY env", () => {
     expect(buildScreenshotCommand("scrot", ":92", "/tmp/out.png")).toEqual([
-      { cmd: "scrot", args: ["--overwrite", "/tmp/out.png"] },
+      {
+        cmd: "scrot",
+        args: ["--overwrite", "/tmp/out.png"],
+        requiresDisplayEnv: true,
+      },
     ]);
   });
 });

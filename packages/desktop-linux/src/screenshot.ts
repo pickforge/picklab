@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runCommand, type EnvLike } from "@pickforge/picklab-core";
@@ -5,12 +6,14 @@ import { parseDisplayNumber } from "./display.js";
 import { findOnPath } from "./util.js";
 
 const SCREENSHOT_TIMEOUT_MS = 20_000;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export type ScreenshotTool = "import" | "xwd" | "scrot";
 
 export interface ScreenshotStep {
   cmd: string;
   args: string[];
+  requiresDisplayEnv?: true;
 }
 
 export interface ScreenshotOptions {
@@ -44,6 +47,7 @@ export function buildScreenshotCommand(
   tool: ScreenshotTool,
   display: string,
   outPath: string,
+  xwdDumpPath?: string,
 ): ScreenshotStep[] {
   parseDisplayNumber(display);
   switch (tool) {
@@ -55,7 +59,7 @@ export function buildScreenshotCommand(
         },
       ];
     case "xwd": {
-      const dumpPath = `${outPath}.xwd`;
+      const dumpPath = xwdDumpPath ?? `${outPath}.xwd`;
       return [
         {
           cmd: "xwd",
@@ -68,7 +72,41 @@ export function buildScreenshotCommand(
       ];
     }
     case "scrot":
-      return [{ cmd: "scrot", args: ["--overwrite", outPath] }];
+      return [
+        {
+          cmd: "scrot",
+          args: ["--overwrite", outPath],
+          requiresDisplayEnv: true,
+        },
+      ];
+  }
+}
+
+async function assertPngFile(outPath: string, tool: ScreenshotTool): Promise<void> {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(outPath);
+  } catch {
+    throw new Error(
+      `Screenshot command (${tool}) succeeded but produced no file at ${outPath}`,
+    );
+  }
+  if (stat.size === 0) {
+    throw new Error(
+      `Screenshot command (${tool}) produced an empty file at ${outPath}`,
+    );
+  }
+  const header = Buffer.alloc(PNG_MAGIC.length);
+  const handle = await fs.promises.open(outPath, "r");
+  try {
+    await handle.read(header, 0, PNG_MAGIC.length, 0);
+  } finally {
+    await handle.close();
+  }
+  if (!header.equals(PNG_MAGIC)) {
+    throw new Error(
+      `Screenshot command (${tool}) produced a file without a PNG signature at ${outPath}`,
+    );
   }
 }
 
@@ -87,7 +125,16 @@ export async function screenshot(
   }
 
   await fs.promises.mkdir(path.dirname(opts.outPath), { recursive: true });
-  const steps = buildScreenshotCommand(tool, opts.display, opts.outPath);
+  const xwdDumpPath =
+    tool === "xwd"
+      ? `${opts.outPath}.${process.pid}-${crypto.randomBytes(4).toString("hex")}.xwd`
+      : undefined;
+  const steps = buildScreenshotCommand(
+    tool,
+    opts.display,
+    opts.outPath,
+    xwdDumpPath,
+  );
   try {
     for (const step of steps) {
       const result = await runCommand(step.cmd, step.args, {
@@ -102,23 +149,11 @@ export async function screenshot(
       }
     }
   } finally {
-    if (tool === "xwd") {
-      await fs.promises.rm(`${opts.outPath}.xwd`, { force: true });
+    if (xwdDumpPath !== undefined) {
+      await fs.promises.rm(xwdDumpPath, { force: true });
     }
   }
 
-  let stat: fs.Stats;
-  try {
-    stat = await fs.promises.stat(opts.outPath);
-  } catch {
-    throw new Error(
-      `Screenshot command (${tool}) succeeded but produced no file at ${opts.outPath}`,
-    );
-  }
-  if (stat.size === 0) {
-    throw new Error(
-      `Screenshot command (${tool}) produced an empty file at ${opts.outPath}`,
-    );
-  }
+  await assertPngFile(opts.outPath, tool);
   return { path: opts.outPath, tool };
 }

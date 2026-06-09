@@ -16,6 +16,7 @@ import { detectVncBinary, startVnc, type VncHandle } from "./vnc.js";
 
 export interface CreateDesktopSessionOptions {
   projectDir: string;
+  registryEnv?: EnvLike;
   env?: EnvLike;
   width?: number;
   height?: number;
@@ -38,19 +39,30 @@ export interface DesktopSessionStatus {
   displayAlive: boolean;
 }
 
-export function desktopSessionLogDir(id: string, env: EnvLike = process.env): string {
-  return path.join(sessionsDir(env), id);
+export function desktopSessionLogDir(
+  id: string,
+  registryEnv: EnvLike = process.env,
+): string {
+  return path.join(sessionsDir(registryEnv), id);
 }
 
 export async function createDesktopSession(
   opts: CreateDesktopSessionOptions,
 ): Promise<DesktopSessionHandle> {
-  const env = opts.env ?? process.env;
+  const registryEnv = opts.registryEnv ?? process.env;
+  if (
+    opts.vnc === true &&
+    detectVncBinary({ ...process.env, ...opts.env }) === null
+  ) {
+    throw new Error(
+      "VNC was requested but x11vnc was not found on PATH; install x11vnc to enable it",
+    );
+  }
   const record = await createSession(
     { type: "desktop", projectDir: opts.projectDir },
-    env,
+    registryEnv,
   );
-  const logDir = desktopSessionLogDir(record.id, env);
+  const logDir = desktopSessionLogDir(record.id, registryEnv);
 
   let xvfb: XvfbHandle | undefined;
   let vnc: VncHandle | undefined;
@@ -59,14 +71,10 @@ export async function createDesktopSession(
       width: opts.width,
       height: opts.height,
       logDir,
+      env: opts.env,
     });
     if (opts.vnc === true) {
-      if (detectVncBinary(env) === null) {
-        throw new Error(
-          "VNC was requested but x11vnc was not found on PATH; install x11vnc to enable it",
-        );
-      }
-      vnc = await startVnc({ display: xvfb.display, logDir });
+      vnc = await startVnc({ display: xvfb.display, logDir, env: opts.env });
     }
 
     const desktop: DesktopSessionInfo = {
@@ -77,7 +85,7 @@ export async function createDesktopSession(
       desktop.vncPid = vnc.pid;
       desktop.vncPort = vnc.port;
     }
-    await updateSession(record.id, { status: "running", desktop }, env);
+    await updateSession(record.id, { status: "running", desktop }, registryEnv);
 
     const handle: DesktopSessionHandle = {
       id: record.id,
@@ -97,35 +105,61 @@ export async function createDesktopSession(
     if (xvfb !== undefined) {
       await stopPid(xvfb.pid).catch(() => {});
     }
-    await updateSession(record.id, { status: "error" }, env).catch(() => {});
+    await updateSession(record.id, { status: "error" }, registryEnv).catch(
+      () => {},
+    );
     throw error;
   }
 }
 
 export async function destroyDesktopSession(
   id: string,
-  env: EnvLike = process.env,
+  registryEnv: EnvLike = process.env,
 ): Promise<void> {
-  const record = await getSession(id, env);
+  const record = await getSession(id, registryEnv);
   if (record === undefined) {
     throw new Error(`Desktop session not found: ${id}`);
   }
   const desktop = record.desktop;
+  const failures: Error[] = [];
+  const stops: Array<[string, number]> = [];
   if (desktop?.vncPid !== undefined) {
-    await stopPid(desktop.vncPid);
+    stops.push(["x11vnc", desktop.vncPid]);
   }
   if (desktop?.xvfbPid !== undefined) {
-    await stopPid(desktop.xvfbPid);
+    stops.push(["Xvfb", desktop.xvfbPid]);
   }
-  await updateSession(id, { status: "stopped" }, env);
-  await destroySessionRecord(id, env);
+  for (const [label, pid] of stops) {
+    try {
+      const stopped = await stopPid(pid);
+      if (!stopped) {
+        failures.push(
+          new Error(`${label} (pid ${pid}) survived SIGTERM and SIGKILL`),
+        );
+      }
+    } catch (error) {
+      failures.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to stop ${label} (pid ${pid}): ${String(error)}`),
+      );
+    }
+  }
+  if (failures.length > 0) {
+    await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+    throw new AggregateError(
+      failures,
+      `Failed to stop ${failures.length} process(es) of desktop session ${id}`,
+    );
+  }
+  await destroySessionRecord(id, registryEnv);
 }
 
 export async function getDesktopSessionStatus(
   id: string,
-  env: EnvLike = process.env,
+  registryEnv: EnvLike = process.env,
 ): Promise<DesktopSessionStatus> {
-  const record = await getSession(id, env);
+  const record = await getSession(id, registryEnv);
   if (record === undefined) {
     throw new Error(`Desktop session not found: ${id}`);
   }
