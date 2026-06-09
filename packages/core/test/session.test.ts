@@ -28,7 +28,7 @@ describe("session registry", () => {
       { type: "desktop", projectDir: "/proj" },
       env,
     );
-    expect(session.id).toMatch(/^desk-[0-9a-f]{6}$/);
+    expect(session.id).toMatch(/^desk-[0-9a-f]{8}$/);
     expect(session.status).toBe("starting");
     expect(session.projectDir).toBe("/proj");
     expect(
@@ -87,5 +87,57 @@ describe("session registry", () => {
 
   it("returns undefined for unknown sessions", async () => {
     expect(await getSession("desk-ffffff", env)).toBeUndefined();
+  });
+
+  it("rejects path-traversal session ids", async () => {
+    const victim = path.join(home, "victim.json");
+    await fs.promises.writeFile(victim, "{}", "utf8");
+
+    expect(await getSession("../victim", env)).toBeUndefined();
+    expect(await getSession("../runs/x/manifest", env)).toBeUndefined();
+    await expect(destroySessionRecord("../victim", env)).rejects.toThrow(
+      /session id/i,
+    );
+    await expect(
+      updateSession("../victim", { status: "stopped" }, env),
+    ).rejects.toThrow(/session id/i);
+
+    expect(fs.existsSync(victim)).toBe(true);
+  });
+
+  it("skips corrupt session files in listSessions", async () => {
+    const good = await createSession({ type: "desktop", projectDir: "/p" }, env);
+    await fs.promises.writeFile(
+      path.join(home, "sessions", "andr-deadbeef.json"),
+      "{ not json",
+      "utf8",
+    );
+    const sessions = await listSessions(env);
+    expect(sessions.map((s) => s.id)).toEqual([good.id]);
+  });
+
+  it("getSession throws with the file path for corrupt records", async () => {
+    const file = path.join(home, "sessions", "andr-deadbeef.json");
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, "{ not json", "utf8");
+    await expect(getSession("andr-deadbeef", env)).rejects.toThrow(file);
+  });
+
+  it("updateSession cannot change id, type, or createdAt", async () => {
+    const created = await createSession(
+      { type: "desktop", projectDir: "/proj" },
+      env,
+    );
+    const updated = await updateSession(
+      created.id,
+      {
+        status: "running",
+        ...({ id: "desk-ffffffff", type: "android", createdAt: "1999" } as object),
+      },
+      env,
+    );
+    expect(updated.id).toBe(created.id);
+    expect(updated.type).toBe("desktop");
+    expect(updated.createdAt).toBe(created.createdAt);
   });
 });

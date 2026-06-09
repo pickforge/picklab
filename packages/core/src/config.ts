@@ -86,16 +86,24 @@ export async function loadConfig(
   ) as PicklabConfig;
 }
 
+let tmpCounter = 0;
+
 async function writeConfigFile(
   filePath: string,
   config: PicklabConfig,
 ): Promise<void> {
-  await ensureDir(path.dirname(filePath));
+  const dir = await ensureDir(path.dirname(filePath));
+  tmpCounter += 1;
+  const tmp = path.join(
+    dir,
+    `.${path.basename(filePath)}.tmp-${process.pid}-${tmpCounter}`,
+  );
   await fs.promises.writeFile(
-    filePath,
+    tmp,
     `${JSON.stringify(config, null, 2)}\n`,
     "utf8",
   );
+  await fs.promises.rename(tmp, filePath);
 }
 
 export async function saveProjectConfig(
@@ -106,8 +114,8 @@ export async function saveProjectConfig(
 }
 
 export async function saveGlobalConfig(
-  env: EnvLike,
   config: PicklabConfig,
+  env: EnvLike = process.env,
 ): Promise<void> {
   await writeConfigFile(globalConfigPath(env), config);
 }

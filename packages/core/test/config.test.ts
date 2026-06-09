@@ -33,10 +33,13 @@ describe("loadConfig", () => {
   });
 
   it("applies global config over defaults", async () => {
-    await saveGlobalConfig(env, {
-      profile: "android",
-      android: { avdName: "global-avd" },
-    });
+    await saveGlobalConfig(
+      {
+        profile: "android",
+        android: { avdName: "global-avd" },
+      },
+      env,
+    );
     const config = await loadConfig(project, env);
     expect(config.profile).toBe("android");
     expect(config.android?.avdName).toBe("global-avd");
@@ -44,17 +47,20 @@ describe("loadConfig", () => {
   });
 
   it("applies project config over global config", async () => {
-    await saveGlobalConfig(env, { android: { avdName: "global-avd" } });
+    await saveGlobalConfig({ android: { avdName: "global-avd" } }, env);
     await saveProjectConfig(project, { android: { avdName: "project-avd" } });
     const config = await loadConfig(project, env);
     expect(config.android?.avdName).toBe("project-avd");
   });
 
   it("deep-merges nested objects across layers", async () => {
-    await saveGlobalConfig(env, {
-      android: { avdName: "global-avd" },
-      labUser: { name: "global-user" },
-    });
+    await saveGlobalConfig(
+      {
+        android: { avdName: "global-avd" },
+        labUser: { name: "global-user" },
+      },
+      env,
+    );
     await saveProjectConfig(project, { labUser: { home: "/proj/home" } });
     const config = await loadConfig(project, env);
     expect(config.android?.avdName).toBe("global-avd");
@@ -92,7 +98,7 @@ describe("save/load round-trip", () => {
   });
 
   it("persists global config under picklab home", async () => {
-    await saveGlobalConfig(env, { profile: "generic" });
+    await saveGlobalConfig({ profile: "generic" }, env);
     const raw = await fs.promises.readFile(
       path.join(home, "config.json"),
       "utf8",

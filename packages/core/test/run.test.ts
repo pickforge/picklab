@@ -31,6 +31,27 @@ describe("createRun", () => {
     expect(new Date(manifest.createdAt).toString()).not.toBe("Invalid Date");
   });
 
+  it("rejects slugs containing path traversal or separators", async () => {
+    for (const slug of [
+      "../escape",
+      "..",
+      "a/b",
+      "a\\b",
+      ".hidden",
+      "",
+      "x/../../etc",
+    ]) {
+      await expect(createRun(project, slug)).rejects.toThrow(/slug/i);
+    }
+    expect(fs.existsSync(path.join(project, ".picklab", "escape"))).toBe(false);
+  });
+
+  it("derives the run directory timestamp from UTC", async () => {
+    const now = new Date("2026-06-09T23:59:58Z");
+    const run = await createRun(project, "utc", { now });
+    expect(path.basename(run.dir)).toBe("20260609-235958-utc");
+  });
+
   it("appends collision suffixes for the same timestamp", async () => {
     const now = new Date("2026-06-09T10:20:30Z");
     const a = await createRun(project, "dup", { now });

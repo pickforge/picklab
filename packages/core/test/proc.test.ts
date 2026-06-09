@@ -48,16 +48,80 @@ describe("runCommand", () => {
     expect(Date.now() - start).toBeLessThan(10000);
   });
 
-  it("passes cwd and env", async () => {
+  it("passes cwd and merges env over the inherited environment", async () => {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-"));
     const result = await runCommand(
       node,
-      ["-e", "console.log(process.cwd(), process.env.PICKLAB_TEST)"],
-      { cwd: dir, env: { ...process.env, PICKLAB_TEST: "yes" } },
+      [
+        "-e",
+        "console.log(process.cwd(), process.env.PICKLAB_TEST, typeof process.env.PATH)",
+      ],
+      { cwd: dir, env: { PICKLAB_TEST: "yes" } },
     );
     expect(result.stdout).toContain("yes");
+    expect(result.stdout).toContain("string");
     expect(result.stdout).toContain(await fs.promises.realpath(dir));
     await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it("supports a clean environment via cleanEnv", async () => {
+    const result = await runCommand(
+      node,
+      ["-e", "console.log(JSON.stringify(Object.keys(process.env)))"],
+      { cleanEnv: true, env: { PICKLAB_ONLY: "1" } },
+    );
+    expect(JSON.parse(result.stdout)).toEqual(["PICKLAB_ONLY"]);
+  });
+
+  it("does not crash when the child exits before consuming stdin", async () => {
+    const result = await runCommand(node, ["-e", "process.exit(7)"], {
+      input: "x".repeat(8 * 1024 * 1024),
+    });
+    expect(result.code).toBe(7);
+  });
+
+  it("resolves promptly on timeout even when a grandchild holds stdio pipes", async () => {
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const gc = spawn(process.execPath, ["-e", "setTimeout(() => {}, 15000)"], {',
+      "  detached: true,",
+      '  stdio: ["ignore", "inherit", "inherit"],',
+      "});",
+      "gc.unref();",
+      "setTimeout(() => {}, 15000);",
+    ].join("\n");
+    const start = Date.now();
+    const result = await runCommand(node, ["-e", script], {
+      timeoutMs: 300,
+      killGraceMs: 200,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it("reports output truncation", async () => {
+    const result = await runCommand(
+      node,
+      ["-e", "process.stdout.write('a'.repeat(64 * 1024))"],
+      { maxOutputBytes: 1024 },
+    );
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stderrTruncated).toBe(false);
+    expect(result.stdout.length).toBe(1024);
+  });
+
+  it("formats CommandError messages for exit codes and signals", async () => {
+    await expect(
+      runCommand(node, ["-e", "process.exit(2)"], { check: true }),
+    ).rejects.toThrow(/exited with code 2/);
+    await expect(
+      runCommand(node, ["-e", "setTimeout(() => {}, 30000)"], {
+        check: true,
+        timeoutMs: 200,
+        killGraceMs: 200,
+      }),
+    ).rejects.toThrow(/(exited with code \d+|killed with signal SIG\w+)/);
   });
 });
 
@@ -76,8 +140,14 @@ describe("daemon supervision", () => {
     await fs.promises.rm(logDir, { recursive: true, force: true });
   });
 
+  it("rejects catchably when the daemon binary does not exist", async () => {
+    await expect(
+      startDaemon("/nonexistent/picklab-missing-binary", [], { logDir }),
+    ).rejects.toThrow(/ENOENT/);
+  });
+
   it("starts a detached daemon, reports liveness, and stops it", async () => {
-    const daemon = startDaemon(
+    const daemon = await startDaemon(
       node,
       ["-e", "console.log('daemon up'); setInterval(() => {}, 1000)"],
       { logDir, name: "test-daemon" },

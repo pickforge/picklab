@@ -28,17 +28,34 @@ export interface CreateRunOptions {
   meta?: Record<string, unknown>;
 }
 
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
+
+let tmpCounter = 0;
+
+function assertValidSlug(slug: string): void {
+  if (!SLUG_PATTERN.test(slug) || slug.includes("..")) {
+    throw new Error(
+      `Invalid run slug "${slug}": must start with a letter or digit and ` +
+        `contain only letters, digits, ".", "_", or "-" (no path separators or "..")`,
+    );
+  }
+}
+
 function formatTimestamp(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return (
-    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
   );
 }
 
 async function writeManifest(runDir: string, manifest: RunManifest): Promise<void> {
   const target = path.join(runDir, "manifest.json");
-  const tmp = path.join(runDir, `.manifest.json.tmp-${process.pid}`);
+  tmpCounter += 1;
+  const tmp = path.join(
+    runDir,
+    `.manifest.json.tmp-${process.pid}-${tmpCounter}`,
+  );
   await fs.promises.writeFile(
     tmp,
     `${JSON.stringify(manifest, null, 2)}\n`,
@@ -94,6 +111,7 @@ export async function createRun(
   slug: string,
   opts: CreateRunOptions = {},
 ): Promise<RunHandle> {
+  assertValidSlug(slug);
   const now = opts.now ?? new Date();
   const baseName = `${formatTimestamp(now)}-${slug}`;
   const parent = runsDir(projectDir);
