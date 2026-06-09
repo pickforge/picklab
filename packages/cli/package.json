@@ -1,0 +1,27 @@
+{
+  "name": "@pickforge/picklab",
+  "version": "0.1.0",
+  "description": "Native app and Android emulator automation for AI coding agents",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "picklab": "dist/picklab.js",
+    "picklab-mcp": "dist/picklab-mcp.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@pickforge/picklab-mcp-server": "*"
+  }
+}
