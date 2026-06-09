@@ -111,6 +111,27 @@ describe("runCommand", () => {
     expect(result.stdout.length).toBe(1024);
   });
 
+  it("preserves binary stdout as a Buffer when binary is set", async () => {
+    const bytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80];
+    const result = await runCommand(
+      node,
+      ["-e", `process.stdout.write(Buffer.from([${bytes.join(",")}]))`],
+      { binary: true },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.stdoutBuffer).toBeInstanceOf(Buffer);
+    expect([...(result.stdoutBuffer as Buffer)]).toEqual(bytes);
+    expect(Buffer.from(result.stdout, "utf8").equals(Buffer.from(bytes))).toBe(
+      false,
+    );
+  });
+
+  it("omits stdoutBuffer by default", async () => {
+    const result = await runCommand(node, ["-e", "console.log('plain')"]);
+    expect(result.stdoutBuffer).toBeUndefined();
+    expect(result.stdout).toContain("plain");
+  });
+
   it("formats CommandError messages for exit codes and signals", async () => {
     await expect(
       runCommand(node, ["-e", "process.exit(2)"], { check: true }),

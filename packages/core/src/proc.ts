@@ -15,6 +15,7 @@ export interface RunCommandOptions {
   maxOutputBytes?: number;
   check?: boolean;
   input?: string;
+  binary?: boolean;
 }
 
 export interface RunCommandResult {
@@ -22,6 +23,7 @@ export interface RunCommandResult {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
+  stdoutBuffer?: Buffer;
   stderr: string;
   timedOut: boolean;
   stdoutTruncated: boolean;
@@ -103,16 +105,23 @@ export function runCommand(
     const buildResult = (
       code: number | null,
       signal: NodeJS.Signals | null,
-    ): RunCommandResult => ({
-      ok: code === 0 && !timedOut,
-      code,
-      signal,
-      stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-      stderr: Buffer.concat(stderrChunks).toString("utf8"),
-      timedOut,
-      stdoutTruncated: stdoutBytes > maxBytes,
-      stderrTruncated: stderrBytes > maxBytes,
-    });
+    ): RunCommandResult => {
+      const stdoutBuffer = Buffer.concat(stdoutChunks);
+      const result: RunCommandResult = {
+        ok: code === 0 && !timedOut,
+        code,
+        signal,
+        stdout: stdoutBuffer.toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        timedOut,
+        stdoutTruncated: stdoutBytes > maxBytes,
+        stderrTruncated: stderrBytes > maxBytes,
+      };
+      if (opts.binary) {
+        result.stdoutBuffer = stdoutBuffer;
+      }
+      return result;
+    };
 
     const settle = (result: RunCommandResult): void => {
       if (settled) return;
