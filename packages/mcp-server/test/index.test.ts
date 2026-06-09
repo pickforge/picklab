@@ -1,3 +1,4 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it } from "vitest";
 import { createMcpServer, packageName } from "../src/index.js";
 
@@ -7,6 +8,6 @@ describe("@pickforge/picklab-mcp-server", () => {
   });
 
   it("creates an MCP server instance", () => {
-    expect(createMcpServer()).toBeDefined();
+    expect(createMcpServer()).toBeInstanceOf(McpServer);
   });
 });
