@@ -11,6 +11,7 @@ import {
   findSdkTool,
   listSystemImages,
   missingSdkMessage,
+  resolveSdkRoot,
   sdkmanagerInstallCommand,
   systemImageInstalled,
 } from "../src/index.js";
@@ -148,6 +149,47 @@ describe("findSdkTool / detectSdkTools", () => {
     fs.writeFileSync(adbPath, "not executable", { mode: 0o644 });
     expect(findSdkTool(sdk, "adb", { PATH: "" })).toBeNull();
   });
+
+  it("probes versioned cmdline-tools dirs, picking the highest version", () => {
+    const sdk = makeDir("sdk-versioned");
+    writeExecutable(path.join(sdk, "cmdline-tools", "9.0", "bin", "sdkmanager"));
+    writeExecutable(path.join(sdk, "cmdline-tools", "16.0", "bin", "sdkmanager"));
+    expect(findSdkTool(sdk, "sdkmanager", { PATH: "" })).toBe(
+      path.join(sdk, "cmdline-tools", "16.0", "bin", "sdkmanager"),
+    );
+  });
+
+  it("prefers cmdline-tools/latest over versioned dirs", () => {
+    const sdk = makeDir("sdk-latest-first");
+    writeExecutable(path.join(sdk, "cmdline-tools", "latest", "bin", "avdmanager"));
+    writeExecutable(path.join(sdk, "cmdline-tools", "16.0", "bin", "avdmanager"));
+    expect(findSdkTool(sdk, "avdmanager", { PATH: "" })).toBe(
+      path.join(sdk, "cmdline-tools", "latest", "bin", "avdmanager"),
+    );
+  });
+
+  it("falls back to a bare cmdline-tools/bin layout", () => {
+    const sdk = makeDir("sdk-bare-cmdline");
+    writeExecutable(path.join(sdk, "cmdline-tools", "bin", "sdkmanager"));
+    expect(findSdkTool(sdk, "sdkmanager", { PATH: "" })).toBe(
+      path.join(sdk, "cmdline-tools", "bin", "sdkmanager"),
+    );
+  });
+
+  it("auto-detects the sdk root when sdk is undefined, but not for null", () => {
+    const sdk = makeFakeSdk("sdk-undefined-detect");
+    const env = { ANDROID_HOME: sdk, PATH: "" };
+    expect(resolveSdkRoot(undefined, env)).toBe(sdk);
+    expect(resolveSdkRoot(null, env)).toBeNull();
+    expect(resolveSdkRoot(sdk, { PATH: "" })).toBe(sdk);
+    expect(findSdkTool(undefined, "emulator", env)).toBe(
+      path.join(sdk, "emulator", "emulator"),
+    );
+    expect(findSdkTool(undefined, "adb", env)).toBe(
+      path.join(sdk, "platform-tools", "adb"),
+    );
+    expect(findSdkTool(null, "emulator", env)).toBeNull();
+  });
 });
 
 describe("listSystemImages", () => {
@@ -177,6 +219,22 @@ describe("listSystemImages", () => {
   it("returns an empty list when system-images is absent", () => {
     const sdk = makeDir("sdk-no-images");
     expect(listSystemImages(sdk)).toEqual([]);
+  });
+
+  it("follows symlinked directories so listing matches systemImageInstalled", () => {
+    const external = makeDir("external-google-apis");
+    makeDir("external-google-apis", "x86_64");
+    const sdk = makeDir("sdk-symlinked");
+    makeDir("sdk-symlinked", "system-images", "android-34");
+    fs.symlinkSync(
+      external,
+      path.join(sdk, "system-images", "android-34", "google_apis"),
+    );
+    const packageId = "system-images;android-34;google_apis;x86_64";
+    expect(listSystemImages(sdk).map((image) => image.packageId)).toEqual([
+      packageId,
+    ]);
+    expect(systemImageInstalled(sdk, packageId)).toBe(true);
   });
 
   it("reports installation state for a specific image", () => {

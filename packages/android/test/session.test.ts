@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { getSession, isPidAlive, type EnvLike } from "@pickforge/picklab-core";
 import {
   androidSessionLogDir,
+  consolePortLockPath,
   createAndroidSession,
   destroyAndroidSession,
   getAndroidSessionStatus,
@@ -144,6 +145,9 @@ describe("createAndroidSession", () => {
 describe("startEmulator failure detail", () => {
   it("includes the daemon log path when boot never completes", async () => {
     const sdk = makeFakeSdk({ bootCompleted: "0" });
+    const failureEnv: EnvLike = {
+      PICKLAB_HOME: path.join(tmpRoot, "home-emu-failure"),
+    };
     await expect(
       startEmulator({
         avdName: "picklab-avd",
@@ -151,10 +155,12 @@ describe("startEmulator failure detail", () => {
         port: 5558,
         logDir: path.join(tmpRoot, "emu-logs"),
         env: { PATH: "" },
+        registryEnv: failureEnv,
         bootTimeoutMs: 200,
         bootPollIntervalMs: 20,
       }),
     ).rejects.toThrow(/emulator-5558 did not finish booting[\s\S]*emulator\.log/);
+    expect(fs.existsSync(consolePortLockPath(5558, failureEnv))).toBe(false);
   });
 });
 

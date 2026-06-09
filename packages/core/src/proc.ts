@@ -60,6 +60,16 @@ function resolveEnv(opts: {
 export function runCommand(
   cmd: string,
   args: readonly string[],
+  opts: RunCommandOptions & { binary: true },
+): Promise<RunCommandResult & { stdoutBuffer: Buffer }>;
+export function runCommand(
+  cmd: string,
+  args: readonly string[],
+  opts?: RunCommandOptions,
+): Promise<RunCommandResult>;
+export function runCommand(
+  cmd: string,
+  args: readonly string[],
   opts: RunCommandOptions = {},
 ): Promise<RunCommandResult> {
   return new Promise((resolve, reject) => {
@@ -111,7 +121,7 @@ export function runCommand(
         ok: code === 0 && !timedOut,
         code,
         signal,
-        stdout: stdoutBuffer.toString("utf8"),
+        stdout: opts.binary ? "" : stdoutBuffer.toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         timedOut,
         stdoutTruncated: stdoutBytes > maxBytes,

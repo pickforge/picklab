@@ -20,6 +20,7 @@ import {
   parseAdbDevices,
   parseEmulatorListAvds,
   pickConsolePort,
+  splitInputText,
   UI_DUMP_REMOTE_PATH,
 } from "../src/index.js";
 
@@ -284,6 +285,30 @@ describe("android input text escaping", () => {
     expect(() => buildTypeTextArgs(SERIAL, "line\nbreak")).toThrow(
       /control characters/,
     );
+  });
+
+  it("rejects non-ASCII text with an actionable error", () => {
+    expect(() => buildTypeTextArgs(SERIAL, "héllo")).toThrow(/non-ASCII/);
+    expect(() => buildTypeTextArgs(SERIAL, "emoji \u{1f600}")).toThrow(
+      /non-ASCII/,
+    );
+  });
+
+  it("keeps a literal percent intact and rejects an untypeable raw %s", () => {
+    expect(buildTypeTextArgs(SERIAL, "100%done")[5]).toBe("100%done");
+    expect(buildTypeTextArgs(SERIAL, "50% off")[5]).toBe("50%%soff");
+    expect(() => buildTypeTextArgs(SERIAL, "100%size")).toThrow(/typeText/);
+  });
+
+  it("splits percent-s pairs into separately typeable chunks", () => {
+    expect(splitInputText("100%size")).toEqual(["100%", "size"]);
+    expect(splitInputText("a%sb%sc")).toEqual(["a%", "sb%", "sc"]);
+    expect(splitInputText("%s")).toEqual(["%", "s"]);
+    expect(splitInputText("plain")).toEqual(["plain"]);
+    expect(splitInputText("50% off")).toEqual(["50% off"]);
+    for (const chunk of splitInputText("100%size")) {
+      expect(buildTypeTextArgs(SERIAL, chunk)[5]).not.toContain("%s");
+    }
   });
 });
 

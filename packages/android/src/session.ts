@@ -42,7 +42,7 @@ export interface AndroidSessionStatus {
   deviceState: string | null;
 }
 
-export interface AndroidSessionTeardownOptions {
+export interface AndroidSessionOpOptions {
   sdk?: string | null;
   env?: EnvLike;
   timeoutMs?: number;
@@ -75,6 +75,7 @@ export async function createAndroidSession(
       port: opts.port,
       logDir,
       env: opts.env,
+      registryEnv,
       bootTimeoutMs: opts.bootTimeoutMs,
       bootPollIntervalMs: opts.bootPollIntervalMs,
     });
@@ -103,6 +104,7 @@ export async function createAndroidSession(
         pid: emulator.pid,
         sdk: opts.sdk,
         env: opts.env,
+        registryEnv,
       }).catch(() => {});
     }
     await updateSession(record.id, { status: "error" }, registryEnv).catch(
@@ -115,7 +117,7 @@ export async function createAndroidSession(
 export async function destroyAndroidSession(
   id: string,
   registryEnv: EnvLike = process.env,
-  opts: AndroidSessionTeardownOptions = {},
+  opts: AndroidSessionOpOptions = {},
 ): Promise<void> {
   const record = await getSession(id, registryEnv);
   if (record === undefined) {
@@ -131,6 +133,7 @@ export async function destroyAndroidSession(
         pid: android.emulatorPid,
         sdk: opts.sdk,
         env: opts.env,
+        registryEnv,
         timeoutMs: opts.timeoutMs,
       });
     } catch (error) {
@@ -152,7 +155,7 @@ export async function destroyAndroidSession(
 export async function getAndroidSessionStatus(
   id: string,
   registryEnv: EnvLike = process.env,
-  opts: AndroidSessionTeardownOptions = {},
+  opts: AndroidSessionOpOptions = {},
 ): Promise<AndroidSessionStatus> {
   const record = await getSession(id, registryEnv);
   if (record === undefined) {

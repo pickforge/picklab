@@ -120,10 +120,8 @@ describe("runCommand", () => {
     );
     expect(result.ok).toBe(true);
     expect(result.stdoutBuffer).toBeInstanceOf(Buffer);
-    expect([...(result.stdoutBuffer as Buffer)]).toEqual(bytes);
-    expect(Buffer.from(result.stdout, "utf8").equals(Buffer.from(bytes))).toBe(
-      false,
-    );
+    expect([...result.stdoutBuffer]).toEqual(bytes);
+    expect(result.stdout).toBe("");
   });
 
   it("omits stdoutBuffer by default", async () => {

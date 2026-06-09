@@ -1,13 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   isPidAlive,
+  picklabHome,
   runCommand,
   startDaemon,
   stopPid,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { assertSerial, listDevices, resolveAdb } from "./adb.js";
+import {
+  assertSerial,
+  listDevices,
+  resolveAdb,
+  type AdbDevice,
+} from "./adb.js";
 import { assertAvdName, DEFAULT_AVD_NAME } from "./avd.js";
-import { findSdkTool } from "./sdk.js";
+import { findSdkTool, resolveSdkRoot } from "./sdk.js";
 import { sleep } from "./util.js";
 
 export const MIN_CONSOLE_PORT = 5554;
@@ -32,6 +40,7 @@ export interface StartEmulatorOptions {
   port?: number;
   logDir: string;
   env?: EnvLike;
+  registryEnv?: EnvLike;
   bootTimeoutMs?: number;
   bootPollIntervalMs?: number;
 }
@@ -58,6 +67,7 @@ export interface StopEmulatorOptions {
   pid?: number;
   sdk?: string | null;
   env?: EnvLike;
+  registryEnv?: EnvLike;
   timeoutMs?: number;
 }
 
@@ -123,12 +133,23 @@ export async function waitForBoot(opts: WaitForBootOptions): Promise<void> {
         `Emulator for ${opts.serial} exited before finishing boot${logHint}`,
       );
     }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Emulator ${opts.serial} did not finish booting within ${timeoutMs}ms${logHint}`,
+      );
+    }
     const result = await runCommand(
       opts.adbPath,
       ["-s", opts.serial, "shell", "getprop", "sys.boot_completed"],
-      { env: opts.env, timeoutMs: GETPROP_TIMEOUT_MS },
+      { env: opts.env, timeoutMs: Math.min(GETPROP_TIMEOUT_MS, remainingMs) },
     );
     if (result.ok && result.stdout.trim() === "1") {
+      if (opts.isEmulatorAlive !== undefined && !opts.isEmulatorAlive()) {
+        throw new Error(
+          `Emulator for ${opts.serial} exited before finishing boot${logHint}`,
+        );
+      }
       return;
     }
     if (Date.now() + pollIntervalMs > deadline) {
@@ -140,16 +161,104 @@ export async function waitForBoot(opts: WaitForBootOptions): Promise<void> {
   }
 }
 
+export function consolePortLockPath(
+  port: number,
+  registryEnv: EnvLike = process.env,
+): string {
+  return path.join(picklabHome(registryEnv), "ports", `emulator-${port}.lock`);
+}
+
+function readLockOwnerPid(lockPath: string): number | null {
+  try {
+    const pid = Number(fs.readFileSync(lockPath, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function tryReserveConsolePort(
+  port: number,
+  registryEnv: EnvLike = process.env,
+  ownerPid: number = process.pid,
+): boolean {
+  assertConsolePort(port);
+  const lockPath = consolePortLockPath(port, registryEnv);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.writeFileSync(lockPath, `${ownerPid}\n`, { flag: "wx" });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      const owner = readLockOwnerPid(lockPath);
+      if (owner !== null && isPidAlive(owner)) {
+        return false;
+      }
+      fs.rmSync(lockPath, { force: true });
+    }
+  }
+  return false;
+}
+
+export function releaseConsolePort(
+  port: number,
+  registryEnv: EnvLike = process.env,
+): void {
+  try {
+    fs.rmSync(consolePortLockPath(port, registryEnv), { force: true });
+  } catch {
+    // releasing a reservation must never mask the original failure
+  }
+}
+
+function claimConsolePort(
+  port: number,
+  ownerPid: number,
+  registryEnv: EnvLike,
+): void {
+  try {
+    fs.writeFileSync(consolePortLockPath(port, registryEnv), `${ownerPid}\n`);
+  } catch {
+    // the wx reservation already exists; ownership transfer is best-effort
+  }
+}
+
 async function allocateConsolePort(opts: {
   sdk?: string | null;
   env?: EnvLike;
+  registryEnv?: EnvLike;
 }): Promise<number> {
+  let devices: AdbDevice[];
   try {
-    const devices = await listDevices(opts);
-    return pickConsolePort(devices.map((device) => device.serial));
-  } catch {
-    return MIN_CONSOLE_PORT;
+    devices = await listDevices(opts);
+  } catch (error) {
+    throw new Error(
+      "Failed to list adb devices while allocating an emulator console port",
+      { cause: error },
+    );
   }
+  const used = new Set<number>();
+  for (const device of devices) {
+    const match = /^emulator-(\d+)$/.exec(device.serial);
+    if (match !== null) {
+      used.add(Number(match[1]));
+    }
+  }
+  const registryEnv = opts.registryEnv ?? process.env;
+  for (let port = MIN_CONSOLE_PORT; port <= MAX_CONSOLE_PORT; port += 2) {
+    if (used.has(port)) {
+      continue;
+    }
+    if (tryReserveConsolePort(port, registryEnv)) {
+      return port;
+    }
+  }
+  throw new Error(
+    `No free emulator console port between ${MIN_CONSOLE_PORT} and ${MAX_CONSOLE_PORT}`,
+  );
 }
 
 export async function startEmulator(
@@ -157,52 +266,89 @@ export async function startEmulator(
 ): Promise<EmulatorHandle> {
   const avdName = opts.avdName ?? DEFAULT_AVD_NAME;
   const env = opts.env ?? process.env;
-  const emulator = findSdkTool(opts.sdk, "emulator", env);
+  const registryEnv = opts.registryEnv ?? process.env;
+  const sdk = resolveSdkRoot(opts.sdk, env);
+  const emulator = findSdkTool(sdk, "emulator", env);
   if (emulator === null) {
     throw new Error(
       "Android emulator binary not found (<sdk>/emulator/emulator or PATH); " +
         'install it with: sdkmanager "emulator", or set ANDROID_HOME',
     );
   }
-  const adbPath = resolveAdb(opts);
+  const adbPath = resolveAdb({ sdk, env: opts.env });
 
-  const port = opts.port ?? (await allocateConsolePort(opts));
-  const args = buildEmulatorArgs({
-    avdName,
-    headless: opts.headless,
-    port,
-  });
-  const serial = emulatorSerial(port);
-
-  const sdkEnv: EnvLike =
-    opts.sdk !== null && opts.sdk !== undefined
-      ? { ANDROID_HOME: opts.sdk, ANDROID_SDK_ROOT: opts.sdk }
-      : {};
-  const daemon = await startDaemon(emulator, args, {
-    logDir: opts.logDir,
-    name: "emulator",
-    env: { ...sdkEnv, ...opts.env },
-  });
-
-  try {
-    await waitForBoot({
-      serial,
-      adbPath,
-      env: opts.env,
-      timeoutMs: opts.bootTimeoutMs,
-      pollIntervalMs: opts.bootPollIntervalMs,
-      isEmulatorAlive: () => isPidAlive(daemon.pid),
-      logPath: daemon.logPath,
-    });
-  } catch (error) {
-    await stopPid(daemon.pid).catch(() => {});
-    throw error;
+  let port: number;
+  if (opts.port !== undefined) {
+    assertConsolePort(opts.port);
+    if (!tryReserveConsolePort(opts.port, registryEnv)) {
+      throw new Error(
+        `Console port ${opts.port} is already reserved by another ` +
+          `PickLab emulator (${consolePortLockPath(opts.port, registryEnv)})`,
+      );
+    }
+    port = opts.port;
+  } else {
+    port = await allocateConsolePort({ sdk, env: opts.env, registryEnv });
   }
 
-  return { pid: daemon.pid, serial, consolePort: port, logPath: daemon.logPath };
+  try {
+    const args = buildEmulatorArgs({
+      avdName,
+      headless: opts.headless,
+      port,
+    });
+    const serial = emulatorSerial(port);
+
+    const sdkEnv: EnvLike =
+      sdk !== null ? { ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk } : {};
+    const daemon = await startDaemon(emulator, args, {
+      logDir: opts.logDir,
+      name: "emulator",
+      env: { ...sdkEnv, ...opts.env },
+    });
+    claimConsolePort(port, daemon.pid, registryEnv);
+
+    try {
+      await waitForBoot({
+        serial,
+        adbPath,
+        env: opts.env,
+        timeoutMs: opts.bootTimeoutMs,
+        pollIntervalMs: opts.bootPollIntervalMs,
+        isEmulatorAlive: () => isPidAlive(daemon.pid),
+        logPath: daemon.logPath,
+      });
+    } catch (error) {
+      await stopPid(daemon.pid).catch(() => {});
+      throw error;
+    }
+
+    return {
+      pid: daemon.pid,
+      serial,
+      consolePort: port,
+      logPath: daemon.logPath,
+    };
+  } catch (error) {
+    releaseConsolePort(port, registryEnv);
+    throw error;
+  }
 }
 
 export async function stopEmulator(
+  opts: StopEmulatorOptions,
+): Promise<boolean> {
+  const stopped = await stopEmulatorProcess(opts);
+  if (stopped && opts.serial !== undefined) {
+    const match = /^emulator-(\d+)$/.exec(opts.serial);
+    if (match !== null) {
+      releaseConsolePort(Number(match[1]), opts.registryEnv ?? process.env);
+    }
+  }
+  return stopped;
+}
+
+async function stopEmulatorProcess(
   opts: StopEmulatorOptions,
 ): Promise<boolean> {
   const timeoutMs = opts.timeoutMs ?? EMU_KILL_TIMEOUT_MS;
@@ -246,7 +392,7 @@ export async function stopEmulator(
           return true;
         }
       } catch {
-        return true;
+        return false;
       }
       await sleep(EMU_KILL_POLL_INTERVAL_MS);
     }

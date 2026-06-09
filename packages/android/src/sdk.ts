@@ -43,17 +43,7 @@ export interface AndroidEnvironment {
 
 const SYSTEM_IMAGE_ID_PATTERN = /^system-images;[^;\s]+;[^;\s]+;[^;\s]+$/;
 
-const TOOL_RELATIVE_DIRS: Record<Exclude<SdkToolName, "adb">, string[]> = {
-  sdkmanager: [
-    path.join("cmdline-tools", "latest", "bin"),
-    path.join("tools", "bin"),
-  ],
-  avdmanager: [
-    path.join("cmdline-tools", "latest", "bin"),
-    path.join("tools", "bin"),
-  ],
-  emulator: ["emulator"],
-};
+const CMDLINE_TOOLS_VERSION_PATTERN = /^\d+(\.\d+)*$/;
 
 export function commonSdkPaths(homeDir: string = os.homedir()): string[] {
   return [
@@ -97,25 +87,69 @@ export function missingSdkMessage(): string {
   );
 }
 
+export function resolveSdkRoot(
+  sdk: string | null | undefined,
+  env: EnvLike = process.env,
+): string | null {
+  return sdk === undefined ? detectSdkRoot({ env }) : sdk;
+}
+
+function compareVersionsDesc(a: string, b: string): number {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (right[i] ?? 0) - (left[i] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function cmdlineToolsBinDirs(sdk: string): string[] {
+  const root = path.join(sdk, "cmdline-tools");
+  const dirs = [path.join(root, "latest", "bin")];
+  const versioned = listSubdirs(root)
+    .filter((name) => CMDLINE_TOOLS_VERSION_PATTERN.test(name))
+    .sort(compareVersionsDesc);
+  for (const version of versioned) {
+    dirs.push(path.join(root, version, "bin"));
+  }
+  dirs.push(path.join(root, "bin"));
+  return dirs;
+}
+
+function toolCandidateDirs(
+  sdk: string,
+  tool: Exclude<SdkToolName, "adb">,
+): string[] {
+  if (tool === "emulator") {
+    return [path.join(sdk, "emulator")];
+  }
+  return [...cmdlineToolsBinDirs(sdk), path.join(sdk, "tools", "bin")];
+}
+
 export function findSdkTool(
   sdk: string | null | undefined,
   tool: SdkToolName,
   env: EnvLike = process.env,
 ): string | null {
+  const root = resolveSdkRoot(sdk, env);
   if (tool === "adb") {
-    if (sdk !== null && sdk !== undefined) {
-      const candidate = path.join(sdk, "platform-tools", "adb");
+    if (root !== null) {
+      const candidate = path.join(root, "platform-tools", "adb");
       if (isExecutableFile(candidate)) {
         return candidate;
       }
     }
     return findOnPath("adb", env);
   }
-  if (sdk === null || sdk === undefined) {
+  if (root === null) {
     return findOnPath(tool, env);
   }
-  for (const dir of TOOL_RELATIVE_DIRS[tool]) {
-    const candidate = path.join(sdk, dir, tool);
+  for (const dir of toolCandidateDirs(root, tool)) {
+    const candidate = path.join(dir, tool);
     if (isExecutableFile(candidate)) {
       return candidate;
     }
@@ -126,8 +160,8 @@ export function findSdkTool(
 export function detectSdkTools(
   opts: { sdk?: string | null; env?: EnvLike } = {},
 ): SdkToolPaths {
-  const sdk = opts.sdk === undefined ? detectSdkRoot({ env: opts.env }) : opts.sdk;
   const env = opts.env ?? process.env;
+  const sdk = resolveSdkRoot(opts.sdk, env);
   return {
     sdkmanager: findSdkTool(sdk, "sdkmanager", env),
     avdmanager: findSdkTool(sdk, "avdmanager", env),
@@ -143,7 +177,18 @@ function listSubdirs(dir: string): string[] {
   } catch {
     return [];
   }
-  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      names.push(entry.name);
+    } else if (
+      entry.isSymbolicLink() &&
+      isDirectory(path.join(dir, entry.name))
+    ) {
+      names.push(entry.name);
+    }
+  }
+  return names;
 }
 
 export function listSystemImages(sdk: string): SystemImage[] {

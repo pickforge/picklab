@@ -75,7 +75,7 @@ function assertCoordinate(value: number, label: string): void {
 export function resolveAdb(
   opts: { sdk?: string | null; env?: EnvLike } = {},
 ): string {
-  const adb = findSdkTool(opts.sdk ?? null, "adb", opts.env ?? process.env);
+  const adb = findSdkTool(opts.sdk, "adb", opts.env ?? process.env);
   if (adb === null) {
     throw new Error(
       "adb not found in <sdk>/platform-tools or on PATH; install it with: " +
@@ -89,6 +89,10 @@ export function escapeInputText(text: string): string {
   return text
     .replace(/[\\()<>|;&*~"'`$]/g, (c) => `\\${c}`)
     .replace(/ /g, "%s");
+}
+
+export function splitInputText(text: string): string[] {
+  return text.split(/(?<=%)(?=s)/);
 }
 
 export function buildInstallApkArgs(serial: string, apkPath: string): string[] {
@@ -152,6 +156,19 @@ export function buildTypeTextArgs(serial: string, text: string): string[] {
     throw new Error(
       "Invalid text: control characters (including newlines) are not " +
         "supported by android input text",
+    );
+  }
+  if (/[^\x20-\x7e]/.test(text)) {
+    throw new Error(
+      "Invalid text: non-ASCII characters cannot be typed with android " +
+        '"input text"; use ASCII text, or set the field content through ' +
+        "the app itself (clipboard or deep link)",
+    );
+  }
+  if (text.includes("%s")) {
+    throw new Error(
+      'Invalid text: the device input tool turns "%s" into a space; ' +
+        "use typeText, which splits such text into safe chunks",
     );
   }
   return ["-s", serial, "shell", "input", "text", escapeInputText(text)];
@@ -231,18 +248,37 @@ export function parseAdbDevices(output: string): AdbDevice[] {
   return devices;
 }
 
+interface ExecAdbRunOptions {
+  timeoutMs?: number;
+  binary?: boolean;
+  maxOutputBytes?: number;
+}
+
 async function execAdb(
   opts: { sdk?: string | null; env?: EnvLike },
   args: string[],
-  runOpts: { timeoutMs?: number; binary?: boolean; maxOutputBytes?: number } = {},
+  runOpts: ExecAdbRunOptions & { binary: true },
+): Promise<RunCommandResult & { stdoutBuffer: Buffer }>;
+async function execAdb(
+  opts: { sdk?: string | null; env?: EnvLike },
+  args: string[],
+  runOpts?: ExecAdbRunOptions,
+): Promise<RunCommandResult>;
+async function execAdb(
+  opts: { sdk?: string | null; env?: EnvLike },
+  args: string[],
+  runOpts: ExecAdbRunOptions = {},
 ): Promise<RunCommandResult> {
   const adb = resolveAdb(opts);
-  return runCommand(adb, args, {
+  const baseOpts = {
     env: opts.env,
     timeoutMs: runOpts.timeoutMs ?? ADB_TIMEOUT_MS,
-    binary: runOpts.binary,
     maxOutputBytes: runOpts.maxOutputBytes,
-  });
+  };
+  if (runOpts.binary === true) {
+    return runCommand(adb, args, { ...baseOpts, binary: true });
+  }
+  return runCommand(adb, args, baseOpts);
 }
 
 function commandFailure(
@@ -282,7 +318,12 @@ export async function launchApp(
 ): Promise<void> {
   const args = buildLaunchAppArgs(opts.serial, opts.packageName, opts.activity);
   const result = await execAdb(opts, args);
-  if (!result.ok || /^Error/m.test(result.stdout)) {
+  if (
+    !result.ok ||
+    /^Error/m.test(result.stdout) ||
+    /monkey aborted/i.test(result.stdout) ||
+    /monkey aborted/i.test(result.stderr)
+  ) {
     throw commandFailure(`launch of ${opts.packageName}`, args, result);
   }
 }
@@ -304,7 +345,7 @@ export async function screenshot(
       `screenshot output exceeded ${SCREENSHOT_MAX_BYTES} bytes and was truncated`,
     );
   }
-  const data = result.stdoutBuffer as Buffer;
+  const data = result.stdoutBuffer;
   if (data.length < PNG_MAGIC.length || !data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
     throw new Error(
       `screencap on ${opts.serial} did not produce a PNG image ` +
@@ -329,10 +370,12 @@ export async function tap(
 export async function typeText(
   opts: AdbTargetOptions & { text: string },
 ): Promise<void> {
-  const args = buildTypeTextArgs(opts.serial, opts.text);
-  const result = await execAdb(opts, args);
-  if (!result.ok) {
-    throw commandFailure("text input", args, result);
+  for (const chunk of splitInputText(opts.text)) {
+    const args = buildTypeTextArgs(opts.serial, chunk);
+    const result = await execAdb(opts, args);
+    if (!result.ok) {
+      throw commandFailure("text input", args, result);
+    }
   }
 }
 
