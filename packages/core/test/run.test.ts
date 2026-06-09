@@ -1,0 +1,96 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRun, listRuns } from "../src/run.js";
+
+let project: string;
+
+beforeEach(async () => {
+  project = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-run-"));
+});
+
+afterEach(async () => {
+  await fs.promises.rm(project, { recursive: true, force: true });
+});
+
+describe("createRun", () => {
+  it("creates run dir with subdirs and initial manifest", async () => {
+    const run = await createRun(project, "smoke");
+    expect(path.basename(run.dir)).toMatch(/^\d{8}-\d{6}-smoke$/);
+    expect(fs.existsSync(path.join(run.dir, "screenshots"))).toBe(true);
+    expect(fs.existsSync(path.join(run.dir, "logs"))).toBe(true);
+
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(run.dir, "manifest.json"), "utf8"),
+    );
+    expect(manifest.runId).toBe(path.basename(run.dir));
+    expect(manifest.slug).toBe("smoke");
+    expect(manifest.status).toBe("running");
+    expect(manifest.artifacts).toEqual([]);
+    expect(new Date(manifest.createdAt).toString()).not.toBe("Invalid Date");
+  });
+
+  it("appends collision suffixes for the same timestamp", async () => {
+    const now = new Date("2026-06-09T10:20:30Z");
+    const a = await createRun(project, "dup", { now });
+    const b = await createRun(project, "dup", { now });
+    const c = await createRun(project, "dup", { now });
+    expect(path.basename(b.dir)).toBe(`${path.basename(a.dir)}-2`);
+    expect(path.basename(c.dir)).toBe(`${path.basename(a.dir)}-3`);
+  });
+
+  it("persists artifacts and status transitions", async () => {
+    const run = await createRun(project, "art");
+    const shot = path.join(run.dir, "screenshots", "home.png");
+    await fs.promises.writeFile(shot, "png");
+    await run.addArtifact("screenshot", "home", shot);
+    await run.setStatus("running");
+    await run.finish("completed");
+
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(run.dir, "manifest.json"), "utf8"),
+    );
+    expect(manifest.status).toBe("completed");
+    expect(manifest.artifacts).toHaveLength(1);
+    expect(manifest.artifacts[0].type).toBe("screenshot");
+    expect(manifest.artifacts[0].name).toBe("home");
+    expect(manifest.artifacts[0].path).toBe(path.join("screenshots", "home.png"));
+  });
+
+  it("accepts relative artifact paths", async () => {
+    const run = await createRun(project, "rel");
+    await run.addArtifact("log", "app", path.join("logs", "app.log"));
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(run.dir, "manifest.json"), "utf8"),
+    );
+    expect(manifest.artifacts[0].path).toBe(path.join("logs", "app.log"));
+  });
+});
+
+describe("listRuns", () => {
+  it("returns runs newest-first and skips corrupt manifests", async () => {
+    const first = await createRun(project, "one", {
+      now: new Date("2026-06-09T08:00:00Z"),
+    });
+    const second = await createRun(project, "two", {
+      now: new Date("2026-06-09T09:00:00Z"),
+    });
+    const corrupt = await createRun(project, "bad", {
+      now: new Date("2026-06-09T10:00:00Z"),
+    });
+    await fs.promises.writeFile(
+      path.join(corrupt.dir, "manifest.json"),
+      "not json",
+    );
+
+    const runs = await listRuns(project);
+    expect(runs.map((r) => r.slug)).toEqual(["two", "one"]);
+    expect(runs[0]?.runId).toBe(path.basename(second.dir));
+    expect(runs[1]?.runId).toBe(path.basename(first.dir));
+  });
+
+  it("returns empty list when no runs exist", async () => {
+    expect(await listRuns(project)).toEqual([]);
+  });
+});
