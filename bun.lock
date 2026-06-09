@@ -41,6 +41,9 @@
     "packages/desktop-linux": {
       "name": "@pickforge/picklab-desktop-linux",
       "version": "0.1.0",
+      "dependencies": {
+        "@pickforge/picklab-core": "*",
+      },
     },
     "packages/mcp-server": {
       "name": "@pickforge/picklab-mcp-server",
