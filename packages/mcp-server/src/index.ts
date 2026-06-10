@@ -7,6 +7,7 @@ import { registerAndroidTools } from "./tools/android.js";
 import { registerArtifactTools } from "./tools/artifacts.js";
 import { registerDesktopTools } from "./tools/desktop.js";
 import { registerSessionTools } from "./tools/session.js";
+import { registerUserTools } from "./tools/user.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -24,6 +25,7 @@ export function createMcpServer(
   registerDesktopTools(server, ctx);
   registerAndroidTools(server, ctx);
   registerArtifactTools(server, ctx);
+  registerUserTools(server);
   registerResources(server, ctx);
   registerPrompts(server);
   return server;
