@@ -24,6 +24,8 @@ export interface CreateAndroidSessionOptions {
   port?: number;
   bootTimeoutMs?: number;
   bootPollIntervalMs?: number;
+  onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface AndroidSessionHandle {
@@ -78,6 +80,8 @@ export async function createAndroidSession(
       registryEnv,
       bootTimeoutMs: opts.bootTimeoutMs,
       bootPollIntervalMs: opts.bootPollIntervalMs,
+      onProgress: opts.onProgress,
+      signal: opts.signal,
     });
 
     const android: AndroidSessionInfo = {

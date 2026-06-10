@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   connectLab,
@@ -91,6 +93,28 @@ describe("resource reads", () => {
     expect(first(contents).mimeType).toBe("image/png");
     const data = Buffer.from(first(contents).blob as string, "base64");
     expect(data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)).toBe(true);
+  });
+
+  it("refuses to inline a screenshot blob over 8MB", async () => {
+    const bigPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "screenshots",
+      "big.png",
+    );
+    fs.writeFileSync(
+      bigPath,
+      Buffer.concat([PNG_MAGIC, Buffer.alloc(8 * 1024 * 1024)]),
+    );
+    const { contents } = await lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/screenshots/big.png`,
+    });
+    expect(first(contents).mimeType).toBe("text/plain");
+    expect(first(contents).blob).toBeUndefined();
+    expect(first(contents).text).toContain("inline limit");
+    expect(first(contents).text).toContain(bigPath);
   });
 
   it("reads a log with secrets redacted", async () => {

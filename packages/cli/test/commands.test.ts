@@ -953,10 +953,15 @@ interface JsonRpcResponse {
   error?: Record<string, any>;
 }
 
+interface McpDialogue {
+  responses: Map<number, JsonRpcResponse>;
+  exitCode: number | null;
+}
+
 function speakMcp(
   argv: string[],
   env: Record<string, string>,
-): Promise<Map<number, JsonRpcResponse>> {
+): Promise<McpDialogue> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, argv, {
       env,
@@ -964,18 +969,13 @@ function speakMcp(
     });
     const responses = new Map<number, JsonRpcResponse>();
     let buffer = "";
-    const finish = (error?: Error) => {
+    let settled = false;
+    let stdinEnded = false;
+    const timer = setTimeout(() => {
+      settled = true;
       child.kill("SIGKILL");
-      if (error !== undefined) {
-        reject(error);
-      } else {
-        resolve(responses);
-      }
-    };
-    const timer = setTimeout(
-      () => finish(new Error("timed out waiting for MCP responses")),
-      30_000,
-    );
+      reject(new Error("timed out waiting for MCP responses"));
+    }, 30_000);
     child.stdout.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
       let newline = buffer.indexOf("\n");
@@ -983,22 +983,36 @@ function speakMcp(
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (line !== "") {
-          const message = JSON.parse(line) as JsonRpcResponse;
-          if (typeof message.id === "number") {
+          let message: JsonRpcResponse | undefined;
+          try {
+            message = JSON.parse(line) as JsonRpcResponse;
+          } catch {
+            message = undefined;
+          }
+          if (message !== undefined && typeof message.id === "number") {
             responses.set(message.id, message);
           }
         }
-        if (responses.has(2)) {
-          clearTimeout(timer);
-          finish();
-          return;
+        if (responses.has(2) && !stdinEnded) {
+          stdinEnded = true;
+          child.stdin.end();
         }
         newline = buffer.indexOf("\n");
       }
     });
     child.on("error", (error) => {
       clearTimeout(timer);
-      finish(error);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (!settled) {
+        settled = true;
+        resolve({ responses, exitCode: code });
+      }
     });
     const send = (message: Record<string, unknown>) => {
       child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -1023,10 +1037,14 @@ describe("picklab mcp serve", () => {
     new URL("../dist/picklab-mcp.js", import.meta.url),
   );
 
-  it("serves MCP over stdio via picklab mcp serve", async () => {
+  it("serves MCP over stdio and exits 0 when the client closes stdin", async () => {
     const env = makeEnv();
-    const responses = await speakMcp([cliPath, "mcp", "serve"], env);
+    const { responses, exitCode } = await speakMcp(
+      [cliPath, "mcp", "serve"],
+      env,
+    );
 
+    expect(exitCode).toBe(0);
     const init = responses.get(1);
     expect(init?.result?.serverInfo?.name).toBe("picklab");
     const tools = responses.get(2)?.result?.tools as Array<{ name: string }>;
@@ -1037,9 +1055,10 @@ describe("picklab mcp serve", () => {
     expect(names).toContain("artifact_report");
   }, 60_000);
 
-  it("serves MCP over stdio via the picklab-mcp bin", async () => {
+  it("serves MCP over stdio via the picklab-mcp bin and exits 0", async () => {
     const env = makeEnv();
-    const responses = await speakMcp([mcpEntry], env);
+    const { responses, exitCode } = await speakMcp([mcpEntry], env);
+    expect(exitCode).toBe(0);
     expect(responses.get(1)?.result?.serverInfo?.name).toBe("picklab");
     const tools = responses.get(2)?.result?.tools as Array<{ name: string }>;
     expect(tools.length).toBeGreaterThanOrEqual(21);

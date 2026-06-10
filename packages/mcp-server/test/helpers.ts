@@ -86,7 +86,7 @@ export function writeFakeAdbSdk(root: string, adbLog: string): string {
     'case "$*" in',
     "  *\"screencap -p\"*) printf '\\211PNG\\r\\n\\032\\n' ;;",
     '  *"uiautomator dump"*) echo "UI hierchary dumped to: /sdcard/picklab-ui.xml" ;;',
-    "  *\"cat /sdcard/picklab-ui.xml\"*) printf '<?xml version=\"1.0\"?><hierarchy rotation=\"0\"></hierarchy>' ;;",
+    `  *"cat /sdcard/picklab-ui.xml"*) printf '<?xml version="1.0"?><hierarchy rotation="0"><node text="token=${PLANTED_TOKEN}" /></hierarchy>' ;;`,
     `  *"logcat -d"*) printf 'I/Auth( 123): authToken=${PLANTED_TOKEN}\\nI/App( 123): started\\n' ;;`,
     '  *"install -r"*) echo Success ;;',
     '  *monkey*) echo "Events injected: 1" ;;',
@@ -104,7 +104,10 @@ export function adbLogLines(adbLog: string): string[] {
   return fs.readFileSync(adbLog, "utf8").trim().split("\n");
 }
 
-export function makeFakeAndroidSdk(root: string): {
+export function makeFakeAndroidSdk(
+  root: string,
+  opts: { bootAfterPolls?: number } = {},
+): {
   sdk: string;
   adbLog: string;
   pidFile: string;
@@ -112,6 +115,8 @@ export function makeFakeAndroidSdk(root: string): {
   const sdk = path.join(root, "sdk");
   const pidFile = path.join(sdk, "emulator.pid");
   const adbLog = path.join(sdk, "adb.log");
+  const bootCount = path.join(sdk, "boot.count");
+  const bootAfterPolls = opts.bootAfterPolls ?? 1;
   writeScript(
     path.join(sdk, "emulator", "emulator"),
     `echo $$ > "${pidFile}"\nPATH=/usr/bin:/bin\nexec sleep 120`,
@@ -121,7 +126,12 @@ export function makeFakeAndroidSdk(root: string): {
     [
       `printf '%s\\n' "$*" >> "${adbLog}"`,
       'case "$*" in',
-      "  *getprop*) echo 1 ;;",
+      "  *getprop*)",
+      "    n=0",
+      `    [ -f "${bootCount}" ] && read -r n < "${bootCount}"`,
+      "    n=$((n+1))",
+      `    echo "$n" > "${bootCount}"`,
+      `    if [ "$n" -ge ${bootAfterPolls} ]; then echo 1; else echo 0; fi ;;`,
       '  devices) printf "List of devices attached\\n" ;;',
       `  *"emu kill"*) [ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null ;;`,
       "esac",
@@ -129,6 +139,17 @@ export function makeFakeAndroidSdk(root: string): {
     ].join("\n"),
   );
   return { sdk, adbLog, pidFile };
+}
+
+export function killFakeEmulator(pidFile: string): void {
+  try {
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    if (Number.isInteger(pid) && pid > 0) {
+      process.kill(pid, "SIGKILL");
+    }
+  } catch {
+    // the fake emulator is already gone or was never started
+  }
 }
 
 let sessionCounter = 0;

@@ -7,8 +7,19 @@ export async function runMcpServe(): Promise<number> {
   await server.connect(transport);
   console.error("picklab mcp server: listening on stdio");
   return new Promise<number>((resolve) => {
-    server.server.onclose = () => {
-      resolve(0);
+    let settled = false;
+    const finish = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      void server
+        .close()
+        .catch(() => {})
+        .then(() => resolve(0));
     };
+    server.server.onclose = finish;
+    process.stdin.on("end", finish);
+    process.stdin.on("close", finish);
   });
 }

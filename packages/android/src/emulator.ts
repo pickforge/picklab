@@ -43,6 +43,8 @@ export interface StartEmulatorOptions {
   registryEnv?: EnvLike;
   bootTimeoutMs?: number;
   bootPollIntervalMs?: number;
+  onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface EmulatorHandle {
@@ -60,6 +62,8 @@ export interface WaitForBootOptions {
   pollIntervalMs?: number;
   isEmulatorAlive?: () => boolean;
   logPath?: string;
+  onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface StopEmulatorOptions {
@@ -126,13 +130,23 @@ export async function waitForBoot(opts: WaitForBootOptions): Promise<void> {
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_BOOT_POLL_INTERVAL_MS;
   const logHint =
     opts.logPath !== undefined ? `; check the log at ${opts.logPath}` : "";
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
   for (;;) {
+    if (opts.signal?.aborted === true) {
+      throw new Error(
+        `Aborted while waiting for emulator ${opts.serial} to boot${logHint}`,
+      );
+    }
     if (opts.isEmulatorAlive !== undefined && !opts.isEmulatorAlive()) {
       throw new Error(
         `Emulator for ${opts.serial} exited before finishing boot${logHint}`,
       );
     }
+    opts.onProgress?.(
+      `waiting for emulator ${opts.serial} to boot ` +
+        `(${Math.round((Date.now() - startedAt) / 1000)}s elapsed)`,
+    );
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       throw new Error(
@@ -301,6 +315,12 @@ export async function startEmulator(
 
     const sdkEnv: EnvLike =
       sdk !== null ? { ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk } : {};
+    if (opts.signal?.aborted === true) {
+      throw new Error(
+        `Aborted before starting the emulator for AVD ${avdName}`,
+      );
+    }
+    opts.onProgress?.(`starting emulator for AVD ${avdName} (${serial})`);
     const daemon = await startDaemon(emulator, args, {
       logDir: opts.logDir,
       name: "emulator",
@@ -317,6 +337,8 @@ export async function startEmulator(
         pollIntervalMs: opts.bootPollIntervalMs,
         isEmulatorAlive: () => isPidAlive(daemon.pid),
         logPath: daemon.logPath,
+        onProgress: opts.onProgress,
+        signal: opts.signal,
       });
     } catch (error) {
       await stopPid(daemon.pid).catch(() => {});

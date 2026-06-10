@@ -1,11 +1,18 @@
 import path from "node:path";
 import {
-  createRun,
-  getSession,
-  listSessions,
+  resolveRunnableSession,
+  resolveScreenshotTarget as resolveTarget,
   type EnvLike,
-  type RunHandle,
+  type RunnableSessionType,
+  type ScreenshotTarget,
   type SessionRecord,
+} from "@pickforge/picklab-core";
+
+export {
+  captureToTarget,
+  requireDisplay,
+  type RunnableSessionType,
+  type ScreenshotTarget,
 } from "@pickforge/picklab-core";
 
 export interface BaseCliOptions {
@@ -65,50 +72,17 @@ export async function runReported(
   return errors.length === 0 ? 0 : 1;
 }
 
-export type RunnableSessionType = "desktop" | "android";
-
 export async function resolveSessionRecord(
   type: RunnableSessionType,
   id: string | undefined,
   env: EnvLike = process.env,
 ): Promise<SessionRecord> {
-  if (id !== undefined) {
-    const record = await getSession(id, env);
-    if (record === undefined) {
-      throw new Error(`Session not found: ${id}`);
-    }
-    if (record.type !== type) {
-      throw new Error(
-        `Session ${id} is of type "${record.type}", but this command needs a ${type} session`,
-      );
-    }
-    return record;
-  }
-  const candidates = (await listSessions(env)).filter(
-    (record) => record.type === type && record.status === "running",
-  );
-  if (candidates.length === 0) {
-    throw new Error(
-      `No running ${type} session found; create one with: ` +
-        `picklab session create --type ${type}`,
-    );
-  }
-  if (candidates.length > 1) {
-    throw new Error(
-      `Multiple running ${type} sessions found ` +
-        `(${candidates.map((record) => record.id).join(", ")}); ` +
-        `pick one with --session <id>`,
-    );
-  }
-  return candidates[0] as SessionRecord;
-}
-
-export function requireDisplay(record: SessionRecord): string {
-  const display = record.desktop?.display;
-  if (display === undefined) {
-    throw new Error(`Session ${record.id} has no display recorded`);
-  }
-  return display;
+  return resolveRunnableSession(type, id, {
+    env,
+    consumerLabel: "command",
+    createHint: `create one with: picklab session create --type ${type}`,
+    selectHint: "pick one with --session <id>",
+  });
 }
 
 export interface ScreenshotTargetOptions extends BaseCliOptions {
@@ -116,60 +90,17 @@ export interface ScreenshotTargetOptions extends BaseCliOptions {
   run?: string;
 }
 
-export interface ScreenshotTarget {
-  outPath: string;
-  run?: RunHandle;
-}
-
 export async function resolveScreenshotTarget(
   opts: ScreenshotTargetOptions,
   defaultSlug: string,
   sessionId?: string,
 ): Promise<ScreenshotTarget> {
-  if (opts.out !== undefined && opts.run !== undefined) {
-    throw new Error("use either --out or --run, not both");
-  }
-  if (opts.out !== undefined) {
-    return { outPath: path.resolve(opts.out) };
-  }
-  const run = await createRun(
-    resolveProjectDir(opts),
-    opts.run ?? defaultSlug,
-    sessionId === undefined ? {} : { sessionId },
-  );
-  return {
-    outPath: path.join(run.dir, "screenshots", "screenshot.png"),
-    run,
-  };
-}
-
-export async function captureToTarget(
-  target: ScreenshotTarget,
-  capture: () => Promise<void>,
-): Promise<Record<string, unknown>> {
-  try {
-    await capture();
-  } catch (error) {
-    if (target.run !== undefined) {
-      await target.run.finish("failed").catch(() => {});
-    }
-    throw error;
-  }
-  const data: Record<string, unknown> = { path: target.outPath };
-  if (target.run !== undefined) {
-    try {
-      await target.run.addArtifact(
-        "screenshot",
-        path.basename(target.outPath),
-        target.outPath,
-      );
-      await target.run.finish("completed");
-    } catch (error) {
-      await target.run.finish("failed").catch(() => {});
-      throw error;
-    }
-    data.runId = target.run.runId;
-    data.runDir = target.run.dir;
-  }
-  return data;
+  return resolveTarget({
+    projectDir: resolveProjectDir(opts),
+    out: opts.out,
+    runSlug: opts.run,
+    defaultSlug,
+    sessionId,
+    conflictError: "use either --out or --run, not both",
+  });
 }

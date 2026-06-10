@@ -132,7 +132,9 @@ export function registerDesktopTools(
         data.sessionId = id;
         data.display = display;
         data.tool = tool;
-        return { data, extraContent: await imageContent(target.outPath) };
+        const image = await imageContent(target.outPath);
+        Object.assign(data, image.meta);
+        return { data, extraContent: image.content };
       }),
   );
 

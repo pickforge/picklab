@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { imageContent } from "../src/context.js";
 import { createMcpServer } from "../src/index.js";
 import {
   connectLab,
@@ -171,6 +173,32 @@ describe("empty lab", () => {
     const report = parseToolJson(result);
     expect(report.errors[0]).toContain("No running desktop session");
     expect(report.errors[0]).toContain("session_create");
+  });
+});
+
+describe("inline image content", () => {
+  it("reports a reason when the image file is missing", async () => {
+    const image = await imageContent(path.join(dirs.root, "missing.png"));
+    expect(image.content).toEqual([]);
+    expect(image.meta.inlineImage).toBe(false);
+    expect(image.meta.inlineImageReason).toContain("not readable");
+  });
+
+  it("reports a reason when the image is over the inline limit", async () => {
+    const big = path.join(dirs.root, "big.png");
+    fs.writeFileSync(big, Buffer.alloc(2 * 1024 * 1024 + 1));
+    const image = await imageContent(big);
+    expect(image.content).toEqual([]);
+    expect(image.meta.inlineImage).toBe(false);
+    expect(image.meta.inlineImageReason).toContain("inline limit");
+  });
+
+  it("inlines a small image and flags it as inlined", async () => {
+    const small = path.join(dirs.root, "small.png");
+    fs.writeFileSync(small, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const image = await imageContent(small);
+    expect(image.meta).toEqual({ inlineImage: true });
+    expect(image.content).toHaveLength(1);
   });
 });
 

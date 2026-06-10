@@ -23,7 +23,7 @@ import {
   runTool,
   type ServerContext,
 } from "../context.js";
-import { createSessions } from "./session.js";
+import { createSessions, progressReporter } from "./session.js";
 
 const targetArgs = {
   session: z
@@ -83,13 +83,14 @@ export function registerAndroidTools(
         avdName: z.string().min(1).optional().describe("Android AVD name"),
       },
     },
-    (args) =>
+    (args, extra) =>
       runTool(async () => ({
         data: {
-          sessions: await createSessions(ctx, {
-            type: "android",
-            avdName: args.avdName,
-          }),
+          sessions: await createSessions(
+            ctx,
+            { type: "android", avdName: args.avdName },
+            { onProgress: progressReporter(extra), signal: extra.signal },
+          ),
         },
       })),
   );
@@ -186,7 +187,9 @@ export function registerAndroidTools(
           });
         });
         Object.assign(data, targetData(target));
-        return { data, extraContent: await imageContent(destination.outPath) };
+        const image = await imageContent(destination.outPath);
+        Object.assign(data, image.meta);
+        return { data, extraContent: image.content };
       }),
   );
 
@@ -269,7 +272,9 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        const xml = await getUiTree({ serial: target.serial, env: ctx.env });
+        const xml = redactSecrets(
+          await getUiTree({ serial: target.serial, env: ctx.env }),
+        );
         return { data: { ...targetData(target), xml } };
       }),
   );
@@ -346,7 +351,16 @@ export function registerAndroidTools(
         if (args.serial !== undefined || args.session !== undefined) {
           target = await resolveAndroidTarget(ctx, args);
         } else {
-          target = await resolveAndroidTarget(ctx, args).catch(() => undefined);
+          try {
+            target = await resolveAndroidTarget(ctx, args);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (!message.startsWith("No running android session")) {
+              throw error;
+            }
+            target = undefined;
+          }
         }
         const result = await runAdb({
           args: args.args,

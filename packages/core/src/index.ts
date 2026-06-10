@@ -48,6 +48,17 @@ export {
 } from "./proc.js";
 
 export {
+  captureToTarget,
+  requireDisplay,
+  resolveRunnableSession,
+  resolveScreenshotTarget,
+  type ResolveRunnableSessionOptions,
+  type ResolveScreenshotTargetOptions,
+  type RunnableSessionType,
+  type ScreenshotTarget,
+} from "./target.js";
+
+export {
   createSession,
   destroySessionRecord,
   getSession,

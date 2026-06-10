@@ -17,6 +17,7 @@ import { isSafeRunId } from "./tools/artifacts.js";
 import { sessionStatusEntry } from "./tools/session.js";
 
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const MAX_BLOB_BYTES = 8 * 1024 * 1024;
 
 function decodeVariable(variables: Variables, label: string): string {
   const raw = variables[label];
@@ -168,6 +169,26 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
         throw new Error(`Not a PNG screenshot: ${name}`);
       }
       const filePath = runFilePath(ctx, runId, "screenshots", name);
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(filePath);
+      } catch {
+        throw new Error(`Screenshot not found: ${runId}/${name}`);
+      }
+      if (stat.size > MAX_BLOB_BYTES) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "text/plain",
+              text:
+                `Screenshot ${runId}/${name} is ${stat.size} bytes, over ` +
+                `the ${MAX_BLOB_BYTES} byte inline limit; read the file ` +
+                `directly at ${filePath}`,
+            },
+          ],
+        };
+      }
       let data: Buffer;
       try {
         data = await fs.promises.readFile(filePath);

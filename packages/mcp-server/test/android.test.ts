@@ -5,6 +5,7 @@ import {
   adbLogLines,
   connectLab,
   FAKE_SERIAL,
+  killFakeEmulator,
   makeFakeAndroidSdk,
   makeLabDirs,
   parseToolJson,
@@ -94,7 +95,7 @@ describe("android tools (fake adb)", () => {
     ]);
   });
 
-  it("returns the ui tree xml", async () => {
+  it("returns the ui tree xml with secrets redacted", async () => {
     const report = parseToolJson(
       await lab.client.callTool({
         name: "android_get_ui_tree",
@@ -103,6 +104,8 @@ describe("android tools (fake adb)", () => {
     );
     expect(report.ok).toBe(true);
     expect(report.xml).toContain("<hierarchy");
+    expect(report.xml).toContain("[REDACTED]");
+    expect(report.xml).not.toContain(PLANTED_TOKEN);
     expect(adbLogLines(adbLog)).toContain(
       `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
     );
@@ -193,6 +196,29 @@ describe("android tools (fake adb)", () => {
     });
     expect(result.isError).toBe(true);
   });
+
+  it("surfaces session ambiguity instead of running serial-less adb", async () => {
+    writeAndroidSessionRecord(dirs.home, dirs.projectDir, "emulator-5558");
+    const result = await lab.client.callTool({
+      name: "android_run_adb",
+      arguments: { args: ["devices"] },
+    });
+    expect(result.isError).toBe(true);
+    const report = parseToolJson(result);
+    expect(report.errors[0]).toContain("Multiple running android sessions");
+    expect(adbLogLines(adbLog)).toEqual([]);
+  });
+
+  it("marks inline screenshots with inlineImage in the tool data", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_screenshot",
+        arguments: {},
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.inlineImage).toBe(true);
+  });
 });
 
 describe("android_start (fake sdk)", () => {
@@ -231,8 +257,49 @@ describe("android_start (fake sdk)", () => {
       const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
       expect(() => process.kill(pid, 0)).toThrow();
     } finally {
+      killFakeEmulator(pidFile);
       await startLab.close();
       removeLabDirs(startDirs);
     }
   }, 60_000);
+
+  it("emits progress notifications while the emulator boots", async () => {
+    const startDirs = makeLabDirs();
+    const { sdk, pidFile } = makeFakeAndroidSdk(startDirs.root, {
+      bootAfterPolls: 2,
+    });
+    const startLab = await connectLab({
+      projectDir: startDirs.projectDir,
+      env: {
+        PICKLAB_HOME: startDirs.home,
+        PATH: startDirs.binDir,
+        ANDROID_HOME: sdk,
+      },
+    });
+    const progress: Array<{ progress: number; message?: string }> = [];
+    try {
+      const started = parseToolJson(
+        await startLab.client.callTool(
+          { name: "android_start", arguments: {} },
+          undefined,
+          {
+            timeout: 9_000,
+            resetTimeoutOnProgress: true,
+            onprogress: (notification) => {
+              progress.push(notification);
+            },
+          },
+        ),
+      );
+      expect(started.ok).toBe(true);
+      expect(progress.length).toBeGreaterThanOrEqual(1);
+      expect(
+        progress.some((entry) => /boot|emulator/i.test(entry.message ?? "")),
+      ).toBe(true);
+    } finally {
+      killFakeEmulator(pidFile);
+      await startLab.close();
+      removeLabDirs(startDirs);
+    }
+  }, 10_000);
 });

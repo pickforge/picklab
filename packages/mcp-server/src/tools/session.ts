@@ -1,4 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type {
+  ServerNotification,
+  ServerRequest,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   createAndroidSession,
@@ -21,6 +26,30 @@ import { runTool, type ServerContext } from "../context.js";
 interface SessionSummary extends Record<string, unknown> {
   id: string;
   type: "desktop" | "android";
+}
+
+export interface SessionLifecycle {
+  onProgress?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+export function progressReporter(
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+): ((message: string) => void) | undefined {
+  const progressToken = extra._meta?.progressToken;
+  if (progressToken === undefined) {
+    return undefined;
+  }
+  let progress = 0;
+  return (message: string) => {
+    progress += 1;
+    void extra
+      .sendNotification({
+        method: "notifications/progress",
+        params: { progressToken, progress, message },
+      })
+      .catch(() => {});
+  };
 }
 
 async function createDesktopLeg(
@@ -50,6 +79,7 @@ async function createDesktopLeg(
 async function createAndroidLeg(
   ctx: ServerContext,
   args: { avdName?: string },
+  lifecycle: SessionLifecycle,
 ): Promise<SessionSummary> {
   const config = await loadConfig(ctx.projectDir, ctx.env);
   const avdName = args.avdName ?? config.android?.avdName;
@@ -57,6 +87,8 @@ async function createAndroidLeg(
     projectDir: ctx.projectDir,
     registryEnv: ctx.env,
     env: ctx.env,
+    onProgress: lifecycle.onProgress,
+    signal: lifecycle.signal,
     ...(avdName === undefined ? {} : { avdName }),
   });
   return {
@@ -78,6 +110,7 @@ export async function createSessions(
     vnc?: boolean;
     avdName?: string;
   },
+  lifecycle: SessionLifecycle = {},
 ): Promise<SessionSummary[]> {
   const type = args.type ?? "desktop";
   const sessions: SessionSummary[] = [];
@@ -86,7 +119,10 @@ export async function createSessions(
   }
   if (type === "android" || type === "desktop+android") {
     try {
-      sessions.push(await createAndroidLeg(ctx, args));
+      if (lifecycle.signal?.aborted === true) {
+        throw new Error("Session creation aborted by the client");
+      }
+      sessions.push(await createAndroidLeg(ctx, args, lifecycle));
     } catch (error) {
       const desktop = sessions.find((session) => session.type === "desktop");
       if (desktop !== undefined) {
@@ -180,9 +216,14 @@ export function registerSessionTools(
         avdName: z.string().min(1).optional().describe("Android AVD name"),
       },
     },
-    (args) =>
+    (args, extra) =>
       runTool(async () => ({
-        data: { sessions: await createSessions(ctx, args) },
+        data: {
+          sessions: await createSessions(ctx, args, {
+            onProgress: progressReporter(extra),
+            signal: extra.signal,
+          }),
+        },
       })),
   );
 
