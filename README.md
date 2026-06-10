@@ -154,3 +154,11 @@ npx vitest run
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://pickforge.dev">
+    <img src="assets/brand/pickforge-studio-footer.svg" alt="Pickforge Studio — local-first, open source, built for people who ship" width="560">
+  </a>
+</p>

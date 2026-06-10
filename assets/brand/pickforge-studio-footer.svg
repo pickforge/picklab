@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 120" fill="none" role="img" aria-label="Pickforge Studio">
+  <title>Pickforge Studio — local-first, open source, built for people who ship</title>
+  <rect width="720" height="120" rx="24" fill="#0A0A0B"/>
+  <rect x="0.5" y="0.5" width="719" height="119" rx="23.5" stroke="#F2F2F3" stroke-opacity="0.08"/>
+  <g transform="translate(212 22) scale(0.4)">
+    <rect width="128" height="128" rx="24" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <g stroke="#F2F2F3" stroke-width="3" stroke-linecap="square" fill="none">
+      <path d="M30 48 V32 H46"/>
+      <path d="M30 80 V96 H46"/>
+      <path d="M82 96 H98 V80"/>
+    </g>
+    <circle cx="90" cy="40" r="7" fill="#FF7A1A"/>
+    <g stroke="#F2F2F3" stroke-width="1" stroke-dasharray="2 3" opacity="0.35">
+      <line x1="30" y1="48" x2="30" y2="80"/>
+      <line x1="46" y1="32" x2="82" y2="32"/>
+      <line x1="46" y1="96" x2="82" y2="96"/>
+      <line x1="98" y1="48" x2="98" y2="80"/>
+    </g>
+  </g>
+  <text x="280" y="57" fill="#F2F2F3" font-family="Geist, Inter, Arial, sans-serif" font-size="26" font-weight="750" letter-spacing="-0.02em">Pickforge Studio</text>
+  <text x="360" y="92" text-anchor="middle" fill="#6E6E75" font-family="Geist Mono, JetBrains Mono, monospace" font-size="11" font-weight="500" letter-spacing="0.18em">LOCAL-FIRST · OPEN SOURCE · BUILT FOR PEOPLE WHO SHIP</text>
+</svg>
