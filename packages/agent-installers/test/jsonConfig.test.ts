@@ -151,6 +151,17 @@ describe("atomic writes", () => {
     await removeMcpServerFromJsonFile(file);
     expect(tmpLeftoversIn(tmpDir)).toEqual([]);
   });
+
+  it("preserves the original file mode across merge and remove", async () => {
+    fs.writeFileSync(file, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+    fs.chmodSync(file, 0o600);
+
+    await mergeMcpServerIntoJsonFile(file, { createIfMissing: false });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+
+    await removeMcpServerFromJsonFile(file);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
 });
 
 describe("jsonFileHasMcpServer / jsonFileMcpServerState", () => {

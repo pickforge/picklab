@@ -123,6 +123,77 @@ describe("runAgentsDoctor", () => {
     expect(cursorCheck.detail).toContain("stale");
   });
 
+  it("ignores state entries recorded for a different config path", async () => {
+    const defaultPath = path.join(home, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(defaultPath), { recursive: true });
+    fs.writeFileSync(
+      defaultPath,
+      JSON.stringify({ mcpServers: { other: { command: "x", args: [] } } }),
+    );
+    const customPath = path.join(tmpDir, "custom.json");
+    await linkCursor(customPath);
+    await recordAgentState(
+      "cursor",
+      { registered: true, configPath: customPath },
+      env,
+    );
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(true);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("ok");
+  });
+
+  it("applies state entries when doctor checks the recorded config path", async () => {
+    const customPath = path.join(tmpDir, "custom.json");
+    await linkCursor(customPath);
+    await recordAgentState(
+      "cursor",
+      { registered: true, configPath: customPath },
+      env,
+    );
+    await removeMcpServerFromJsonFile(customPath);
+
+    const report = await runAgentsDoctor({
+      env,
+      configPaths: { cursor: customPath },
+    });
+    expect(report.ok).toBe(false);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("problem");
+    expect(cursorCheck.detail).toContain("stale");
+  });
+
+  it("matches state entries after path normalization", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    const unnormalized = path.join(home, ".cursor", "..", ".cursor", "mcp.json");
+    await linkCursor(configPath);
+    await recordAgentState(
+      "cursor",
+      { registered: true, configPath: unnormalized },
+      env,
+    );
+    await removeMcpServerFromJsonFile(configPath);
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(false);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("problem");
+  });
+
+  it("flags configs recorded as linked when the file is missing entirely", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    await linkCursor(configPath);
+    await recordAgentState("cursor", { registered: true, configPath }, env);
+    fs.rmSync(configPath);
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(false);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("problem");
+    expect(cursorCheck.detail).toContain("no longer exists");
+  });
+
   it("reports ok after a legitimate link/unlink cycle with a tombstone", async () => {
     const configPath = path.join(home, ".cursor", "mcp.json");
     await linkCursor(configPath);

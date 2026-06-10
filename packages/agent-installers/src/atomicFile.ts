@@ -14,8 +14,20 @@ export async function writeFileAtomic(
     dir,
     `.${path.basename(filePath)}.tmp-${process.pid}-${tmpCounter}`,
   );
+  let mode: number | undefined;
   try {
-    await fs.promises.writeFile(tmp, content, "utf8");
+    mode = (await fs.promises.stat(filePath)).mode & 0o777;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    await fs.promises.writeFile(tmp, content, { encoding: "utf8", mode });
+    if (mode !== undefined) {
+      await fs.promises.chmod(tmp, mode);
+    }
     await fs.promises.rename(tmp, filePath);
   } catch (error) {
     await fs.promises.rm(tmp, { force: true });

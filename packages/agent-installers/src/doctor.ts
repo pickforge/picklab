@@ -104,16 +104,39 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+function stateEntryForPath(
+  stateEntry: AgentStateEntry | undefined,
+  configPath: string,
+): AgentStateEntry | undefined {
+  if (stateEntry === undefined) {
+    return undefined;
+  }
+  return path.resolve(stateEntry.configPath) === path.resolve(configPath)
+    ? stateEntry
+    : undefined;
+}
+
 async function checkBuiltinAgent(
   name: AgentKind,
   configPath: string,
   checks: AgentsDoctorCheck[],
-  stateEntry: AgentStateEntry | undefined,
+  recordedEntry: AgentStateEntry | undefined,
 ): Promise<void> {
   const id = `agent-${name}`;
+  const stateEntry = stateEntryForPath(recordedEntry, configPath);
   const exists = await fileExists(configPath);
   const backups = await countBackups(configPath);
   if (!exists) {
+    if (stateEntry?.registered === true) {
+      checks.push({
+        id,
+        status: "problem",
+        detail:
+          `stale: PickLab linked ${configPath} but the file no longer ` +
+          `exists (re-run: picklab agents link)`,
+      });
+      return;
+    }
     checks.push({
       id,
       status: "ok",
