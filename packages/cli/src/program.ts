@@ -365,7 +365,9 @@ export function buildProgram(): Command {
     withAndroidTarget(
       android
         .command("adb")
-        .description("Run a raw adb command (put adb flags after --)")
+        .description(
+          "Run a raw adb command (put adb flags after --); output is not redacted",
+        )
         .argument("[args...]", "adb arguments"),
     ),
   ).action(async (args, opts) => {

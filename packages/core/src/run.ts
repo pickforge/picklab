@@ -172,7 +172,8 @@ export async function listRuns(projectDir: string): Promise<RunManifest[]> {
         typeof parsed === "object" &&
         parsed !== null &&
         typeof (parsed as RunManifest).runId === "string" &&
-        typeof (parsed as RunManifest).createdAt === "string"
+        typeof (parsed as RunManifest).createdAt === "string" &&
+        Array.isArray((parsed as RunManifest).artifacts)
       ) {
         manifests.push(parsed as RunManifest);
       }

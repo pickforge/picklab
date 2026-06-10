@@ -103,13 +103,18 @@ export async function runDesktopClick(
   opts: DesktopClickOptions,
 ): Promise<number> {
   return runReported(opts, async () => {
-    const { id, display } = await resolveDesktop(opts);
     const parsedX = parseIntArg(x, "x");
     const parsedY = parseIntArg(y, "y");
     const button =
       opts.button === undefined
         ? undefined
         : parseIntArg(opts.button, "--button");
+    if (button !== undefined && (button < 1 || button > 9)) {
+      throw new Error(
+        `Invalid --button "${opts.button}": expected an integer between 1 and 9`,
+      );
+    }
+    const { id, display } = await resolveDesktop(opts);
     await click({ display, x: parsedX, y: parsedY, button });
     return {
       data: { sessionId: id, display, x: parsedX, y: parsedY, button: button ?? 1 },

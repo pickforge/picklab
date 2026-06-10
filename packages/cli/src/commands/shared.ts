@@ -45,11 +45,13 @@ export async function runReported(
     };
   }
   const errors = result.errors ?? [];
-  const report: Record<string, unknown> = {
-    ok: errors.length === 0,
-    ...(result.data ?? {}),
-    errors,
-  };
+  const report: Record<string, unknown> = { ok: errors.length === 0 };
+  for (const [key, value] of Object.entries(result.data ?? {})) {
+    if (key !== "ok" && key !== "errors") {
+      report[key] = value;
+    }
+  }
+  report.errors = errors;
   if (opts.json === true) {
     console.log(JSON.stringify(report, null, 2));
   } else {
@@ -124,6 +126,9 @@ export async function resolveScreenshotTarget(
   defaultSlug: string,
   sessionId?: string,
 ): Promise<ScreenshotTarget> {
+  if (opts.out !== undefined && opts.run !== undefined) {
+    throw new Error("use either --out or --run, not both");
+  }
   if (opts.out !== undefined) {
     return { outPath: path.resolve(opts.out) };
   }
@@ -152,12 +157,17 @@ export async function captureToTarget(
   }
   const data: Record<string, unknown> = { path: target.outPath };
   if (target.run !== undefined) {
-    await target.run.addArtifact(
-      "screenshot",
-      path.basename(target.outPath),
-      target.outPath,
-    );
-    await target.run.finish("completed");
+    try {
+      await target.run.addArtifact(
+        "screenshot",
+        path.basename(target.outPath),
+        target.outPath,
+      );
+      await target.run.finish("completed");
+    } catch (error) {
+      await target.run.finish("failed").catch(() => {});
+      throw error;
+    }
     data.runId = target.run.runId;
     data.runDir = target.run.dir;
   }

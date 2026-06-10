@@ -438,6 +438,20 @@ describe("picklab desktop", () => {
     60_000,
   );
 
+  it("rejects out-of-range --button values", async () => {
+    const env = makeEnv();
+    for (const button of ["0", "10"]) {
+      const result = await runCli(
+        ["desktop", "click", "1", "1", "--button", button, "--json"],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain(
+        "between 1 and 9",
+      );
+    }
+  });
+
   it("fails actionably when no desktop session is running", async () => {
     const env = makeEnv();
     const result = await runCli(["desktop", "click", "1", "1", "--json"], env);
@@ -629,6 +643,74 @@ describe("picklab android (fake adb)", () => {
     ]);
   });
 
+  it("rejects --session together with --serial", async () => {
+    const { env } = fakeAdbEnv();
+    const result = await runCli(
+      [
+        "android",
+        "tap",
+        "1",
+        "2",
+        "--session",
+        "andr-12345678",
+        "--serial",
+        FAKE_SERIAL,
+        "--json",
+      ],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain("not both");
+  });
+
+  it("rejects a desktop session id passed to an android command", async () => {
+    const { env } = fakeAdbEnv();
+    const sessionsDir = path.join(env.PICKLAB_HOME, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "desk-12345678.json"),
+      `${JSON.stringify({
+        id: "desk-12345678",
+        type: "desktop",
+        createdAt: "2026-06-09T12:00:00.000Z",
+        status: "running",
+        projectDir: tmpDir,
+        desktop: { display: ":99" },
+      })}\n`,
+    );
+    const result = await runCli(
+      ["android", "tap", "1", "2", "--session", "desk-12345678", "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const errors = parseJson(result).errors.join("\n");
+    expect(errors).toContain('type "desktop"');
+    expect(errors).toContain("needs a android session");
+  });
+
+  it("rejects --out together with --run for screenshots", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const result = await runCli(
+      [
+        "android",
+        "screenshot",
+        "--serial",
+        FAKE_SERIAL,
+        "--out",
+        path.join(tmpDir, "x.png"),
+        "--run",
+        "slug",
+        "--json",
+      ],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain(
+      "either --out or --run",
+    );
+    expect(adbLogLines(adbLog)).toEqual([]);
+  });
+
   it("fails actionably when no android session or serial is given", async () => {
     const { env } = fakeAdbEnv();
     const result = await runCli(["android", "tap", "1", "2", "--json"], env);
@@ -791,6 +873,40 @@ describe("picklab artifacts", () => {
     );
     expect(open.code).toBe(1);
     expect(parseJson(open).errors.join("\n")).toContain("Run not found");
+  });
+
+  it("rejects manifests whose runId escapes the runs directory", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    writeSyntheticRun(projectDir, "20260609-130000-evil", {
+      runId: "../../escape",
+      createdAt: "2026-06-09T13:00:00.000Z",
+    });
+
+    const open = await runCli(
+      [
+        "artifacts",
+        "open",
+        "../../escape",
+        "--project-dir",
+        projectDir,
+        "--json",
+      ],
+      env,
+    );
+    expect(open.code).toBe(1);
+    const openReport = parseJson(open);
+    expect(openReport.dir).toBeUndefined();
+    expect(openReport.errors.join("\n")).toContain("Run not found");
+    expect(open.stdout).not.toContain(path.join(projectDir, "escape"));
+
+    const latest = await runCli(
+      ["artifacts", "report", "--project-dir", projectDir, "--json"],
+      env,
+    );
+    expect(latest.code).toBe(1);
+    expect(parseJson(latest).errors.join("\n")).toContain("No runs found");
+    expect(latest.stdout).not.toContain(path.join(projectDir, "escape"));
   });
 
   it("prints the run directory for artifacts open without a display", async () => {

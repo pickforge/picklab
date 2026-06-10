@@ -32,11 +32,19 @@ export async function runArtifactsList(opts: BaseCliOptions): Promise<number> {
   });
 }
 
+const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+function isSafeRunId(runId: string): boolean {
+  return RUN_ID_PATTERN.test(runId) && runId !== "." && runId !== "..";
+}
+
 async function findRun(
   projectDir: string,
   runId: string | undefined,
 ): Promise<{ manifest: RunManifest; dir: string }> {
-  const manifests = await listRuns(projectDir);
+  const manifests = (await listRuns(projectDir)).filter((candidate) =>
+    isSafeRunId(candidate.runId),
+  );
   let manifest: RunManifest | undefined;
   if (runId === undefined) {
     manifest = manifests[0];

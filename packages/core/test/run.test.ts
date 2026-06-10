@@ -111,6 +111,24 @@ describe("listRuns", () => {
     expect(runs[1]?.runId).toBe(path.basename(first.dir));
   });
 
+  it("skips manifests without an artifacts array", async () => {
+    await createRun(project, "good", {
+      now: new Date("2026-06-09T08:00:00Z"),
+    });
+    const bad = await createRun(project, "bad", {
+      now: new Date("2026-06-09T09:00:00Z"),
+    });
+    const manifestPath = path.join(bad.dir, "manifest.json");
+    const manifest = JSON.parse(
+      await fs.promises.readFile(manifestPath, "utf8"),
+    );
+    delete manifest.artifacts;
+    await fs.promises.writeFile(manifestPath, JSON.stringify(manifest));
+
+    const runs = await listRuns(project);
+    expect(runs.map((r) => r.slug)).toEqual(["good"]);
+  });
+
   it("returns empty list when no runs exist", async () => {
     expect(await listRuns(project)).toEqual([]);
   });
