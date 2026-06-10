@@ -118,6 +118,7 @@ export async function resolveSessionRecord(
 ): Promise<SessionRecord> {
   return resolveRunnableSession(type, id, {
     env: ctx.env,
+    projectDir: ctx.projectDir,
     consumerLabel: "tool",
     createHint: `create one with the session_create tool (type "${type}")`,
     selectHint: 'pick one with the "session" argument',

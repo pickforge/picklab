@@ -10,6 +10,13 @@ function userMessage(text: string): {
   return { messages: [{ role: "user", content: { type: "text", text } }] };
 }
 
+const HUMAN_BLOCKER_GUIDELINE =
+  "If you become blocked on anything that requires a human — credentials, " +
+  "license keys, 2FA, a judgment call, or a click you cannot perform — use " +
+  "the `request_user_input` tool (or ask in your conversation) and WAIT " +
+  "for the answer. Never guess credentials and never abandon the session; " +
+  "report what you need.";
+
 export function registerPrompts(server: McpServer): void {
   server.registerPrompt(
     "test-flutter-desktop-visually",
@@ -53,6 +60,7 @@ export function registerPrompts(server: McpServer): void {
           "7. When finished, destroy the session with `session_destroy` and summarize what you verified. Use `artifact_report` to reference the captured screenshots.",
           "",
           "Never run the app on the user's real display; always work inside the PickLab session.",
+          HUMAN_BLOCKER_GUIDELINE,
         ].join("\n"),
       ),
   );
@@ -91,6 +99,8 @@ export function registerPrompts(server: McpServer): void {
           "8. For anything else (e.g. `pm list packages`, `dumpsys`), use `android_run_adb` with an argument array.",
           "9. Fix the code, rebuild the APK, reinstall with `android_install_apk`, and verify the fix the same way.",
           "10. Destroy the session with `session_destroy` when done and summarize the root cause and fix.",
+          "",
+          HUMAN_BLOCKER_GUIDELINE,
         ].join("\n"),
       ),
   );
@@ -127,6 +137,8 @@ export function registerPrompts(server: McpServer): void {
           "6. Collect the verdict per screen: unchanged, intentionally changed, or regression. For regressions, include the run id and the differing region.",
           "7. Destroy the session with `session_destroy`, then report results with `artifact_report` so every captured screenshot is referenced.",
           `8. Only update files in \`${baselineDir}\` if the user confirms the new rendering is intended.`,
+          "",
+          HUMAN_BLOCKER_GUIDELINE,
         ].join("\n"),
       ),
   );

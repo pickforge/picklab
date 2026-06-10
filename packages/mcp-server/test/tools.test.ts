@@ -36,6 +36,7 @@ const EXPECTED_TOOLS = [
   "android_run_adb",
   "artifact_list",
   "artifact_report",
+  "request_user_input",
 ];
 
 let dirs: LabDirs;

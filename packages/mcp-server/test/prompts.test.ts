@@ -68,6 +68,7 @@ describe("prompts", () => {
     expect(text).toContain("desktop_screenshot");
     expect(text).toContain("session_destroy");
     expect(text).toContain("./build/linux/x64/release/bundle/app");
+    expect(text).toContain("request_user_input");
   });
 
   it("guides an android apk debugging workflow", async () => {
@@ -85,6 +86,7 @@ describe("prompts", () => {
     expect(text).toContain("android_get_ui_tree");
     expect(text).toContain("build/app/outputs/flutter-apk/app-debug.apk");
     expect(text).toContain("com.example.app");
+    expect(text).toContain("request_user_input");
   });
 
   it("guides a visual regression workflow", async () => {
@@ -96,5 +98,6 @@ describe("prompts", () => {
     expect(text).toContain("desktop_screenshot");
     expect(text).toContain("artifact_report");
     expect(text).toContain("test/baselines");
+    expect(text).toContain("request_user_input");
   });
 });

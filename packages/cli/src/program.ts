@@ -67,13 +67,17 @@ function withProjectDir(command: Command): Command {
 }
 
 function withDesktopSession(command: Command): Command {
-  return command.option("--session <id>", "desktop session id");
+  return withProjectDir(
+    command.option("--session <id>", "desktop session id"),
+  );
 }
 
 function withAndroidTarget(command: Command): Command {
-  return command
-    .option("--session <id>", "android session id")
-    .option("--serial <serial>", "adb device serial");
+  return withProjectDir(
+    command
+      .option("--session <id>", "android session id")
+      .option("--serial <serial>", "adb device serial"),
+  );
 }
 
 export function buildProgram(): Command {
@@ -205,14 +209,12 @@ export function buildProgram(): Command {
   });
 
   withJson(
-    withProjectDir(
-      withDesktopSession(
-        desktop
-          .command("screenshot")
-          .description("Capture the desktop display into a run (or --out path)")
-          .option("--out <path>", "write to an explicit path instead of a run")
-          .option("--run <slug>", "run slug (default: desktop)"),
-      ),
+    withDesktopSession(
+      desktop
+        .command("screenshot")
+        .description("Capture the desktop display into a run (or --out path)")
+        .option("--out <path>", "write to an explicit path instead of a run")
+        .option("--run <slug>", "run slug (default: desktop)"),
     ),
   ).action(async (opts) => {
     process.exitCode = await runDesktopScreenshot(opts);
@@ -292,14 +294,12 @@ export function buildProgram(): Command {
   });
 
   withJson(
-    withProjectDir(
-      withAndroidTarget(
-        android
-          .command("screenshot")
-          .description("Capture the device screen into a run (or --out path)")
-          .option("--out <path>", "write to an explicit path instead of a run")
-          .option("--run <slug>", "run slug (default: android)"),
-      ),
+    withAndroidTarget(
+      android
+        .command("screenshot")
+        .description("Capture the device screen into a run (or --out path)")
+        .option("--out <path>", "write to an explicit path instead of a run")
+        .option("--run <slug>", "run slug (default: android)"),
     ),
   ).action(async (opts) => {
     process.exitCode = await runAndroidScreenshot(opts);

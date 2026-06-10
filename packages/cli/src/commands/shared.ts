@@ -74,11 +74,12 @@ export async function runReported(
 
 export async function resolveSessionRecord(
   type: RunnableSessionType,
-  id: string | undefined,
+  opts: { session?: string; projectDir?: string },
   env: EnvLike = process.env,
 ): Promise<SessionRecord> {
-  return resolveRunnableSession(type, id, {
+  return resolveRunnableSession(type, opts.session, {
     env,
+    projectDir: resolveProjectDir(opts),
     consumerLabel: "command",
     createHint: `create one with: picklab session create --type ${type}`,
     selectHint: "pick one with --session <id>",
