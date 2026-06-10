@@ -419,10 +419,21 @@ export function buildProgram(): Command {
     .command("agents")
     .description("Register the PickLab MCP server with coding agents");
 
+  const collectConfigPath = (value: string, previous: string[]): string[] => [
+    ...previous,
+    value,
+  ];
+
   withJson(
     agents
       .command("list")
-      .description("List known agents and their registration status"),
+      .description("List known agents and their registration status")
+      .option(
+        "--config-path <agent>=<path>",
+        "agent config file override, repeatable (e.g. cursor=/tmp/mcp.json)",
+        collectConfigPath,
+        [] as string[],
+      ),
   ).action(async (opts) => {
     process.exitCode = await runAgentsList(opts);
   });
@@ -463,6 +474,12 @@ export function buildProgram(): Command {
       .command("doctor")
       .description(
         "Check agent registrations for broken symlinks and stale config",
+      )
+      .option(
+        "--config-path <agent>=<path>",
+        "agent config file override, repeatable (e.g. cursor=/tmp/mcp.json)",
+        collectConfigPath,
+        [] as string[],
       ),
   ).action(async (opts) => {
     process.exitCode = await runAgentsDoctorCommand(opts);
@@ -476,7 +493,8 @@ export function buildProgram(): Command {
       .requiredOption(
         "--mcp-command <command>",
         'MCP server command, split on whitespace (e.g. "picklab mcp serve")',
-      ),
+      )
+      .option("--force", "overwrite an existing custom agent with the same name"),
   ).action(async (opts) => {
     process.exitCode = await runAgentsAdd(opts);
   });

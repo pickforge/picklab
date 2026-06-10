@@ -6,10 +6,12 @@ import {
   backupFile,
   linkCodex,
   linkCursor,
+  recordAgentState,
   removeMcpServerFromJsonFile,
   runAgentsDoctor,
   TOML_MARKER_BEGIN,
   TOML_MARKER_END,
+  unlinkCursor,
   type AgentsDoctorCheck,
 } from "../src/index.js";
 
@@ -96,16 +98,58 @@ describe("runAgentsDoctor", () => {
     expect(codexCheck.detail).toContain("stale");
   });
 
-  it("flags previously linked configs that lost the picklab entry", async () => {
+  it("warns (not problem) when backups exist without picklab state tracking", async () => {
     const configPath = path.join(home, ".cursor", "mcp.json");
     await linkCursor(configPath);
+    await removeMcpServerFromJsonFile(configPath);
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(true);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("warn");
+    expect(cursorCheck.detail).toContain("backup");
+  });
+
+  it("flags configs recorded as linked that lost the picklab entry", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    await linkCursor(configPath);
+    await recordAgentState("cursor", { registered: true, configPath }, env);
     await removeMcpServerFromJsonFile(configPath);
 
     const report = await runAgentsDoctor({ env });
     expect(report.ok).toBe(false);
     const cursorCheck = check(report.checks, "agent-cursor");
     expect(cursorCheck.status).toBe("problem");
-    expect(cursorCheck.detail).toContain("no longer contains");
+    expect(cursorCheck.detail).toContain("stale");
+  });
+
+  it("reports ok after a legitimate link/unlink cycle with a tombstone", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    await linkCursor(configPath);
+    await recordAgentState("cursor", { registered: true, configPath }, env);
+    await unlinkCursor(configPath);
+    await recordAgentState("cursor", { registered: false, configPath }, env);
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(true);
+    expect(
+      report.checks.filter((entry) => entry.status === "problem"),
+    ).toEqual([]);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("ok");
+    expect(cursorCheck.detail).toContain("unlinked by picklab");
+  });
+
+  it("warns when a JSON config exists but is not strict JSON", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, '{\n  // jsonc comment\n  "mcpServers": {},\n}\n');
+
+    const report = await runAgentsDoctor({ env });
+    expect(report.ok).toBe(true);
+    const cursorCheck = check(report.checks, "agent-cursor");
+    expect(cursorCheck.status).toBe("warn");
+    expect(cursorCheck.detail).toContain("not parseable as strict JSON");
   });
 
   it("warns about backup clutter", async () => {

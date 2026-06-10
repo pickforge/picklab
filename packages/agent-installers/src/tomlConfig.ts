@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import { writeFileAtomic } from "./atomicFile.js";
 import { backupFile } from "./backup.js";
 import { renderTomlSnippet } from "./snippet.js";
 import type { ChangeResult, McpServerEntry } from "./types.js";
@@ -7,7 +7,26 @@ import type { ChangeResult, McpServerEntry } from "./types.js";
 export const TOML_MARKER_BEGIN = "# >>> picklab >>>";
 export const TOML_MARKER_END = "# <<< picklab <<<";
 
-const SECTION_PATTERN = /^[ \t]*\[mcp_servers\.(?:picklab|"picklab")\][ \t]*$/m;
+const SECTION_PATTERN =
+  /^[ \t]*\[mcp_servers\.(?:picklab|"picklab")(?:\.[^\]\r\n]*)?\][ \t]*\r?$/m;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+interface MarkerLine {
+  start: number;
+  end: number;
+}
+
+function findMarkerLine(content: string, marker: string): MarkerLine | undefined {
+  const pattern = new RegExp(`^${escapeRegExp(marker)}[ \\t]*\\r?$`, "m");
+  const match = pattern.exec(content);
+  if (match === null) {
+    return undefined;
+  }
+  return { start: match.index, end: match.index + match[0].length };
+}
 
 async function readTextIfExists(filePath: string): Promise<string | undefined> {
   try {
@@ -32,24 +51,24 @@ interface MarkerSplit {
 }
 
 function splitMarkers(content: string, filePath: string): MarkerSplit {
-  const begin = content.indexOf(TOML_MARKER_BEGIN);
-  const end = content.indexOf(TOML_MARKER_END);
-  if (begin === -1 && end === -1) {
+  const begin = findMarkerLine(content, TOML_MARKER_BEGIN);
+  const end = findMarkerLine(content, TOML_MARKER_END);
+  if (begin === undefined && end === undefined) {
     return { before: content, block: undefined, after: "" };
   }
-  if (begin === -1 || end === -1 || end < begin) {
+  if (begin === undefined || end === undefined || end.start < begin.start) {
     throw new Error(
       `Refusing to edit ${filePath}: unbalanced picklab markers ` +
         `("${TOML_MARKER_BEGIN}" / "${TOML_MARKER_END}"). Fix the file and retry.`,
     );
   }
-  let blockEnd = end + TOML_MARKER_END.length;
+  let blockEnd = end.end;
   if (content[blockEnd] === "\n") {
     blockEnd += 1;
   }
   return {
-    before: content.slice(0, begin),
-    block: content.slice(begin, blockEnd),
+    before: content.slice(0, begin.start),
+    block: content.slice(begin.start, blockEnd),
     after: content.slice(blockEnd),
   };
 }
@@ -86,8 +105,7 @@ export async function upsertTomlMarkerBlock(
   }
   const backupPath =
     existing === undefined ? undefined : await backupFile(filePath);
-  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.promises.writeFile(filePath, next, "utf8");
+  await writeFileAtomic(filePath, next);
   return { configPath: filePath, changed: true, backupPath };
 }
 
@@ -103,11 +121,7 @@ export async function removeTomlMarkerBlock(
     return { configPath: filePath, changed: false };
   }
   const backupPath = await backupFile(filePath);
-  await fs.promises.writeFile(
-    filePath,
-    `${split.before}${split.after}`,
-    "utf8",
-  );
+  await writeFileAtomic(filePath, `${split.before}${split.after}`);
   return { configPath: filePath, changed: true, backupPath };
 }
 

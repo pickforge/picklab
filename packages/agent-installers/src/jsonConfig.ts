@@ -1,8 +1,12 @@
 import fs from "node:fs";
-import path from "node:path";
+import { writeFileAtomic } from "./atomicFile.js";
 import { backupFile } from "./backup.js";
 import { MCP_SERVER_NAME, mcpServerEntry } from "./snippet.js";
-import type { ChangeResult, McpServerEntry } from "./types.js";
+import type {
+  ChangeResult,
+  McpServerEntry,
+  RegistrationState,
+} from "./types.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -50,12 +54,7 @@ async function writeJsonObject(
   filePath: string,
   value: JsonObject,
 ): Promise<void> {
-  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.promises.writeFile(
-    filePath,
-    `${JSON.stringify(value, null, 2)}\n`,
-    "utf8",
-  );
+  await writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function entryMatches(current: unknown, entry: McpServerEntry): boolean {
@@ -114,21 +113,33 @@ export async function removeMcpServerFromJsonFile(
   const backupPath = await backupFile(filePath);
   const servers = { ...existing.mcpServers };
   delete servers[MCP_SERVER_NAME];
-  await writeJsonObject(filePath, { ...existing, mcpServers: servers });
+  const next: JsonObject = { ...existing };
+  if (Object.keys(servers).length === 0) {
+    delete next.mcpServers;
+  } else {
+    next.mcpServers = servers;
+  }
+  await writeJsonObject(filePath, next);
   return { configPath: filePath, changed: true, backupPath };
 }
 
-export async function jsonFileHasMcpServer(
+export async function jsonFileMcpServerState(
   filePath: string,
-): Promise<boolean> {
+): Promise<RegistrationState> {
   let config: JsonObject | undefined;
   try {
     config = await readJsonObject(filePath);
   } catch {
-    return false;
+    return "unknown";
   }
   if (config === undefined || !isPlainObject(config.mcpServers)) {
     return false;
   }
   return isPlainObject(config.mcpServers[MCP_SERVER_NAME]);
+}
+
+export async function jsonFileHasMcpServer(
+  filePath: string,
+): Promise<boolean> {
+  return (await jsonFileMcpServerState(filePath)) === true;
 }

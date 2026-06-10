@@ -6,7 +6,18 @@ export {
   type AgentStatus,
   type ChangeResult,
   type McpServerEntry,
+  type RegistrationState,
 } from "./types.js";
+
+export { writeFileAtomic } from "./atomicFile.js";
+
+export {
+  agentsStatePath,
+  readAgentsState,
+  recordAgentState,
+  type AgentsState,
+  type AgentStateEntry,
+} from "./state.js";
 
 export {
   MCP_SERVER_NAME,
@@ -22,6 +33,7 @@ export { backupFile, isBackupPath, BACKUP_PATTERN } from "./backup.js";
 
 export {
   jsonFileHasMcpServer,
+  jsonFileMcpServerState,
   mergeMcpServerIntoJsonFile,
   removeMcpServerFromJsonFile,
   type JsonMergeOptions,
@@ -54,6 +66,7 @@ export {
   CLAUDE_CODE_MANUAL_COMMAND,
   claudeCodeConfigPath,
   claudeCodeIsRegistered,
+  findClaudeBinary,
   linkClaudeCode,
   unlinkClaudeCode,
 } from "./agents/claude-code.js";

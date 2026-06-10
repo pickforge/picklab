@@ -5,9 +5,11 @@ import {
   AGENT_KINDS,
   builtinAgent,
   listCustomAgents,
+  recordAgentState,
   removeCustomAgent,
   runAgentsDoctor,
   writeSharedSnippets,
+  type AgentKind,
   type AgentStatus,
   type ChangeResult,
 } from "@pickforge/picklab-agent-installers";
@@ -21,9 +23,38 @@ export interface AgentsTargetOptions extends AgentsCliOptions {
   configPath?: string;
 }
 
+export interface AgentsInspectOptions extends AgentsCliOptions {
+  configPath?: string[];
+}
+
 export interface AgentsAddOptions extends AgentsCliOptions {
   name?: string;
   mcpCommand?: string;
+  force?: boolean;
+}
+
+function parseConfigPathOverrides(
+  values: string[] | undefined,
+): Partial<Record<AgentKind, string>> {
+  const overrides: Partial<Record<AgentKind, string>> = {};
+  for (const value of values ?? []) {
+    const separator = value.indexOf("=");
+    const agent = separator === -1 ? "" : value.slice(0, separator);
+    const configPath = separator === -1 ? "" : value.slice(separator + 1);
+    if (agent === "" || configPath === "") {
+      throw new Error(
+        `Invalid --config-path "${value}": expected <agent>=<path>`,
+      );
+    }
+    if (!AGENT_KINDS.includes(agent as AgentKind)) {
+      throw new Error(
+        `Invalid --config-path agent "${agent}" ` +
+          `(expected one of: ${AGENT_KINDS.join(", ")})`,
+      );
+    }
+    overrides[agent as AgentKind] = configPath;
+  }
+  return overrides;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -35,12 +66,15 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function collectStatuses(env: EnvLike): Promise<AgentStatus[]> {
+async function collectStatuses(
+  env: EnvLike,
+  overrides: Partial<Record<AgentKind, string>>,
+): Promise<AgentStatus[]> {
   const statuses: AgentStatus[] = [];
   for (const kind of AGENT_KINDS) {
     const agent = builtinAgent(kind);
     if (agent === undefined) continue;
-    const configPath = agent.defaultConfigPath(env);
+    const configPath = overrides[kind] ?? agent.defaultConfigPath(env);
     statuses.push({
       name: kind,
       kind,
@@ -61,18 +95,26 @@ async function collectStatuses(env: EnvLike): Promise<AgentStatus[]> {
   return statuses;
 }
 
+function registrationLabel(registered: AgentStatus["registered"]): string {
+  if (registered === "unknown") {
+    return "unknown (config exists but is not parseable as strict JSON)";
+  }
+  return registered ? "registered" : "not registered";
+}
+
 export async function runAgentsList(
-  opts: AgentsCliOptions,
+  opts: AgentsInspectOptions,
   env: EnvLike = process.env,
 ): Promise<number> {
   return runReported(opts, async () => {
-    const agents = await collectStatuses(env);
+    const overrides = parseConfigPathOverrides(opts.configPath);
+    const agents = await collectStatuses(env, overrides);
     return {
       data: { agents },
       lines: agents.map(
         (agent) =>
           `${agent.name}  ${agent.kind === "custom" ? "custom" : "builtin"}  ` +
-          `${agent.registered ? "registered" : "not registered"}  ${agent.configPath}`,
+          `${registrationLabel(agent.registered)}  ${agent.configPath}`,
       ),
     };
   });
@@ -111,6 +153,9 @@ function changeLines(
   if (result.backupPath !== undefined) {
     lines.push(`Backed up the previous config to ${result.backupPath}`);
   }
+  if (result.warning !== undefined) {
+    lines.push(`warning: ${result.warning}`);
+  }
   return lines;
 }
 
@@ -136,8 +181,11 @@ export async function runAgentsLink(
     }
     const snippets = await writeSharedSnippets(env);
     const configPath = opts.configPath ?? agent.defaultConfigPath(env);
-    const result = await agent.link(configPath);
+    const result = await agent.link(configPath, env);
     const registered = await agent.isRegistered(configPath);
+    if (result.instructions === undefined) {
+      await recordAgentState(name, { registered: true, configPath }, env);
+    }
     return {
       data: {
         agent: name,
@@ -146,6 +194,7 @@ export async function runAgentsLink(
         changed: result.changed,
         backupPath: result.backupPath ?? null,
         instructions: result.instructions ?? null,
+        warning: result.warning ?? null,
         snippets,
       },
       lines: changeLines(name, result, "registered"),
@@ -176,13 +225,15 @@ export async function runAgentsUnlink(
       return unknownAgentError(name, env);
     }
     const configPath = opts.configPath ?? agent.defaultConfigPath(env);
-    const result = await agent.unlink(configPath);
+    const result = await agent.unlink(configPath, env);
+    await recordAgentState(name, { registered: false, configPath }, env);
     return {
       data: {
         agent: name,
         configPath,
         changed: result.changed,
         backupPath: result.backupPath ?? null,
+        warning: result.warning ?? null,
       },
       lines: changeLines(name, result, "removed"),
     };
@@ -190,11 +241,12 @@ export async function runAgentsUnlink(
 }
 
 export async function runAgentsDoctorCommand(
-  opts: AgentsCliOptions,
+  opts: AgentsInspectOptions,
   env: EnvLike = process.env,
 ): Promise<number> {
   return runReported(opts, async () => {
-    const report = await runAgentsDoctor({ env });
+    const configPaths = parseConfigPathOverrides(opts.configPath);
+    const report = await runAgentsDoctor({ env, configPaths });
     const errors = report.checks
       .filter((check) => check.status === "problem")
       .map((check) => `${check.id}: ${check.detail}`);
@@ -220,7 +272,7 @@ export async function runAgentsAdd(
       return { errors: ["--mcp-command is required"] };
     }
     const agent = await addCustomAgent(
-      { name: opts.name, mcpCommand: opts.mcpCommand },
+      { name: opts.name, mcpCommand: opts.mcpCommand, force: opts.force },
       env,
     );
     const snippets = await writeSharedSnippets(env);

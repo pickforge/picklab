@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   jsonFileHasMcpServer,
+  jsonFileMcpServerState,
   mergeMcpServerIntoJsonFile,
   removeMcpServerFromJsonFile,
 } from "../src/index.js";
@@ -26,6 +27,10 @@ function readJson(filePath: string): Record<string, any> {
 
 function backupsIn(dir: string): string[] {
   return fs.readdirSync(dir).filter((entry) => entry.includes("picklab-backup"));
+}
+
+function tmpLeftoversIn(dir: string): string[] {
+  return fs.readdirSync(dir).filter((entry) => entry.includes(".tmp-"));
 }
 
 describe("mergeMcpServerIntoJsonFile", () => {
@@ -124,17 +129,50 @@ describe("removeMcpServerFromJsonFile", () => {
     expect((await removeMcpServerFromJsonFile(file)).changed).toBe(false);
     expect(backupsIn(tmpDir)).toEqual([]);
   });
+
+  it("drops the mcpServers key when the last entry is removed", async () => {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        theme: "dark",
+        mcpServers: { picklab: { command: "picklab", args: ["mcp", "serve"] } },
+      }),
+    );
+    const result = await removeMcpServerFromJsonFile(file);
+    expect(result.changed).toBe(true);
+    expect(readJson(file)).toEqual({ theme: "dark" });
+  });
 });
 
-describe("jsonFileHasMcpServer", () => {
+describe("atomic writes", () => {
+  it("leaves no temp files behind after merge and remove", async () => {
+    await mergeMcpServerIntoJsonFile(file, { createIfMissing: true });
+    expect(tmpLeftoversIn(tmpDir)).toEqual([]);
+    await removeMcpServerFromJsonFile(file);
+    expect(tmpLeftoversIn(tmpDir)).toEqual([]);
+  });
+});
+
+describe("jsonFileHasMcpServer / jsonFileMcpServerState", () => {
   it("detects the picklab entry", async () => {
     expect(await jsonFileHasMcpServer(file)).toBe(false);
+    expect(await jsonFileMcpServerState(file)).toBe(false);
     await mergeMcpServerIntoJsonFile(file, { createIfMissing: true });
     expect(await jsonFileHasMcpServer(file)).toBe(true);
+    expect(await jsonFileMcpServerState(file)).toBe(true);
   });
 
-  it("returns false for unparseable files", async () => {
+  it("reports unparseable files as unknown instead of unregistered", async () => {
     fs.writeFileSync(file, "nope");
     expect(await jsonFileHasMcpServer(file)).toBe(false);
+    expect(await jsonFileMcpServerState(file)).toBe("unknown");
+  });
+
+  it("reports JSONC-style configs as unknown", async () => {
+    fs.writeFileSync(
+      file,
+      '{\n  // cursor accepts comments here\n  "mcpServers": {},\n}\n',
+    );
+    expect(await jsonFileMcpServerState(file)).toBe("unknown");
   });
 });

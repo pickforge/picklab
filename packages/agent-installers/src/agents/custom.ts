@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { agentsDir, ensureDir, type EnvLike } from "@pickforge/picklab-core";
+import { writeFileAtomic } from "../atomicFile.js";
 import {
   MCP_SERVER_NAME,
   renderJsonSnippet,
@@ -12,6 +13,7 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const RESERVED_NAMES = new Set<string>([
   ...AGENT_KINDS,
+  "state",
   ...SHARED_SNIPPET_BASENAMES.map((basename) =>
     basename.replace(/\.[^.]+$/, ""),
   ),
@@ -53,14 +55,29 @@ export function customAgentConfigPath(
 }
 
 export async function addCustomAgent(
-  opts: { name: string; mcpCommand: string },
+  opts: { name: string; mcpCommand: string; force?: boolean },
   env: EnvLike = process.env,
 ): Promise<CustomAgent> {
   const name = validateCustomAgentName(opts.name);
   const entry = parseMcpCommand(opts.mcpCommand);
   await ensureDir(agentsDir(env));
   const configPath = customAgentConfigPath(name, env);
-  await fs.promises.writeFile(configPath, renderJsonSnippet(entry), "utf8");
+  if (opts.force !== true) {
+    let exists = false;
+    try {
+      await fs.promises.access(configPath, fs.constants.F_OK);
+      exists = true;
+    } catch {
+      exists = false;
+    }
+    if (exists) {
+      throw new Error(
+        `Custom agent "${name}" already exists at ${configPath} ` +
+          `(re-run with --force to overwrite)`,
+      );
+    }
+  }
+  await writeFileAtomic(configPath, renderJsonSnippet(entry));
   return { name, configPath, entry };
 }
 

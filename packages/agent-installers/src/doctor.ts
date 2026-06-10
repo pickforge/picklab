@@ -3,9 +3,10 @@ import path from "node:path";
 import { agentsDir, type EnvLike } from "@pickforge/picklab-core";
 import { BUILTIN_AGENTS } from "./agents/builtin.js";
 import { isBackupPath } from "./backup.js";
-import { jsonFileHasMcpServer } from "./jsonConfig.js";
+import { jsonFileMcpServerState } from "./jsonConfig.js";
+import { readAgentsState, type AgentStateEntry } from "./state.js";
 import { inspectTomlFile } from "./tomlConfig.js";
-import type { AgentKind } from "./types.js";
+import type { AgentKind, RegistrationState } from "./types.js";
 
 export type AgentsDoctorStatus = "ok" | "warn" | "problem";
 
@@ -50,7 +51,16 @@ async function checkAgentsDir(
   const broken: string[] = [];
   for (const basename of entries.sort()) {
     const entryPath = path.join(dir, basename);
-    const stat = await fs.promises.lstat(entryPath);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.lstat(entryPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        continue;
+      }
+      throw error;
+    }
     if (!stat.isSymbolicLink()) {
       continue;
     }
@@ -98,6 +108,7 @@ async function checkBuiltinAgent(
   name: AgentKind,
   configPath: string,
   checks: AgentsDoctorCheck[],
+  stateEntry: AgentStateEntry | undefined,
 ): Promise<void> {
   const id = `agent-${name}`;
   const exists = await fileExists(configPath);
@@ -138,28 +149,40 @@ async function checkBuiltinAgent(
       configPath,
       inspection.markersHaveSection,
       backups,
+      stateEntry,
     );
     return;
   }
-  const registered = await jsonFileHasMcpServer(configPath);
-  pushRegistrationCheck(checks, id, configPath, registered, backups);
+  const registered = await jsonFileMcpServerState(configPath);
+  pushRegistrationCheck(checks, id, configPath, registered, backups, stateEntry);
 }
 
 function pushRegistrationCheck(
   checks: AgentsDoctorCheck[],
   id: string,
   configPath: string,
-  registered: boolean,
+  registered: RegistrationState,
   backups: number,
+  stateEntry: AgentStateEntry | undefined,
 ): void {
-  if (!registered && backups > 0) {
+  if (registered === "unknown") {
+    checks.push({
+      id,
+      status: "warn",
+      detail:
+        `${configPath} exists but is not parseable as strict JSON ` +
+        `(JSONC comments or trailing commas?); cannot tell whether picklab ` +
+        `is registered`,
+    });
+    return;
+  }
+  if (!registered && stateEntry?.registered === true) {
     checks.push({
       id,
       status: "problem",
       detail:
-        `stale: ${configPath} was modified by PickLab before ` +
-        `(${backups} backup(s) found) but no longer contains the picklab ` +
-        `entry (re-run: picklab agents link)`,
+        `stale: PickLab linked ${configPath} but the picklab entry is gone ` +
+        `(re-run: picklab agents link)`,
     });
     return;
   }
@@ -171,12 +194,25 @@ function pushRegistrationCheck(
     });
     return;
   }
+  if (!registered && stateEntry === undefined && backups > 0) {
+    checks.push({
+      id,
+      status: "warn",
+      detail:
+        `${configPath} has ${backups} picklab backup(s) but no picklab ` +
+        `entry; it may have been edited outside PickLab ` +
+        `(re-link with: picklab agents link)`,
+    });
+    return;
+  }
   checks.push({
     id,
     status: "ok",
     detail: registered
       ? `registered in ${configPath}`
-      : `not registered in ${configPath}`,
+      : stateEntry?.registered === false
+        ? `not registered in ${configPath} (unlinked by picklab)`
+        : `not registered in ${configPath}`,
   });
 }
 
@@ -212,10 +248,16 @@ export async function runAgentsDoctor(
   const env = opts.env ?? process.env;
   const checks: AgentsDoctorCheck[] = [];
   await checkAgentsDir(env, checks);
+  const state = await readAgentsState(env);
   for (const agent of Object.values(BUILTIN_AGENTS)) {
     const configPath =
       opts.configPaths?.[agent.name] ?? agent.defaultConfigPath(env);
-    await checkBuiltinAgent(agent.name, configPath, checks);
+    await checkBuiltinAgent(
+      agent.name,
+      configPath,
+      checks,
+      state.agents[agent.name],
+    );
   }
   checkPicklabOnPath(env, checks);
   return {

@@ -1,5 +1,5 @@
 import type { EnvLike } from "@pickforge/picklab-core";
-import type { AgentKind, ChangeResult } from "../types.js";
+import type { AgentKind, ChangeResult, RegistrationState } from "../types.js";
 import {
   claudeCodeConfigPath,
   claudeCodeIsRegistered,
@@ -22,9 +22,9 @@ import {
 export interface BuiltinAgent {
   name: AgentKind;
   defaultConfigPath(env: EnvLike): string;
-  isRegistered(configPath: string): Promise<boolean>;
-  link(configPath: string): Promise<ChangeResult>;
-  unlink(configPath: string): Promise<ChangeResult>;
+  isRegistered(configPath: string): Promise<RegistrationState>;
+  link(configPath: string, env?: EnvLike): Promise<ChangeResult>;
+  unlink(configPath: string, env?: EnvLike): Promise<ChangeResult>;
 }
 
 export const BUILTIN_AGENTS: Record<AgentKind, BuiltinAgent> = {

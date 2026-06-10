@@ -6,6 +6,7 @@ import {
   addCustomAgent,
   listCustomAgents,
   parseMcpCommand,
+  recordAgentState,
   removeCustomAgent,
   writeSharedSnippets,
 } from "../src/index.js";
@@ -68,6 +69,15 @@ describe("addCustomAgent / listCustomAgents / removeCustomAgent", () => {
     expect(await listCustomAgents(env)).toEqual([]);
   });
 
+  it("does not list the agents state file as a custom agent", async () => {
+    await recordAgentState(
+      "cursor",
+      { registered: true, configPath: "/tmp/mcp.json" },
+      env,
+    );
+    expect(await listCustomAgents(env)).toEqual([]);
+  });
+
   it("rejects invalid and reserved names", async () => {
     await expect(
       addCustomAgent({ name: "../evil", mcpCommand: "x" }, env),
@@ -75,11 +85,34 @@ describe("addCustomAgent / listCustomAgents / removeCustomAgent", () => {
     await expect(
       addCustomAgent({ name: "has space", mcpCommand: "x" }, env),
     ).rejects.toThrow("Invalid agent name");
-    for (const reserved of ["codex", "claude-code", "cursor", "picklab-mcp"]) {
+    for (const reserved of [
+      "codex",
+      "claude-code",
+      "cursor",
+      "picklab-mcp",
+      "state",
+    ]) {
       await expect(
         addCustomAgent({ name: reserved, mcpCommand: "x" }, env),
       ).rejects.toThrow("reserved");
     }
+  });
+
+  it("refuses to overwrite an existing custom agent without force", async () => {
+    await addCustomAgent({ name: "dup", mcpCommand: "one serve" }, env);
+    await expect(
+      addCustomAgent({ name: "dup", mcpCommand: "two serve" }, env),
+    ).rejects.toThrow("already exists");
+    const [agent] = await listCustomAgents(env);
+    expect(agent?.entry).toEqual({ command: "one", args: ["serve"] });
+
+    const overwritten = await addCustomAgent(
+      { name: "dup", mcpCommand: "two serve", force: true },
+      env,
+    );
+    expect(overwritten.entry).toEqual({ command: "two", args: ["serve"] });
+    const [after] = await listCustomAgents(env);
+    expect(after?.entry).toEqual({ command: "two", args: ["serve"] });
   });
 
   it("removes a custom agent", async () => {

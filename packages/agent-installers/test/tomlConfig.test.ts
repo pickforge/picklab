@@ -135,6 +135,30 @@ describe("inspectTomlFile / tomlFileHasMcpServer", () => {
     expect(await tomlFileHasMcpServer(file)).toBe(true);
   });
 
+  it("detects foreign sections with CRLF line endings", async () => {
+    fs.writeFileSync(file, '[mcp_servers.picklab]\r\ncommand = "x"\r\n');
+    const inspection = await inspectTomlFile(file);
+    expect(inspection.foreignSection).toBe(true);
+    await expect(upsertTomlMarkerBlock(file)).rejects.toThrow(
+      "outside the picklab markers",
+    );
+  });
+
+  it("detects [mcp_servers.picklab.<sub>] subtables as foreign sections", async () => {
+    fs.writeFileSync(file, '[mcp_servers.picklab.env]\nFOO = "bar"\n');
+    const inspection = await inspectTomlFile(file);
+    expect(inspection.foreignSection).toBe(true);
+    await expect(upsertTomlMarkerBlock(file)).rejects.toThrow(
+      "outside the picklab markers",
+    );
+  });
+
+  it("does not treat other mcp_servers sections as picklab sections", async () => {
+    fs.writeFileSync(file, '[mcp_servers.picklabber]\ncommand = "x"\n');
+    const inspection = await inspectTomlFile(file);
+    expect(inspection.foreignSection).toBe(false);
+  });
+
   it("reports a missing file", async () => {
     expect(await inspectTomlFile(file)).toEqual({
       exists: false,
@@ -142,5 +166,32 @@ describe("inspectTomlFile / tomlFileHasMcpServer", () => {
       markersHaveSection: false,
       foreignSection: false,
     });
+  });
+});
+
+describe("marker scanning", () => {
+  it("ignores marker text embedded in string values", async () => {
+    const content =
+      `note = "${TOML_MARKER_BEGIN} not a marker ${TOML_MARKER_END}"\n`;
+    fs.writeFileSync(file, content);
+    expect((await removeTomlMarkerBlock(file)).changed).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(content);
+
+    const result = await upsertTomlMarkerBlock(file);
+    expect(result.changed).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toBe(
+      `${content}\n${EXPECTED_BLOCK}`,
+    );
+  });
+});
+
+describe("atomic writes", () => {
+  it("leaves no temp files behind after upsert and remove", async () => {
+    const tmpLeftovers = (): string[] =>
+      fs.readdirSync(tmpDir).filter((entry) => entry.includes(".tmp-"));
+    await upsertTomlMarkerBlock(file);
+    expect(tmpLeftovers()).toEqual([]);
+    await removeTomlMarkerBlock(file);
+    expect(tmpLeftovers()).toEqual([]);
   });
 });

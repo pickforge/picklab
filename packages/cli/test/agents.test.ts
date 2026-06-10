@@ -62,7 +62,7 @@ beforeEach(() => {
   env = {
     HOME: home,
     PICKLAB_HOME: path.join(home, ".picklab"),
-    PATH: "/usr/bin:/bin",
+    PATH: path.join(tmpDir, "empty-bin"),
   };
 });
 
@@ -103,6 +103,41 @@ describe("picklab agents list", () => {
       expect(agent.registered).toBe(false);
       expect(agent.configExists).toBe(false);
     }
+  });
+
+  it("honors repeatable --config-path overrides", async () => {
+    const configPath = path.join(tmpDir, "elsewhere.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: { picklab: { command: "picklab", args: ["mcp", "serve"] } },
+      }),
+    );
+    const result = await runCli(
+      ["agents", "list", "--config-path", `cursor=${configPath}`, "--json"],
+      env,
+    );
+    expect(result.code).toBe(0);
+    const cursor = parseJson(result).agents.find(
+      (agent: any) => agent.name === "cursor",
+    );
+    expect(cursor.configPath).toBe(configPath);
+    expect(cursor.registered).toBe(true);
+  });
+
+  it("reports JSONC configs as unknown instead of not registered", async () => {
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      '{\n  // jsonc comment\n  "mcpServers": {},\n}\n',
+    );
+    const result = await runCli(["agents", "list", "--json"], env);
+    expect(result.code).toBe(0);
+    const cursor = parseJson(result).agents.find(
+      (agent: any) => agent.name === "cursor",
+    );
+    expect(cursor.registered).toBe("unknown");
   });
 });
 
@@ -171,7 +206,7 @@ describe("picklab agents link cursor", () => {
     expect(unlinked.code).toBe(0);
     expect(parseJson(unlinked).changed).toBe(true);
     expect(
-      JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers.picklab,
+      JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers,
     ).toBeUndefined();
   });
 });
@@ -221,7 +256,7 @@ describe("picklab agents link codex", () => {
   });
 });
 
-describe("picklab agents link claude-code", () => {
+describe("picklab agents link claude-code (claude binary absent)", () => {
   it("instructs instead of creating a missing ~/.claude.json", async () => {
     const result = await runCli(["agents", "link", "claude-code", "--json"], env);
     expect(result.code).toBe(0);
@@ -234,12 +269,14 @@ describe("picklab agents link claude-code", () => {
     expect(fs.existsSync(path.join(home, ".claude.json"))).toBe(false);
   });
 
-  it("registers into an existing ~/.claude.json", async () => {
+  it("registers into an existing ~/.claude.json with a warning", async () => {
     const configPath = path.join(home, ".claude.json");
     fs.writeFileSync(configPath, JSON.stringify({ numStartups: 1 }));
     const result = await runCli(["agents", "link", "claude-code", "--json"], env);
     expect(result.code).toBe(0);
-    expect(parseJson(result).registered).toBe(true);
+    const report = parseJson(result);
+    expect(report.registered).toBe(true);
+    expect(report.warning).toContain("close Claude Code");
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(config.numStartups).toBe(1);
     expect(config.mcpServers.picklab).toEqual({
@@ -247,6 +284,70 @@ describe("picklab agents link claude-code", () => {
       args: ["mcp", "serve"],
     });
     expect(backupsIn(home)).toHaveLength(1);
+  });
+});
+
+describe("picklab agents link claude-code (claude binary on PATH)", () => {
+  function installFakeClaude(): { binDir: string; argsFile: string } {
+    const binDir = path.join(tmpDir, "fake-bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const claude = path.join(binDir, "claude");
+    fs.writeFileSync(
+      claude,
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\n',
+    );
+    fs.chmodSync(claude, 0o755);
+    return { binDir, argsFile: path.join(tmpDir, "claude-args.txt") };
+  }
+
+  function recordedArgs(argsFile: string): string[] {
+    return fs
+      .readFileSync(argsFile, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
+  }
+
+  it("prefers claude mcp add over editing ~/.claude.json", async () => {
+    const { binDir, argsFile } = installFakeClaude();
+    const cliEnv = { ...env, PATH: binDir, CLAUDE_ARGS_FILE: argsFile };
+    const result = await runCli(
+      ["agents", "link", "claude-code", "--json"],
+      cliEnv,
+    );
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    expect(report.changed).toBe(true);
+    expect(recordedArgs(argsFile)).toEqual([
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab",
+      "--",
+      "picklab",
+      "mcp",
+      "serve",
+    ]);
+    expect(fs.existsSync(path.join(home, ".claude.json"))).toBe(false);
+  });
+
+  it("prefers claude mcp remove on unlink", async () => {
+    const { binDir, argsFile } = installFakeClaude();
+    const cliEnv = { ...env, PATH: binDir, CLAUDE_ARGS_FILE: argsFile };
+    const result = await runCli(
+      ["agents", "unlink", "claude-code", "--json"],
+      cliEnv,
+    );
+    expect(result.code).toBe(0);
+    expect(parseJson(result).changed).toBe(true);
+    expect(recordedArgs(argsFile)).toEqual([
+      "mcp",
+      "remove",
+      "--scope",
+      "user",
+      "picklab",
+    ]);
   });
 });
 
@@ -304,6 +405,30 @@ describe("picklab agents add / unlink (custom)", () => {
     }
   });
 
+  it("refuses to overwrite an existing custom agent without --force", async () => {
+    const add = (extra: string[]): Promise<CliResult> =>
+      runCli(
+        [
+          "agents",
+          "add",
+          "--name",
+          "dup",
+          "--mcp-command",
+          "one serve",
+          "--json",
+          ...extra,
+        ],
+        env,
+      );
+    expect((await add([])).code).toBe(0);
+    const duplicate = await add([]);
+    expect(duplicate.code).toBe(1);
+    expect(parseJson(duplicate).errors.join("\n")).toContain("already exists");
+    const forced = await add(["--force"]);
+    expect(forced.code).toBe(0);
+    expect(parseJson(forced).ok).toBe(true);
+  });
+
   it("rejects an empty --mcp-command", async () => {
     const result = await runCli(
       ["agents", "add", "--name", "blank", "--mcp-command", "   ", "--json"],
@@ -339,6 +464,50 @@ describe("picklab agents doctor", () => {
     const report = parseJson(result);
     expect(report.ok).toBe(false);
     expect(report.errors.join("\n")).toContain("stale");
+  });
+
+  it("exits 0 with no problem entries after link then unlink", async () => {
+    expect((await runCli(["agents", "link", "cursor", "--json"], env)).code).toBe(0);
+    expect(
+      (await runCli(["agents", "unlink", "cursor", "--json"], env)).code,
+    ).toBe(0);
+    expect(
+      backupsIn(path.join(home, ".cursor")).length,
+    ).toBeGreaterThanOrEqual(1);
+
+    const result = await runCli(["agents", "doctor", "--json"], env);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    expect(
+      report.checks.filter((check: any) => check.status === "problem"),
+    ).toEqual([]);
+  });
+
+  it("inspects nonstandard config paths via --config-path", async () => {
+    const configPath = path.join(tmpDir, "custom-codex.toml");
+    fs.writeFileSync(configPath, "# >>> picklab >>>\n# <<< picklab <<<\n");
+
+    const clean = await runCli(["agents", "doctor", "--json"], env);
+    expect(clean.code).toBe(0);
+
+    const overridden = await runCli(
+      ["agents", "doctor", "--config-path", `codex=${configPath}`, "--json"],
+      env,
+    );
+    expect(overridden.code).toBe(1);
+    expect(parseJson(overridden).errors.join("\n")).toContain("stale");
+  });
+
+  it("rejects malformed --config-path overrides", async () => {
+    const result = await runCli(
+      ["agents", "doctor", "--config-path", "nope", "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain(
+      "expected <agent>=<path>",
+    );
   });
 
   it("reports broken symlinks under the agents dir", async () => {

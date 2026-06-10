@@ -16,12 +16,15 @@ export interface ChangeResult {
   changed: boolean;
   backupPath?: string;
   instructions?: string;
+  warning?: string;
 }
+
+export type RegistrationState = boolean | "unknown";
 
 export interface AgentStatus {
   name: string;
   kind: AgentKind | "custom";
   configPath: string;
   configExists: boolean;
-  registered: boolean;
+  registered: RegistrationState;
 }
