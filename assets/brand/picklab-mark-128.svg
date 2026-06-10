@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="PickLab mark">
+  <title>PickLab mark</title>
+  <rect width="128" height="128" rx="24" fill="#0A0A0B"/>
+
+  <g stroke="#F2F2F3" stroke-width="3" stroke-linecap="square" fill="none">
+    <path d="M30 48 V32 H46"/>
+    <path d="M30 80 V96 H46"/>
+    <path d="M82 96 H98 V80"/>
+    <path d="M82 32 H98 V48"/>
+  </g>
+  <rect x="48" y="50" width="32" height="28" rx="3" stroke="#F2F2F3" stroke-width="2" opacity="0.55" fill="none"/>
+  <line x1="48" y1="58" x2="80" y2="58" stroke="#F2F2F3" stroke-width="1.5" opacity="0.3"/>
+  <circle cx="70" cy="68" r="6" fill="#FF7A1A"/>
+</svg>

@@ -1,0 +1,253 @@
+import { missingSdkMessage, sdkmanagerInstallCommand } from "@pickforge/picklab-android";
+import type { PicklabProfile } from "@pickforge/picklab-core";
+import type { DetectionSnapshot } from "./detect.js";
+import { RECOMMENDED_SYSTEM_IMAGE } from "./planner.js";
+
+export type CheckStatus = "ok" | "warn" | "missing";
+
+export interface DoctorCheck {
+  id: string;
+  title: string;
+  status: CheckStatus;
+  detail: string;
+  hint?: string;
+}
+
+const BASE_CHECKS = ["picklab-home", "config"] as const;
+
+const DESKTOP_CHECKS = [
+  "xvfb",
+  "xdotool",
+  "screenshot-tool",
+  "lab-user",
+] as const;
+
+const ANDROID_CHECKS = [
+  "android-sdk",
+  "sdkmanager",
+  "avdmanager",
+  "emulator",
+  "adb",
+  "system-image",
+  "avd",
+] as const;
+
+export const PROFILE_REQUIRED_CHECKS: Record<
+  PicklabProfile,
+  readonly string[]
+> = {
+  generic: [...BASE_CHECKS],
+  "flutter-desktop": [...BASE_CHECKS, ...DESKTOP_CHECKS],
+  android: [...BASE_CHECKS, ...ANDROID_CHECKS],
+  "desktop+android": [...BASE_CHECKS, ...DESKTOP_CHECKS, ...ANDROID_CHECKS],
+};
+
+export function requiredChecksForProfile(
+  profile: PicklabProfile,
+): readonly string[] {
+  return PROFILE_REQUIRED_CHECKS[profile];
+}
+
+function pathCheck(
+  id: string,
+  title: string,
+  found: string | null,
+  hint: string,
+  missingStatus: CheckStatus = "missing",
+): DoctorCheck {
+  if (found !== null) {
+    return { id, title, status: "ok", detail: found };
+  }
+  return { id, title, status: missingStatus, detail: "not found", hint };
+}
+
+export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+
+  if (!s.picklabHome.exists) {
+    checks.push({
+      id: "picklab-home",
+      title: "PickLab home",
+      status: "missing",
+      detail: `${s.picklabHome.path} does not exist`,
+      hint: "run `picklab doctor --fix` or `picklab init` to create it",
+    });
+  } else if (!s.picklabHome.writable) {
+    checks.push({
+      id: "picklab-home",
+      title: "PickLab home",
+      status: "missing",
+      detail: `${s.picklabHome.path} is not writable`,
+      hint: `fix ownership/permissions of ${s.picklabHome.path}`,
+    });
+  } else {
+    checks.push({
+      id: "picklab-home",
+      title: "PickLab home",
+      status: "ok",
+      detail: s.picklabHome.path,
+    });
+  }
+
+  if (s.config.ok) {
+    checks.push({
+      id: "config",
+      title: "PickLab config",
+      status: "ok",
+      detail:
+        s.config.profile === null
+          ? "readable (no profile set)"
+          : `readable (profile: ${s.config.profile})`,
+    });
+  } else {
+    checks.push({
+      id: "config",
+      title: "PickLab config",
+      status: "missing",
+      detail: s.config.error ?? "unreadable",
+      hint: "fix or remove the broken config file",
+    });
+  }
+
+  checks.push(
+    pathCheck(
+      "xvfb",
+      "Xvfb (headless X server)",
+      s.desktop.xvfb,
+      "install Xvfb (e.g. xorg-server-xvfb / xvfb package)",
+    ),
+    pathCheck(
+      "xdotool",
+      "xdotool (input synthesis)",
+      s.desktop.xdotool,
+      "install xdotool",
+    ),
+    pathCheck(
+      "screenshot-tool",
+      "Screenshot tool",
+      s.desktop.screenshotTool,
+      "install ImageMagick (provides `import`) or scrot",
+    ),
+    pathCheck(
+      "x11vnc",
+      "x11vnc (optional live view)",
+      s.desktop.x11vnc,
+      "optional: install x11vnc to watch lab sessions live",
+      "warn",
+    ),
+    pathCheck(
+      "android-sdk",
+      "Android SDK",
+      s.android.sdkRoot,
+      missingSdkMessage(),
+    ),
+    pathCheck(
+      "sdkmanager",
+      "sdkmanager",
+      s.android.tools.sdkmanager,
+      "install the Android command-line tools (cmdline-tools)",
+    ),
+    pathCheck(
+      "avdmanager",
+      "avdmanager",
+      s.android.tools.avdmanager,
+      "install the Android command-line tools (cmdline-tools)",
+    ),
+    pathCheck(
+      "emulator",
+      "Android emulator",
+      s.android.tools.emulator,
+      'install the emulator package: sdkmanager "emulator"',
+    ),
+    pathCheck(
+      "adb",
+      "adb",
+      s.android.tools.adb,
+      'install platform-tools: sdkmanager "platform-tools"',
+    ),
+  );
+
+  if (s.android.systemImages.length > 0) {
+    checks.push({
+      id: "system-image",
+      title: "Android system images",
+      status: "ok",
+      detail: `${s.android.systemImages.length} installed`,
+    });
+  } else {
+    checks.push({
+      id: "system-image",
+      title: "Android system images",
+      status: "missing",
+      detail: "no system images installed",
+      hint: `install one with: ${sdkmanagerInstallCommand(RECOMMENDED_SYSTEM_IMAGE)}`,
+    });
+  }
+
+  if (s.android.kvm.supported) {
+    checks.push({
+      id: "kvm",
+      title: "KVM hardware acceleration",
+      status: "ok",
+      detail: "/dev/kvm is accessible",
+    });
+  } else if (s.android.kvm.exists) {
+    checks.push({
+      id: "kvm",
+      title: "KVM hardware acceleration",
+      status: "warn",
+      detail: "/dev/kvm exists but is not accessible",
+      hint: "add your user to the kvm group, then log in again",
+    });
+  } else {
+    checks.push({
+      id: "kvm",
+      title: "KVM hardware acceleration",
+      status: "warn",
+      detail: "/dev/kvm not found",
+      hint: "without KVM the Android emulator will be very slow",
+    });
+  }
+
+  if (s.android.avdExists) {
+    checks.push({
+      id: "avd",
+      title: "Dedicated PickLab AVD",
+      status: "ok",
+      detail: s.android.avdName,
+    });
+  } else {
+    checks.push({
+      id: "avd",
+      title: "Dedicated PickLab AVD",
+      status: "missing",
+      detail: `AVD "${s.android.avdName}" not found`,
+      hint: `create it with: picklab setup android --create-avd --avd-name ${s.android.avdName}`,
+    });
+  }
+
+  if (s.labUser.exists) {
+    checks.push({
+      id: "lab-user",
+      title: "Dedicated lab user",
+      status: "ok",
+      detail: s.labUser.name,
+    });
+  } else {
+    checks.push({
+      id: "lab-user",
+      title: "Dedicated lab user",
+      status: "missing",
+      detail: `user "${s.labUser.name}" not found`,
+      hint: `create it with: picklab setup lab-user --name ${s.labUser.name}`,
+    });
+  }
+
+  return checks;
+}
+
+export function formatCheckLine(check: DoctorCheck): string {
+  const status = `[${check.status}]`.padEnd(10);
+  const line = `${status}${check.id.padEnd(18)}${check.detail}`;
+  return check.hint === undefined ? line : `${line}\n${" ".repeat(10)}hint: ${check.hint}`;
+}

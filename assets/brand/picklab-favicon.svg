@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="PickLab favicon">
+  <title>PickLab favicon</title>
+  <rect width="32" height="32" rx="6" fill="#0A0A0B"/>
+
+  <g stroke="#F2F2F3" stroke-width="1.5" stroke-linecap="square" fill="none">
+    <path d="M7.5 12 V8 H11.5"/>
+    <path d="M7.5 20 V24 H11.5"/>
+    <path d="M20.5 24 H24.5 V20"/>
+    <path d="M20.5 8 H24.5 V12"/>
+  </g>
+  <rect x="12" y="12.5" width="8" height="7" rx="1" stroke="#F2F2F3" stroke-width="1" opacity="0.6" fill="none"/>
+  <circle cx="17.5" cy="17" r="2.4" fill="#FF7A1A"/>
+</svg>

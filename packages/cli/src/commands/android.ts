@@ -1,0 +1,282 @@
+import path from "node:path";
+import {
+  back,
+  clearLogcat,
+  getUiTree,
+  home,
+  installApk,
+  launchApp,
+  logcat,
+  runAdb,
+  screenshot,
+  tap,
+  typeText,
+} from "@pickforge/picklab-android";
+import { redactSecrets } from "@pickforge/picklab-core";
+import fs from "node:fs";
+import {
+  captureToTarget,
+  parseIntArg,
+  resolveScreenshotTarget,
+  resolveSessionRecord,
+  runReported,
+  type BaseCliOptions,
+  type ScreenshotTargetOptions,
+} from "./shared.js";
+
+export interface AndroidTargetOptions extends BaseCliOptions {
+  session?: string;
+  serial?: string;
+}
+
+interface AndroidTarget {
+  serial: string;
+  sessionId?: string;
+}
+
+async function resolveAndroidTarget(
+  opts: AndroidTargetOptions,
+): Promise<AndroidTarget> {
+  if (opts.serial !== undefined && opts.session !== undefined) {
+    throw new Error("Pass either --session or --serial, not both");
+  }
+  if (opts.serial !== undefined) {
+    return { serial: opts.serial };
+  }
+  const record = await resolveSessionRecord("android", opts.session);
+  const serial = record.android?.serial;
+  if (serial === undefined) {
+    throw new Error(`Session ${record.id} has no device serial recorded`);
+  }
+  return { serial, sessionId: record.id };
+}
+
+function targetData(target: AndroidTarget): Record<string, unknown> {
+  const data: Record<string, unknown> = { serial: target.serial };
+  if (target.sessionId !== undefined) {
+    data.sessionId = target.sessionId;
+  }
+  return data;
+}
+
+export async function runAndroidInstallApk(
+  apk: string,
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    const apkPath = path.resolve(apk);
+    await installApk({ serial: target.serial, apkPath });
+    return {
+      data: { ...targetData(target), apkPath },
+      lines: [`installed ${apkPath} on ${target.serial}`],
+    };
+  });
+}
+
+export interface AndroidLaunchAppOptions extends AndroidTargetOptions {
+  activity?: string;
+}
+
+export async function runAndroidLaunchApp(
+  packageName: string,
+  opts: AndroidLaunchAppOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    await launchApp({
+      serial: target.serial,
+      packageName,
+      activity: opts.activity,
+    });
+    return {
+      data: { ...targetData(target), packageName },
+      lines: [`launched ${packageName} on ${target.serial}`],
+    };
+  });
+}
+
+export interface AndroidScreenshotOptions
+  extends AndroidTargetOptions,
+    ScreenshotTargetOptions {}
+
+export async function runAndroidScreenshot(
+  opts: AndroidScreenshotOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    const destination = await resolveScreenshotTarget(
+      opts,
+      "android",
+      target.sessionId,
+    );
+    const data = await captureToTarget(destination, async () => {
+      await screenshot({ serial: target.serial, outPath: destination.outPath });
+    });
+    Object.assign(data, targetData(target));
+    const lines = [`screenshot saved to ${destination.outPath}`];
+    if (data.runId !== undefined) {
+      lines.push(`run: ${data.runId}`);
+    }
+    return { data, lines };
+  });
+}
+
+export async function runAndroidTap(
+  x: string,
+  y: string,
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    const parsedX = parseIntArg(x, "x");
+    const parsedY = parseIntArg(y, "y");
+    await tap({ serial: target.serial, x: parsedX, y: parsedY });
+    return {
+      data: { ...targetData(target), x: parsedX, y: parsedY },
+      lines: [`tapped (${parsedX}, ${parsedY}) on ${target.serial}`],
+    };
+  });
+}
+
+export async function runAndroidType(
+  text: string,
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    await typeText({ serial: target.serial, text });
+    return {
+      data: { ...targetData(target), length: text.length },
+      lines: [`typed ${text.length} character(s) on ${target.serial}`],
+    };
+  });
+}
+
+export async function runAndroidBack(
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    await back({ serial: target.serial });
+    return {
+      data: targetData(target),
+      lines: [`pressed back on ${target.serial}`],
+    };
+  });
+}
+
+export async function runAndroidHome(
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    await home({ serial: target.serial });
+    return {
+      data: targetData(target),
+      lines: [`pressed home on ${target.serial}`],
+    };
+  });
+}
+
+export interface AndroidUiTreeOptions extends AndroidTargetOptions {
+  out?: string;
+}
+
+export async function runAndroidUiTree(
+  opts: AndroidUiTreeOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    const xml = await getUiTree({ serial: target.serial });
+    if (opts.out !== undefined) {
+      const outPath = path.resolve(opts.out);
+      await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
+      await fs.promises.writeFile(outPath, `${xml}\n`, "utf8");
+      return {
+        data: { ...targetData(target), path: outPath },
+        lines: [`ui tree saved to ${outPath}`],
+      };
+    }
+    return { data: { ...targetData(target), xml }, lines: [xml] };
+  });
+}
+
+export interface AndroidLogcatOptions extends AndroidTargetOptions {
+  lines?: string;
+  filter?: string;
+  clear?: boolean;
+}
+
+export async function runAndroidLogcat(
+  opts: AndroidLogcatOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const target = await resolveAndroidTarget(opts);
+    if (opts.clear === true) {
+      await clearLogcat({ serial: target.serial });
+      return {
+        data: { ...targetData(target), cleared: true },
+        lines: [`cleared logcat buffer on ${target.serial}`],
+      };
+    }
+    const output = redactSecrets(
+      await logcat({
+        serial: target.serial,
+        lines:
+          opts.lines === undefined
+            ? undefined
+            : parseIntArg(opts.lines, "--lines"),
+        filter: opts.filter,
+      }),
+    );
+    return {
+      data: { ...targetData(target), output },
+      lines: [output.replace(/\n$/, "")],
+    };
+  });
+}
+
+export async function runAndroidAdb(
+  args: string[],
+  opts: AndroidTargetOptions,
+): Promise<number> {
+  try {
+    let serial: string | undefined;
+    let sessionId: string | undefined;
+    if (opts.serial !== undefined || opts.session !== undefined) {
+      ({ serial, sessionId } = await resolveAndroidTarget(opts));
+    } else {
+      const implicit = await resolveAndroidTarget(opts).catch(() => undefined);
+      serial = implicit?.serial;
+      sessionId = implicit?.sessionId;
+    }
+    const result = await runAdb(
+      serial === undefined ? { args } : { serial, args },
+    );
+    if (opts.json === true) {
+      const report: Record<string, unknown> = {
+        ok: result.ok,
+        code: result.code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        errors: result.ok ? [] : [`adb exited with code ${result.code}`],
+      };
+      if (serial !== undefined) report.serial = serial;
+      if (sessionId !== undefined) report.sessionId = sessionId;
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      if (result.stdout !== "") process.stdout.write(result.stdout);
+      if (result.stderr !== "") process.stderr.write(result.stderr);
+    }
+    return result.ok ? 0 : (result.code ?? 1);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (opts.json === true) {
+      console.log(JSON.stringify({ ok: false, errors: [message] }, null, 2));
+    } else {
+      console.error(`error: ${message}`);
+    }
+    return 1;
+  }
+}

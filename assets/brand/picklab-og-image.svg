@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none" role="img" aria-label="PickLab social card">
+  <title>PickLab social card</title>
+  <defs>
+    <radialGradient id="glow" cx="52%" cy="54%" r="58%">
+      <stop offset="0%" stop-color="#FF7A1A" stop-opacity="0.34"/>
+      <stop offset="42%" stop-color="#FF7A1A" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#FF7A1A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="titleGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="70%" stop-color="#F2F2F3"/>
+      <stop offset="100%" stop-color="#9A9AA1"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0A0A0B"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <g stroke="#F2F2F3" stroke-opacity="0.05" stroke-width="0.6">
+    <line x1="0" y1="0" x2="0" y2="630" /><line x1="100" y1="0" x2="100" y2="630" /><line x1="200" y1="0" x2="200" y2="630" /><line x1="300" y1="0" x2="300" y2="630" /><line x1="400" y1="0" x2="400" y2="630" /><line x1="500" y1="0" x2="500" y2="630" /><line x1="600" y1="0" x2="600" y2="630" /><line x1="700" y1="0" x2="700" y2="630" /><line x1="800" y1="0" x2="800" y2="630" /><line x1="900" y1="0" x2="900" y2="630" /><line x1="1000" y1="0" x2="1000" y2="630" /><line x1="1100" y1="0" x2="1100" y2="630" /><line x1="1200" y1="0" x2="1200" y2="630" /><line x1="0" y1="0" x2="1200" y2="0" /><line x1="0" y1="100" x2="1200" y2="100" /><line x1="0" y1="200" x2="1200" y2="200" /><line x1="0" y1="300" x2="1200" y2="300" /><line x1="0" y1="400" x2="1200" y2="400" /><line x1="0" y1="500" x2="1200" y2="500" /><line x1="0" y1="600" x2="1200" y2="600" />
+  </g>
+  <g transform="translate(80 80) scale(0.625)">
+    <rect width="128" height="128" rx="24" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+
+  <g stroke="#F2F2F3" stroke-width="3" stroke-linecap="square" fill="none">
+    <path d="M30 48 V32 H46"/>
+    <path d="M30 80 V96 H46"/>
+    <path d="M82 96 H98 V80"/>
+    <path d="M82 32 H98 V48"/>
+  </g>
+  <rect x="48" y="50" width="32" height="28" rx="3" stroke="#F2F2F3" stroke-width="2" opacity="0.55" fill="none"/>
+  <line x1="48" y1="58" x2="80" y2="58" stroke="#F2F2F3" stroke-width="1.5" opacity="0.3"/>
+  <circle cx="70" cy="68" r="6" fill="#FF7A1A"/>
+  </g>
+  <text x="180" y="132" font-family="Geist, Inter, Arial, sans-serif" font-size="38" font-weight="750" fill="#F2F2F3" letter-spacing="-0.02em">PickLab</text>
+  <text x="80" y="310" font-family="Geist, Inter, Arial, sans-serif" font-size="72" font-weight="760" fill="url(#titleGradient)" letter-spacing="-0.025em">PickLab</text>
+  <text x="80" y="384" font-family="Geist, Inter, Arial, sans-serif" font-size="44" font-weight="700" fill="#F2F2F3" fill-opacity="0.88" letter-spacing="-0.02em">Playwright for native apps</text>
+  <text x="80" y="438" font-family="Geist, Inter, Arial, sans-serif" font-size="44" font-weight="700" fill="#F2F2F3" fill-opacity="0.88" letter-spacing="-0.02em">and Android emulators.</text>
+  <text x="80" y="505" font-family="Geist Mono, JetBrains Mono, monospace" font-size="19" font-weight="500" fill="#6E6E75" letter-spacing="0.18em">DESKTOP · ANDROID · AGENT LAB</text>
+  <text x="80" y="565" font-family="Geist Mono, JetBrains Mono, monospace" font-size="20" font-weight="500" fill="#FF7A1A">pickforge.dev/picklab</text>
+</svg>

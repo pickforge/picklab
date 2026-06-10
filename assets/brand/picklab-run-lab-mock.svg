@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" fill="none" role="img" aria-label="PickLab run lab mock">
+  <title>PICKLAB · RUN LAB</title>
+  <defs>
+    <clipPath id="frame"><rect width="1200" height="720" rx="14"/></clipPath>
+  </defs>
+
+  <!-- window frame -->
+  <rect width="1200" height="720" rx="14" fill="#0A0A0B"/>
+  <rect x="0.5" y="0.5" width="1199" height="719" rx="13.5" stroke="#F2F2F3" stroke-opacity="0.14"/>
+
+  <g clip-path="url(#frame)">
+    <!-- chrome -->
+    <circle cx="28" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="46" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="64" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <text x="92" y="28" font-family="Geist Mono, JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#6E6E75">PICKLAB · RUN LAB</text>
+    <g>
+      <rect x="1018" y="12" width="158" height="24" rx="12" fill="#FF7A1A" fill-opacity="0.05" stroke="#FF7A1A" stroke-opacity="0.3"/>
+      <circle cx="1034" cy="24" r="3" fill="#FF7A1A"/>
+      <text x="1044" y="28" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#FF7A1A">SESSION LIVE</text>
+    </g>
+    <line x1="0" y1="48" x2="1200" y2="48" stroke="#F2F2F3" stroke-opacity="0.08"/>
+
+    <!-- ===== desktop pane ===== -->
+    <rect x="24" y="72" width="520" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="44" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">DESKTOP · XVFB :99</text>
+    <text x="524" y="100" text-anchor="end" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75" fill-opacity="0.7">1280×800 · VNC :5900</text>
+    <!-- desktop surface -->
+    <rect x="44" y="114" width="480" height="294" rx="6" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <!-- app window inside the desktop -->
+    <rect x="84" y="142" width="320" height="226" rx="8" fill="#141417" stroke="#F2F2F3" stroke-opacity="0.14"/>
+    <circle cx="100" cy="158" r="3.5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="113" cy="158" r="3.5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="126" cy="158" r="3.5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <text x="142" y="162" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75">EXAMPLE_APP</text>
+    <line x1="84" y1="172" x2="404" y2="172" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <rect x="104" y="192" width="184" height="12" rx="3" fill="#F2F2F3" fill-opacity="0.22"/>
+    <rect x="104" y="216" width="248" height="9" rx="3" fill="#F2F2F3" fill-opacity="0.10"/>
+    <rect x="104" y="234" width="216" height="9" rx="3" fill="#F2F2F3" fill-opacity="0.10"/>
+    <rect x="104" y="252" width="236" height="9" rx="3" fill="#F2F2F3" fill-opacity="0.10"/>
+    <rect x="104" y="288" width="104" height="30" rx="6" fill="#F2F2F3" fill-opacity="0.08" stroke="#F2F2F3" stroke-opacity="0.14"/>
+    <rect x="220" y="288" width="104" height="30" rx="6" fill="#F2F2F3" fill-opacity="0.04" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <!-- cursor arrow over the first button -->
+    <path d="M150 296 l0 14 4 -4 3 7 3 -1.5 -3 -6.5 5 0 z" fill="#F2F2F3" fill-opacity="0.85"/>
+    <text x="64" y="392" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75" fill-opacity="0.7">picklab desktop click 184 302</text>
+
+    <!-- ===== android pane ===== -->
+    <rect x="568" y="72" width="240" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="588" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">ANDROID · PICKLAB-AVD</text>
+    <!-- phone -->
+    <rect x="618" y="114" width="140" height="276" rx="16" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.2" stroke-width="1.5"/>
+    <rect x="630" y="130" width="116" height="244" rx="6" fill="#141417"/>
+    <!-- status bar -->
+    <rect x="638" y="138" width="26" height="6" rx="2" fill="#F2F2F3" fill-opacity="0.18"/>
+    <rect x="718" y="138" width="20" height="6" rx="2" fill="#F2F2F3" fill-opacity="0.18"/>
+    <!-- app content -->
+    <rect x="638" y="156" width="100" height="34" rx="4" fill="#F2F2F3" fill-opacity="0.07"/>
+    <rect x="638" y="198" width="100" height="22" rx="4" fill="#F2F2F3" fill-opacity="0.05"/>
+    <rect x="638" y="228" width="100" height="22" rx="4" fill="#F2F2F3" fill-opacity="0.05"/>
+    <rect x="638" y="258" width="100" height="22" rx="4" fill="#F2F2F3" fill-opacity="0.05"/>
+    <!-- ember tap point -->
+    <g stroke="#FF7A1A" stroke-opacity="0.7" stroke-width="1.5">
+      <line x1="688" y1="290" x2="688" y2="298"/>
+      <line x1="688" y1="320" x2="688" y2="328"/>
+      <line x1="669" y1="309" x2="677" y2="309"/>
+      <line x1="699" y1="309" x2="707" y2="309"/>
+    </g>
+    <circle cx="688" cy="309" r="5" fill="#FF7A1A"/>
+    <!-- nav bar -->
+    <rect x="672" y="362" width="32" height="4" rx="2" fill="#F2F2F3" fill-opacity="0.2"/>
+    <text x="688" y="416" text-anchor="middle" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75" fill-opacity="0.7">tap 540 1180 · emulator-5554</text>
+
+    <!-- ===== agent terminal pane ===== -->
+    <rect x="832" y="72" width="344" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="852" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">AGENT TERMINAL</text>
+    <rect x="852" y="114" width="304" height="294" rx="6" fill="#0A0A0B" fill-opacity="0.6" stroke="#F2F2F3" stroke-opacity="0.05"/>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="12.5">
+      <text x="868" y="144" fill="#F2F2F3">$ picklab session create \</text>
+      <text x="898" y="162" fill="#F2F2F3" fill-opacity="0.85">--type desktop+android</text>
+      <text x="868" y="188" fill="#FF7A1A">✓ desktop :99 ready</text>
+      <text x="868" y="206" fill="#FF7A1A">✓ emulator-5554 booted</text>
+      <text x="868" y="232" fill="#F2F2F3">$ picklab android screenshot</text>
+      <text x="868" y="250" fill="#FF7A1A">✓ runs/0042/home.png</text>
+      <text x="868" y="276" fill="#F2F2F3">$ picklab android tap 540 1180</text>
+      <text x="868" y="294" fill="#FF7A1A">✓ tapped · ui settled</text>
+      <text x="868" y="320" fill="#F2F2F3" fill-opacity="0.7">● agent reading ui-tree…</text>
+      <text x="868" y="346" fill="#F2F2F3">▌</text>
+    </g>
+
+    <!-- ===== screenshots pane ===== -->
+    <rect x="24" y="456" width="520" height="216" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="44" y="484" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">LIVE SCREENSHOTS · RUNS/0042</text>
+    <g>
+      <rect x="44" y="500" width="110" height="118" rx="6" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <rect x="56" y="512" width="86" height="10" rx="3" fill="#F2F2F3" fill-opacity="0.16"/>
+      <rect x="56" y="530" width="70" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="56" y="543" width="78" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="56" y="582" width="40" height="18" rx="4" fill="#F2F2F3" fill-opacity="0.08"/>
+      <text x="44" y="640" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" fill="#6E6E75">001-launch.png</text>
+    </g>
+    <g>
+      <rect x="174" y="500" width="110" height="118" rx="6" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <rect x="186" y="512" width="60" height="10" rx="3" fill="#F2F2F3" fill-opacity="0.16"/>
+      <rect x="186" y="530" width="86" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="186" y="543" width="64" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="186" y="556" width="74" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <text x="174" y="640" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" fill="#6E6E75">002-home.png</text>
+    </g>
+    <g>
+      <rect x="304" y="500" width="110" height="118" rx="6" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <rect x="316" y="512" width="78" height="10" rx="3" fill="#F2F2F3" fill-opacity="0.16"/>
+      <rect x="316" y="530" width="56" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="316" y="582" width="54" height="18" rx="4" fill="#F2F2F3" fill-opacity="0.08"/>
+      <text x="304" y="640" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" fill="#6E6E75">003-tap.png</text>
+    </g>
+    <g>
+      <rect x="434" y="500" width="110" height="118" rx="6" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <rect x="446" y="512" width="70" height="10" rx="3" fill="#F2F2F3" fill-opacity="0.16"/>
+      <rect x="446" y="530" width="84" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="446" y="543" width="58" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <rect x="446" y="556" width="76" height="7" rx="2" fill="#F2F2F3" fill-opacity="0.08"/>
+      <text x="434" y="640" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" fill="#6E6E75">004-settled.png</text>
+    </g>
+
+    <!-- ===== logs pane ===== -->
+    <rect x="568" y="456" width="608" height="216" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="588" y="484" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">LOGS · LOGCAT · SECRETS REDACTED</text>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="12">
+      <text x="588" y="514" fill="#F2F2F3" fill-opacity="0.6">00:12:01.123 I ActivityManager  Displayed com.example.app/.MainActivity</text>
+      <text x="588" y="536" fill="#F2F2F3" fill-opacity="0.6">00:12:01.480 D OkHttp           Authorization: [REDACTED]</text>
+      <text x="588" y="558" fill="#F2F2F3" fill-opacity="0.6">00:12:02.044 I Choreographer    Skipped 0 frames</text>
+      <text x="588" y="580" fill="#F2F2F3" fill-opacity="0.6">00:12:02.391 I InputDispatcher  MotionEvent DOWN (540, 1180)</text>
+      <text x="588" y="602" fill="#F2F2F3" fill-opacity="0.6">00:12:02.815 I PickLab          ui settled · idle 412ms</text>
+      <text x="588" y="624" fill="#F2F2F3" fill-opacity="0.6">00:12:03.310 I PickLab          screenshot → runs/0042/004-settled.png</text>
+      <text x="588" y="652" fill="#6E6E75">— tail · 6 of 1,204 lines</text>
+    </g>
+  </g>
+</svg>
