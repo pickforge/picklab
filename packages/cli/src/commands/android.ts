@@ -43,7 +43,7 @@ async function resolveAndroidTarget(
   if (opts.serial !== undefined) {
     return { serial: opts.serial };
   }
-  const record = await resolveSessionRecord("android", opts.session);
+  const record = await resolveSessionRecord("android", opts);
   const serial = record.android?.serial;
   if (serial === undefined) {
     throw new Error(`Session ${record.id} has no device serial recorded`);

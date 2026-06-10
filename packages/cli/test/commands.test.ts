@@ -298,6 +298,7 @@ describe("picklab session (desktop)", () => {
       const click = await runCli(
         ["desktop", "click", "1", "1", "--json"],
         env,
+        tmpDir,
       );
       expect(click.code).toBe(1);
       const clickReport = parseJson(click);
@@ -357,7 +358,7 @@ describe("picklab desktop", () => {
       await runCli(
         ["session", "create", "--type", "desktop", "--json"],
         env,
-        tmpDir,
+        projectDir,
       );
 
       const result = await runCli(
@@ -388,6 +389,7 @@ describe("picklab desktop", () => {
       const outResult = await runCli(
         ["desktop", "screenshot", "--out", out, "--json"],
         env,
+        projectDir,
       );
       expect(outResult.code).toBe(0);
       expect(parseJson(outResult).path).toBe(out);
@@ -413,6 +415,7 @@ describe("picklab desktop", () => {
       const launched = await runCli(
         ["desktop", "launch", "--json", "--wait-window", "xterm", "--", "xterm"],
         env,
+        tmpDir,
       );
       expect(launched.code).toBe(0);
       const launchReport = parseJson(launched);
@@ -423,15 +426,24 @@ describe("picklab desktop", () => {
       const click = await runCli(
         ["desktop", "click", "20", "20", "--json"],
         env,
+        tmpDir,
       );
       expect(click.code).toBe(0);
       expect(parseJson(click).ok).toBe(true);
 
-      const typed = await runCli(["desktop", "type", "echo hi", "--json"], env);
+      const typed = await runCli(
+        ["desktop", "type", "echo hi", "--json"],
+        env,
+        tmpDir,
+      );
       expect(typed.code).toBe(0);
       expect(parseJson(typed).length).toBe(7);
 
-      const keyed = await runCli(["desktop", "key", "Return", "--json"], env);
+      const keyed = await runCli(
+        ["desktop", "key", "Return", "--json"],
+        env,
+        tmpDir,
+      );
       expect(keyed.code).toBe(0);
       expect(parseJson(keyed).key).toBe("Return");
     },
@@ -741,7 +753,10 @@ describe("picklab android session lifecycle (fake sdk)", () => {
       expect(session.avdName).toBe("picklab-avd");
       expect(session.serial).toBe(FAKE_SERIAL);
 
-      const tap = await runCli(["android", "tap", "10", "20", "--json"], env);
+      const tap = await runCli(
+        ["android", "tap", "10", "20", "--json", "--project-dir", projectDir],
+        env,
+      );
       expect(tap.code).toBe(0);
       expect(parseJson(tap).sessionId).toBe(session.id);
       expect(adbLogLines(adbLog)).toContain(

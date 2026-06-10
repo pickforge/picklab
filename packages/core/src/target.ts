@@ -7,6 +7,7 @@ export type RunnableSessionType = "desktop" | "android";
 
 export interface ResolveRunnableSessionOptions {
   env?: EnvLike;
+  projectDir?: string;
   consumerLabel: string;
   createHint: string;
   selectHint: string;
@@ -30,15 +31,25 @@ export async function resolveRunnableSession(
     }
     return record;
   }
-  const candidates = (await listSessions(env)).filter(
+  let candidates = (await listSessions(env)).filter(
     (record) => record.type === type && record.status === "running",
   );
+  let scopeLabel = "found";
+  if (opts.projectDir !== undefined) {
+    const projectDir = path.resolve(opts.projectDir);
+    candidates = candidates.filter(
+      (record) => record.projectDir === projectDir,
+    );
+    scopeLabel = "for this project";
+  }
   if (candidates.length === 0) {
-    throw new Error(`No running ${type} session found; ${opts.createHint}`);
+    throw new Error(
+      `No running ${type} session ${scopeLabel}; ${opts.createHint}`,
+    );
   }
   if (candidates.length > 1) {
     throw new Error(
-      `Multiple running ${type} sessions found ` +
+      `Multiple running ${type} sessions ${scopeLabel} ` +
         `(${candidates.map((record) => record.id).join(", ")}); ` +
         opts.selectHint,
     );

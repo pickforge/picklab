@@ -25,7 +25,7 @@ export interface DesktopCommandOptions extends BaseCliOptions {
 async function resolveDesktop(
   opts: DesktopCommandOptions,
 ): Promise<{ id: string; display: string }> {
-  const record = await resolveSessionRecord("desktop", opts.session);
+  const record = await resolveSessionRecord("desktop", opts);
   return { id: record.id, display: requireDisplay(record) };
 }
 

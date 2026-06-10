@@ -50,6 +50,10 @@ picklab session destroy
 
 Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manifest, so a run is inspectable and reproducible after the fact.
 
+### Concurrent sessions
+
+Each session gets its own isolated display or emulator, so several agents and projects can run labs side by side. When a command or tool is called without an explicit session id, the default resolves per project: only running sessions created for the same project directory are considered. Pass `session` ids (CLI: `--session <id>`) to target a specific lab, including one belonging to another project.
+
 <p align="center">
   <img src="assets/brand/picklab-run-lab-mock.svg" alt="PICKLAB · RUN LAB — desktop session, Android emulator, live screenshots, logs, and agent terminal" width="900">
 </p>
@@ -99,12 +103,13 @@ Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedica
 
 ## MCP surface
 
-`picklab mcp serve` exposes 21 tools over stdio:
+`picklab mcp serve` exposes 22 tools over stdio:
 
 - Sessions: `session_create`, `session_status`, `session_destroy`
 - Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_type`, `desktop_key`
 - Android: `android_start`, `android_install_apk`, `android_launch_app`, `android_screenshot`, `android_tap`, `android_type`, `android_back`, `android_home`, `android_get_ui_tree`, `android_logcat`, `android_run_adb`
 - Artifacts: `artifact_list`, `artifact_report`
+- User: `request_user_input` — ask the human a question (via MCP elicitation when the client supports it) and wait for the answer; never used for secrets
 
 Resources, addressable as `picklab://` URIs:
 
