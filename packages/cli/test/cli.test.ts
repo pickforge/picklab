@@ -1,11 +1,11 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ensureCliBuilt } from "./build-once.js";
 
-const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
 
 interface CliResult {
@@ -121,17 +121,8 @@ const IMAGE = "system-images;android-34;google_apis;x86_64";
 
 let tmpDir: string;
 
-beforeAll(() => {
-  const build = spawnSync(process.execPath, ["scripts/build.mjs"], {
-    cwd: repoRoot,
-    stdio: "pipe",
-    timeout: 280_000,
-  });
-  if (build.status !== 0) {
-    throw new Error(
-      `build failed: ${build.stdout?.toString()}${build.stderr?.toString()}`,
-    );
-  }
+beforeAll(async () => {
+  await ensureCliBuilt();
 }, 300_000);
 
 beforeEach(() => {

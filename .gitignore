@@ -3,3 +3,4 @@ dist/
 .picklab/
 coverage/
 *.tsbuildinfo
+.cli-build.lock/

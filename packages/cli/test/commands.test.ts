@@ -1,0 +1,840 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ensureCliBuilt } from "./build-once.js";
+
+const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const FAKE_SERIAL = "emulator-5554";
+const PLANTED_TOKEN = `ghp_${"a".repeat(36)}`;
+
+interface CliResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runCli(
+  args: string[],
+  env: Record<string, string>,
+  cwd?: string,
+): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function parseJson(result: CliResult): Record<string, any> {
+  try {
+    return JSON.parse(result.stdout) as Record<string, any>;
+  } catch (error) {
+    throw new Error(
+      `CLI did not print JSON (${(error as Error).message}); ` +
+        `stdout: ${result.stdout}; stderr: ${result.stderr}`,
+    );
+  }
+}
+
+function writeScript(file: string, body: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `#!/bin/sh\n${body}\n`);
+  fs.chmodSync(file, 0o755);
+}
+
+interface EnvOptions {
+  realPath?: boolean;
+  bins?: Record<string, string>;
+  extra?: Record<string, string>;
+}
+
+function makeEnv(opts: EnvOptions = {}): Record<string, string> {
+  const home = path.join(tmpDir, "home");
+  const bin = path.join(tmpDir, "bin");
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  for (const [name, body] of Object.entries(opts.bins ?? {})) {
+    writeScript(path.join(bin, name), body);
+  }
+  const pathParts = [bin];
+  if (opts.realPath === true) {
+    pathParts.push(process.env.PATH ?? "");
+  }
+  return {
+    HOME: home,
+    PICKLAB_HOME: path.join(home, ".picklab"),
+    PATH: pathParts.join(":"),
+    ...(opts.extra ?? {}),
+  };
+}
+
+function makeProjectDir(name = "project"): string {
+  const dir = path.join(tmpDir, name);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function fakeAdbEnv(): { env: Record<string, string>; adbLog: string } {
+  const adbLog = path.join(tmpDir, "adb.log");
+  const body = [
+    `printf '%s\\n' "$*" >> "${adbLog}"`,
+    'case "$*" in',
+    "  *\"screencap -p\"*) printf '\\211PNG\\r\\n\\032\\n' ;;",
+    '  *"uiautomator dump"*) echo "UI hierchary dumped to: /sdcard/picklab-ui.xml" ;;',
+    "  *\"cat /sdcard/picklab-ui.xml\"*) printf '<?xml version=\"1.0\"?><hierarchy rotation=\"0\"></hierarchy>' ;;",
+    `  *"logcat -d"*) printf 'I/Auth( 123): authToken=${PLANTED_TOKEN}\\nI/App( 123): started\\n' ;;`,
+    '  *"install -r"*) echo Success ;;',
+    '  *monkey*) echo "Events injected: 1" ;;',
+    "esac",
+    "exit 0",
+  ].join("\n");
+  return { env: makeEnv({ bins: { adb: body } }), adbLog };
+}
+
+function adbLogLines(adbLog: string): string[] {
+  if (!fs.existsSync(adbLog)) {
+    return [];
+  }
+  return fs.readFileSync(adbLog, "utf8").trim().split("\n");
+}
+
+interface FakeAndroidSdk {
+  sdk: string;
+  adbLog: string;
+  pidFile: string;
+}
+
+function makeFakeAndroidSdk(
+  opts: { emulatorExits?: boolean; bootCompleted?: "0" | "1" } = {},
+): FakeAndroidSdk {
+  const root = path.join(tmpDir, "sdk");
+  const pidFile = path.join(root, "emulator.pid");
+  const adbLog = path.join(root, "adb.log");
+  writeScript(
+    path.join(root, "emulator", "emulator"),
+    opts.emulatorExits === true
+      ? "exit 1"
+      : `echo $$ > "${pidFile}"\nPATH=/usr/bin:/bin\nexec sleep 120`,
+  );
+  writeScript(
+    path.join(root, "platform-tools", "adb"),
+    [
+      `printf '%s\\n' "$*" >> "${adbLog}"`,
+      'case "$*" in',
+      `  *getprop*) echo ${opts.bootCompleted ?? "1"} ;;`,
+      '  devices) printf "List of devices attached\\n" ;;',
+      `  *"emu kill"*) [ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null ;;`,
+      "esac",
+      "exit 0",
+    ].join("\n"),
+  );
+  return { sdk: root, adbLog, pidFile };
+}
+
+function writeSyntheticRun(
+  projectDir: string,
+  runId: string,
+  overrides: Record<string, unknown> = {},
+): void {
+  const dir = path.join(projectDir, ".picklab", "runs", runId);
+  fs.mkdirSync(path.join(dir, "screenshots"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "logs"), { recursive: true });
+  const manifest = {
+    runId,
+    slug: "synthetic",
+    createdAt: "2026-06-09T12:00:00.000Z",
+    status: "completed",
+    artifacts: [
+      {
+        type: "screenshot",
+        name: "screenshot.png",
+        path: "screenshots/screenshot.png",
+        createdAt: "2026-06-09T12:00:01.000Z",
+      },
+    ],
+    ...overrides,
+  };
+  fs.writeFileSync(
+    path.join(dir, "manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+let tmpDir: string;
+const cleanupEnvs: Array<Record<string, string>> = [];
+
+beforeAll(async () => {
+  await ensureCliBuilt();
+}, 300_000);
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-cmd-"));
+});
+
+afterEach(async () => {
+  while (cleanupEnvs.length > 0) {
+    const env = cleanupEnvs.pop() as Record<string, string>;
+    await runCli(["session", "destroy", "--all"], env).catch(() => {});
+  }
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}, 60_000);
+
+describe("picklab session (desktop)", () => {
+  it(
+    "creates, reports, and destroys a desktop session",
+    async () => {
+      const env = makeEnv({ realPath: true });
+      cleanupEnvs.push(env);
+
+      const created = await runCli(
+        ["session", "create", "--type", "desktop", "--json"],
+        env,
+        tmpDir,
+      );
+      expect(created.code).toBe(0);
+      const createReport = parseJson(created);
+      expect(createReport.ok).toBe(true);
+      expect(createReport.errors).toEqual([]);
+      expect(createReport.sessions).toHaveLength(1);
+      const session = createReport.sessions[0];
+      expect(session.id).toMatch(/^desk-[0-9a-f]+$/);
+      expect(session.type).toBe("desktop");
+      expect(session.display).toMatch(/^:\d+$/);
+
+      const status = await runCli(
+        ["session", "status", session.id, "--json"],
+        env,
+      );
+      expect(status.code).toBe(0);
+      const statusReport = parseJson(status);
+      expect(statusReport.sessions[0].status).toBe("running");
+      expect(statusReport.sessions[0].desktop.display).toBe(session.display);
+      expect(statusReport.sessions[0].desktop.xvfbAlive).toBe(true);
+      expect(statusReport.sessions[0].desktop.displayAlive).toBe(true);
+
+      const all = parseJson(await runCli(["session", "status", "--json"], env));
+      expect(all.sessions.map((entry: any) => entry.id)).toContain(session.id);
+
+      const destroyed = await runCli(
+        ["session", "destroy", session.id, "--json"],
+        env,
+      );
+      expect(destroyed.code).toBe(0);
+      expect(parseJson(destroyed).destroyed).toEqual([session.id]);
+
+      const after = await runCli(
+        ["session", "status", session.id, "--json"],
+        env,
+      );
+      expect(after.code).toBe(1);
+      const afterReport = parseJson(after);
+      expect(afterReport.ok).toBe(false);
+      expect(afterReport.errors.join("\n")).toContain("not found");
+    },
+    60_000,
+  );
+
+  it("reports an empty session list", async () => {
+    const env = makeEnv();
+    const result = await runCli(["session", "status", "--json"], env);
+    expect(result.code).toBe(0);
+    expect(parseJson(result).sessions).toEqual([]);
+  });
+
+  it("fails destroy without an id or --all", async () => {
+    const env = makeEnv();
+    const result = await runCli(["session", "destroy", "--json"], env);
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain("--all");
+  });
+
+  it("fails destroy for an unknown session id", async () => {
+    const env = makeEnv();
+    const result = await runCli(
+      ["session", "destroy", "desk-ffffffff", "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain("not found");
+  });
+
+  it(
+    "lists candidates when the default desktop session is ambiguous",
+    async () => {
+      const env = makeEnv({ realPath: true });
+      cleanupEnvs.push(env);
+      const first = parseJson(
+        await runCli(
+          ["session", "create", "--type", "desktop", "--json"],
+          env,
+          tmpDir,
+        ),
+      ).sessions[0];
+      const second = parseJson(
+        await runCli(
+          ["session", "create", "--type", "desktop", "--json"],
+          env,
+          tmpDir,
+        ),
+      ).sessions[0];
+
+      const click = await runCli(
+        ["desktop", "click", "1", "1", "--json"],
+        env,
+      );
+      expect(click.code).toBe(1);
+      const clickReport = parseJson(click);
+      expect(clickReport.errors.join("\n")).toContain("--session");
+      expect(clickReport.errors.join("\n")).toContain(first.id);
+      expect(clickReport.errors.join("\n")).toContain(second.id);
+
+      const destroyed = await runCli(
+        ["session", "destroy", "--all", "--json"],
+        env,
+      );
+      expect(destroyed.code).toBe(0);
+      expect(parseJson(destroyed).destroyed.sort()).toEqual(
+        [first.id, second.id].sort(),
+      );
+    },
+    60_000,
+  );
+
+  it(
+    "cleans up the desktop leg when the android leg of desktop+android fails",
+    async () => {
+      const { sdk } = makeFakeAndroidSdk({
+        emulatorExits: true,
+        bootCompleted: "0",
+      });
+      const env = makeEnv({ realPath: true, extra: { ANDROID_HOME: sdk } });
+      cleanupEnvs.push(env);
+
+      const result = await runCli(
+        ["session", "create", "--type", "desktop+android", "--json"],
+        env,
+        tmpDir,
+      );
+      expect(result.code).toBe(1);
+      const report = parseJson(result);
+      expect(report.ok).toBe(false);
+      expect(report.errors.length).toBeGreaterThan(0);
+
+      const status = parseJson(await runCli(["session", "status", "--json"], env));
+      const desktops = status.sessions.filter(
+        (entry: any) => entry.type === "desktop",
+      );
+      expect(desktops).toEqual([]);
+    },
+    60_000,
+  );
+});
+
+describe("picklab desktop", () => {
+  it(
+    "screenshots into a run directory with a manifest entry",
+    async () => {
+      const env = makeEnv({ realPath: true });
+      cleanupEnvs.push(env);
+      const projectDir = makeProjectDir();
+      await runCli(
+        ["session", "create", "--type", "desktop", "--json"],
+        env,
+        tmpDir,
+      );
+
+      const result = await runCli(
+        ["desktop", "screenshot", "--json", "--project-dir", projectDir],
+        env,
+      );
+      expect(result.code).toBe(0);
+      const report = parseJson(result);
+      expect(report.ok).toBe(true);
+      expect(report.runId).toMatch(/-desktop/);
+      expect(report.path).toContain(
+        path.join(projectDir, ".picklab", "runs", report.runId, "screenshots"),
+      );
+      const data = fs.readFileSync(report.path);
+      expect(data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)).toBe(true);
+
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(report.runDir, "manifest.json"), "utf8"),
+      );
+      expect(manifest.status).toBe("completed");
+      expect(manifest.artifacts).toHaveLength(1);
+      expect(manifest.artifacts[0].type).toBe("screenshot");
+      expect(manifest.artifacts[0].path).toBe(
+        path.join("screenshots", "screenshot.png"),
+      );
+
+      const out = path.join(tmpDir, "explicit", "shot.png");
+      const outResult = await runCli(
+        ["desktop", "screenshot", "--out", out, "--json"],
+        env,
+      );
+      expect(outResult.code).toBe(0);
+      expect(parseJson(outResult).path).toBe(out);
+      const outData = fs.readFileSync(out);
+      expect(outData.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)).toBe(
+        true,
+      );
+    },
+    60_000,
+  );
+
+  it(
+    "launches an app and drives click, type, and key input",
+    async () => {
+      const env = makeEnv({ realPath: true });
+      cleanupEnvs.push(env);
+      await runCli(
+        ["session", "create", "--type", "desktop", "--json"],
+        env,
+        tmpDir,
+      );
+
+      const launched = await runCli(
+        ["desktop", "launch", "--json", "--wait-window", "xterm", "--", "xterm"],
+        env,
+      );
+      expect(launched.code).toBe(0);
+      const launchReport = parseJson(launched);
+      expect(launchReport.pid).toBeGreaterThan(0);
+      expect(fs.existsSync(launchReport.logPath)).toBe(true);
+      expect(launchReport.window.name).toContain("xterm");
+
+      const click = await runCli(
+        ["desktop", "click", "20", "20", "--json"],
+        env,
+      );
+      expect(click.code).toBe(0);
+      expect(parseJson(click).ok).toBe(true);
+
+      const typed = await runCli(["desktop", "type", "echo hi", "--json"], env);
+      expect(typed.code).toBe(0);
+      expect(parseJson(typed).length).toBe(7);
+
+      const keyed = await runCli(["desktop", "key", "Return", "--json"], env);
+      expect(keyed.code).toBe(0);
+      expect(parseJson(keyed).key).toBe("Return");
+    },
+    60_000,
+  );
+
+  it("fails actionably when no desktop session is running", async () => {
+    const env = makeEnv();
+    const result = await runCli(["desktop", "click", "1", "1", "--json"], env);
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.errors.join("\n")).toContain("No running desktop session");
+    expect(report.errors.join("\n")).toContain("session create --type desktop");
+  });
+});
+
+describe("picklab android (fake adb)", () => {
+  it("threads the serial through install-apk", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const apk = path.join(tmpDir, "app.apk");
+    fs.writeFileSync(apk, "apk");
+    const result = await runCli(
+      ["android", "install-apk", apk, "--serial", FAKE_SERIAL, "--json"],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(parseJson(result).apkPath).toBe(apk);
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} install -r ${apk}`,
+    ]);
+  });
+
+  it("launches apps via monkey and am start", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const monkey = await runCli(
+      [
+        "android",
+        "launch-app",
+        "com.example.app",
+        "--serial",
+        FAKE_SERIAL,
+        "--json",
+      ],
+      env,
+    );
+    expect(monkey.code).toBe(0);
+    const activity = await runCli(
+      [
+        "android",
+        "launch-app",
+        "com.example.app",
+        "--activity",
+        ".MainActivity",
+        "--serial",
+        FAKE_SERIAL,
+        "--json",
+      ],
+      env,
+    );
+    expect(activity.code).toBe(0);
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell monkey -p com.example.app -c android.intent.category.LAUNCHER 1`,
+      `-s ${FAKE_SERIAL} shell am start -n com.example.app/.MainActivity`,
+    ]);
+  });
+
+  it("taps, types, and presses back/home with exact adb argv", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    for (const args of [
+      ["android", "tap", "100", "200"],
+      ["android", "type", "hello world"],
+      ["android", "back"],
+      ["android", "home"],
+    ]) {
+      const result = await runCli(
+        [...args, "--serial", FAKE_SERIAL, "--json"],
+        env,
+      );
+      expect(result.code).toBe(0);
+    }
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell input tap 100 200`,
+      `-s ${FAKE_SERIAL} shell input text hello%sworld`,
+      `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_BACK`,
+      `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_HOME`,
+    ]);
+  });
+
+  it("screenshots the device into a run directory", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const projectDir = makeProjectDir();
+    const result = await runCli(
+      [
+        "android",
+        "screenshot",
+        "--serial",
+        FAKE_SERIAL,
+        "--project-dir",
+        projectDir,
+        "--json",
+      ],
+      env,
+    );
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.runId).toMatch(/-android/);
+    const data = fs.readFileSync(report.path);
+    expect(data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)).toBe(true);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(report.runDir, "manifest.json"), "utf8"),
+    );
+    expect(manifest.status).toBe("completed");
+    expect(manifest.artifacts[0].type).toBe("screenshot");
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} exec-out screencap -p`,
+    ]);
+  });
+
+  it("dumps the ui tree to stdout and to a file", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const result = await runCli(
+      ["android", "ui-tree", "--serial", FAKE_SERIAL],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("<hierarchy");
+
+    const out = path.join(tmpDir, "ui.xml");
+    const fileResult = await runCli(
+      ["android", "ui-tree", "--serial", FAKE_SERIAL, "--out", out, "--json"],
+      env,
+    );
+    expect(fileResult.code).toBe(0);
+    expect(parseJson(fileResult).path).toBe(out);
+    expect(fs.readFileSync(out, "utf8")).toContain("<hierarchy");
+
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} exec-out cat /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} shell rm -f /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} exec-out cat /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} shell rm -f /sdcard/picklab-ui.xml`,
+    ]);
+  });
+
+  it("redacts secrets from logcat output", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const result = await runCli(
+      ["android", "logcat", "--serial", FAKE_SERIAL],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("[REDACTED]");
+    expect(result.stdout).not.toContain("ghp_");
+    expect(result.stdout).toContain("I/App( 123): started");
+
+    const limited = await runCli(
+      ["android", "logcat", "--serial", FAKE_SERIAL, "--lines", "50", "--json"],
+      env,
+    );
+    expect(limited.code).toBe(0);
+    const report = parseJson(limited);
+    expect(report.output).toContain("[REDACTED]");
+    expect(report.output).not.toContain("ghp_");
+
+    const cleared = await runCli(
+      ["android", "logcat", "--serial", FAKE_SERIAL, "--clear", "--json"],
+      env,
+    );
+    expect(cleared.code).toBe(0);
+    expect(parseJson(cleared).cleared).toBe(true);
+
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} logcat -d -t 500`,
+      `-s ${FAKE_SERIAL} logcat -d -t 50`,
+      `-s ${FAKE_SERIAL} logcat -c`,
+    ]);
+  });
+
+  it("passes raw adb commands through, threading the serial when given", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const targeted = await runCli(
+      ["android", "adb", "--serial", FAKE_SERIAL, "--", "shell", "ls", "/sdcard"],
+      env,
+    );
+    expect(targeted.code).toBe(0);
+
+    const raw = await runCli(["android", "adb", "--", "devices"], env);
+    expect(raw.code).toBe(0);
+
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell ls /sdcard`,
+      "devices",
+    ]);
+  });
+
+  it("fails actionably when no android session or serial is given", async () => {
+    const { env } = fakeAdbEnv();
+    const result = await runCli(["android", "tap", "1", "2", "--json"], env);
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.errors.join("\n")).toContain("No running android session");
+  });
+});
+
+describe("picklab android session lifecycle (fake sdk)", () => {
+  it(
+    "starts an emulator session, resolves it implicitly, and destroys it",
+    async () => {
+      const { sdk, adbLog, pidFile } = makeFakeAndroidSdk();
+      const env = makeEnv({ extra: { ANDROID_HOME: sdk } });
+      const projectDir = makeProjectDir();
+
+      const started = await runCli(
+        ["android", "start", "--json", "--project-dir", projectDir],
+        env,
+      );
+      expect(started.code).toBe(0);
+      const startReport = parseJson(started);
+      expect(startReport.ok).toBe(true);
+      const session = startReport.sessions[0];
+      expect(session.id).toMatch(/^andr-[0-9a-f]+$/);
+      expect(session.type).toBe("android");
+      expect(session.avdName).toBe("picklab-avd");
+      expect(session.serial).toBe(FAKE_SERIAL);
+
+      const tap = await runCli(["android", "tap", "10", "20", "--json"], env);
+      expect(tap.code).toBe(0);
+      expect(parseJson(tap).sessionId).toBe(session.id);
+      expect(adbLogLines(adbLog)).toContain(
+        `-s ${FAKE_SERIAL} shell input tap 10 20`,
+      );
+
+      const status = parseJson(
+        await runCli(["session", "status", session.id, "--json"], env),
+      );
+      expect(status.sessions[0].android.emulatorAlive).toBe(true);
+      expect(status.sessions[0].android.serial).toBe(FAKE_SERIAL);
+
+      const destroyed = await runCli(
+        ["session", "destroy", session.id, "--json"],
+        env,
+      );
+      expect(destroyed.code).toBe(0);
+      expect(parseJson(destroyed).destroyed).toEqual([session.id]);
+      const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+      expect(() => process.kill(pid, 0)).toThrow();
+
+      const after = await runCli(["session", "status", "--json"], env);
+      expect(parseJson(after).sessions).toEqual([]);
+    },
+    60_000,
+  );
+});
+
+describe("picklab artifacts", () => {
+  it("lists runs with artifact counts", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    writeSyntheticRun(projectDir, "20260609-110000-synthetic", {
+      createdAt: "2026-06-09T11:00:00.000Z",
+      artifacts: [],
+      status: "failed",
+    });
+    writeSyntheticRun(projectDir, "20260609-120000-synthetic");
+
+    const result = await runCli(
+      ["artifacts", "list", "--json", "--project-dir", projectDir],
+      env,
+    );
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.runs).toEqual([
+      {
+        runId: "20260609-120000-synthetic",
+        slug: "synthetic",
+        createdAt: "2026-06-09T12:00:00.000Z",
+        status: "completed",
+        artifacts: 1,
+      },
+      {
+        runId: "20260609-110000-synthetic",
+        slug: "synthetic",
+        createdAt: "2026-06-09T11:00:00.000Z",
+        status: "failed",
+        artifacts: 0,
+      },
+    ]);
+  });
+
+  it("lists an empty project", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    const result = await runCli(
+      ["artifacts", "list", "--json", "--project-dir", projectDir],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(parseJson(result).runs).toEqual([]);
+  });
+
+  it("renders a markdown report for the latest run by default", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    writeSyntheticRun(projectDir, "20260609-110000-synthetic", {
+      createdAt: "2026-06-09T11:00:00.000Z",
+    });
+    writeSyntheticRun(projectDir, "20260609-120000-synthetic", {
+      sessionId: "desk-12345678",
+    });
+
+    const result = await runCli(
+      ["artifacts", "report", "--project-dir", projectDir],
+      env,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("# PickLab run 20260609-120000-synthetic");
+    expect(result.stdout).toContain("- Status: completed");
+    expect(result.stdout).toContain("- Session: desk-12345678");
+    expect(result.stdout).toContain(
+      "- [screenshot] screenshot.png — screenshots/screenshot.png",
+    );
+
+    const specific = await runCli(
+      [
+        "artifacts",
+        "report",
+        "20260609-110000-synthetic",
+        "--project-dir",
+        projectDir,
+        "--json",
+      ],
+      env,
+    );
+    expect(specific.code).toBe(0);
+    const report = parseJson(specific);
+    expect(report.manifest.runId).toBe("20260609-110000-synthetic");
+    expect(report.dir).toBe(
+      path.join(projectDir, ".picklab", "runs", "20260609-110000-synthetic"),
+    );
+  });
+
+  it("fails for unknown run ids", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    const report = await runCli(
+      ["artifacts", "report", "nope", "--project-dir", projectDir, "--json"],
+      env,
+    );
+    expect(report.code).toBe(1);
+    expect(parseJson(report).errors.join("\n")).toContain("Run not found");
+
+    const open = await runCli(
+      ["artifacts", "open", "nope", "--project-dir", projectDir, "--json"],
+      env,
+    );
+    expect(open.code).toBe(1);
+    expect(parseJson(open).errors.join("\n")).toContain("Run not found");
+  });
+
+  it("prints the run directory for artifacts open without a display", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    writeSyntheticRun(projectDir, "20260609-120000-synthetic");
+    const result = await runCli(
+      [
+        "artifacts",
+        "open",
+        "20260609-120000-synthetic",
+        "--project-dir",
+        projectDir,
+        "--json",
+      ],
+      env,
+    );
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.dir).toBe(
+      path.join(projectDir, ".picklab", "runs", "20260609-120000-synthetic"),
+    );
+    expect(report.opened).toBe(false);
+
+    const human = await runCli(
+      [
+        "artifacts",
+        "open",
+        "20260609-120000-synthetic",
+        "--project-dir",
+        projectDir,
+      ],
+      env,
+    );
+    expect(human.code).toBe(0);
+    expect(human.stdout.trim()).toBe(report.dir);
+  });
+});
+
+describe("picklab mcp serve", () => {
+  it("exits 1 with a clear stub message", async () => {
+    const env = makeEnv();
+    const result = await runCli(["mcp", "serve"], env);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("not yet implemented");
+  });
+});
