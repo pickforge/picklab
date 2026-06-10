@@ -134,7 +134,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 - MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`), with explicit consent (`--yes` or a prompt).
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
-- Sessions run under a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`), isolated from your account and devices.
+- PickLab provisions a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`) so lab workloads do not borrow your personal resources. Running session processes under the lab user is planned post-MVP.
 - Agent config edits are atomic, with backups of the previous config.
 
 ## Development
