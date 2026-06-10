@@ -9,11 +9,14 @@
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "default": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean"
+  },
+  "dependencies": {
+    "@pickforge/picklab-core": "*"
   }
 }

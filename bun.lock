@@ -14,6 +14,9 @@
     "packages/agent-installers": {
       "name": "@pickforge/picklab-agent-installers",
       "version": "0.1.0",
+      "dependencies": {
+        "@pickforge/picklab-core": "*",
+      },
     },
     "packages/android": {
       "name": "@pickforge/picklab-android",
@@ -35,6 +38,7 @@
         "zod": "^4.0.0",
       },
       "devDependencies": {
+        "@pickforge/picklab-agent-installers": "*",
         "@pickforge/picklab-android": "*",
         "@pickforge/picklab-core": "*",
         "@pickforge/picklab-desktop-linux": "*",

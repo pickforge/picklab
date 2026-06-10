@@ -1,0 +1,356 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ensureCliBuilt } from "./build-once.js";
+
+const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
+
+interface CliResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runCli(
+  args: string[],
+  env: Record<string, string>,
+): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function parseJson(result: CliResult): Record<string, any> {
+  try {
+    return JSON.parse(result.stdout) as Record<string, any>;
+  } catch (error) {
+    throw new Error(
+      `CLI did not print JSON (${(error as Error).message}); ` +
+        `stdout: ${result.stdout}; stderr: ${result.stderr}`,
+    );
+  }
+}
+
+let tmpDir: string;
+let home: string;
+let env: Record<string, string>;
+
+beforeAll(async () => {
+  await ensureCliBuilt();
+}, 300_000);
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-agents-cli-"));
+  home = path.join(tmpDir, "home");
+  fs.mkdirSync(home, { recursive: true });
+  env = {
+    HOME: home,
+    PICKLAB_HOME: path.join(home, ".picklab"),
+    PATH: "/usr/bin:/bin",
+  };
+});
+
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function backupsIn(dir: string): string[] {
+  return fs
+    .readdirSync(dir)
+    .filter((entry) => entry.includes("picklab-backup"));
+}
+
+describe("picklab agents list", () => {
+  it("lists the builtin agents as not registered in a clean home", async () => {
+    const result = await runCli(["agents", "list", "--json"], env);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    const byName = Object.fromEntries(
+      report.agents.map((agent: any) => [agent.name, agent]),
+    );
+    expect(Object.keys(byName).sort()).toEqual([
+      "claude-code",
+      "codex",
+      "cursor",
+    ]);
+    expect(byName.codex.configPath).toBe(
+      path.join(home, ".codex", "config.toml"),
+    );
+    expect(byName["claude-code"].configPath).toBe(
+      path.join(home, ".claude.json"),
+    );
+    expect(byName.cursor.configPath).toBe(
+      path.join(home, ".cursor", "mcp.json"),
+    );
+    for (const agent of report.agents) {
+      expect(agent.registered).toBe(false);
+      expect(agent.configExists).toBe(false);
+    }
+  });
+});
+
+describe("picklab agents link cursor", () => {
+  it("merges into an existing config with a backup and stays idempotent", async () => {
+    const configPath = path.join(tmpDir, "cursor-mcp.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { other: { command: "other", args: [] } } }),
+    );
+
+    const linked = await runCli(
+      ["agents", "link", "cursor", "--config-path", configPath, "--json"],
+      env,
+    );
+    expect(linked.code).toBe(0);
+    const report = parseJson(linked);
+    expect(report.ok).toBe(true);
+    expect(report.registered).toBe(true);
+    expect(report.changed).toBe(true);
+    expect(report.backupPath).toContain("picklab-backup");
+    expect(fs.existsSync(report.backupPath)).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(config.mcpServers.picklab).toEqual({
+      command: "picklab",
+      args: ["mcp", "serve"],
+    });
+    expect(config.mcpServers.other).toEqual({ command: "other", args: [] });
+
+    expect(
+      fs.existsSync(
+        path.join(env.PICKLAB_HOME, "agents", "picklab-mcp.json"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(env.PICKLAB_HOME, "agents", "picklab-mcp.toml"),
+      ),
+    ).toBe(true);
+
+    const again = await runCli(
+      ["agents", "install", "cursor", "--config-path", configPath, "--json"],
+      env,
+    );
+    expect(again.code).toBe(0);
+    const secondReport = parseJson(again);
+    expect(secondReport.changed).toBe(false);
+    expect(backupsIn(tmpDir)).toHaveLength(1);
+  });
+
+  it("creates a missing cursor config at the default path and unlinks it", async () => {
+    const linked = await runCli(["agents", "link", "cursor", "--json"], env);
+    expect(linked.code).toBe(0);
+    const configPath = path.join(home, ".cursor", "mcp.json");
+    expect(parseJson(linked).configPath).toBe(configPath);
+    expect(
+      JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers.picklab,
+    ).toBeDefined();
+
+    const listed = parseJson(await runCli(["agents", "list", "--json"], env));
+    const cursor = listed.agents.find((agent: any) => agent.name === "cursor");
+    expect(cursor.registered).toBe(true);
+
+    const unlinked = await runCli(["agents", "unlink", "cursor", "--json"], env);
+    expect(unlinked.code).toBe(0);
+    expect(parseJson(unlinked).changed).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers.picklab,
+    ).toBeUndefined();
+  });
+});
+
+describe("picklab agents link codex", () => {
+  it("appends a marker block and removes it on unlink", async () => {
+    const configPath = path.join(tmpDir, "codex-config.toml");
+    fs.writeFileSync(configPath, 'model = "gpt-5"\n');
+
+    const linked = await runCli(
+      ["agents", "link", "codex", "--config-path", configPath, "--json"],
+      env,
+    );
+    expect(linked.code).toBe(0);
+    expect(parseJson(linked).registered).toBe(true);
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain('model = "gpt-5"');
+    expect(content).toContain("# >>> picklab >>>");
+    expect(content).toContain("[mcp_servers.picklab]");
+    expect(content).toContain("# <<< picklab <<<");
+
+    const unlinked = await runCli(
+      ["agents", "unlink", "codex", "--config-path", configPath, "--json"],
+      env,
+    );
+    expect(unlinked.code).toBe(0);
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain('model = "gpt-5"');
+    expect(after).not.toContain("picklab");
+  });
+
+  it("refuses a foreign [mcp_servers.picklab] section before backing up", async () => {
+    const configPath = path.join(tmpDir, "codex-config.toml");
+    const original = '[mcp_servers.picklab]\ncommand = "something-else"\n';
+    fs.writeFileSync(configPath, original);
+
+    const result = await runCli(
+      ["agents", "install", "codex", "--config-path", configPath, "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect(report.errors.join("\n")).toContain("outside the picklab markers");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(backupsIn(tmpDir)).toEqual([]);
+  });
+});
+
+describe("picklab agents link claude-code", () => {
+  it("instructs instead of creating a missing ~/.claude.json", async () => {
+    const result = await runCli(["agents", "link", "claude-code", "--json"], env);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.registered).toBe(false);
+    expect(report.changed).toBe(false);
+    expect(report.instructions).toContain(
+      "claude mcp add --scope user picklab -- picklab mcp serve",
+    );
+    expect(fs.existsSync(path.join(home, ".claude.json"))).toBe(false);
+  });
+
+  it("registers into an existing ~/.claude.json", async () => {
+    const configPath = path.join(home, ".claude.json");
+    fs.writeFileSync(configPath, JSON.stringify({ numStartups: 1 }));
+    const result = await runCli(["agents", "link", "claude-code", "--json"], env);
+    expect(result.code).toBe(0);
+    expect(parseJson(result).registered).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(config.numStartups).toBe(1);
+    expect(config.mcpServers.picklab).toEqual({
+      command: "picklab",
+      args: ["mcp", "serve"],
+    });
+    expect(backupsIn(home)).toHaveLength(1);
+  });
+});
+
+describe("picklab agents add / unlink (custom)", () => {
+  it("adds a custom agent, lists it, and removes it", async () => {
+    const added = await runCli(
+      [
+        "agents",
+        "add",
+        "--name",
+        "my-agent",
+        "--mcp-command",
+        "picklab mcp serve",
+        "--json",
+      ],
+      env,
+    );
+    expect(added.code).toBe(0);
+    const addReport = parseJson(added);
+    expect(addReport.ok).toBe(true);
+    expect(addReport.configPath).toBe(
+      path.join(env.PICKLAB_HOME, "agents", "my-agent.json"),
+    );
+    expect(addReport.command).toBe("picklab");
+    expect(addReport.args).toEqual(["mcp", "serve"]);
+
+    const listed = parseJson(await runCli(["agents", "list", "--json"], env));
+    const custom = listed.agents.find(
+      (agent: any) => agent.name === "my-agent",
+    );
+    expect(custom).toBeDefined();
+    expect(custom.kind).toBe("custom");
+    expect(custom.registered).toBe(true);
+
+    const removed = await runCli(
+      ["agents", "unlink", "my-agent", "--json"],
+      env,
+    );
+    expect(removed.code).toBe(0);
+    expect(parseJson(removed).changed).toBe(true);
+    const after = parseJson(await runCli(["agents", "list", "--json"], env));
+    expect(
+      after.agents.find((agent: any) => agent.name === "my-agent"),
+    ).toBeUndefined();
+  });
+
+  it("rejects reserved and invalid names", async () => {
+    for (const name of ["codex", "../evil"]) {
+      const result = await runCli(
+        ["agents", "add", "--name", name, "--mcp-command", "x", "--json"],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).ok).toBe(false);
+    }
+  });
+
+  it("rejects an empty --mcp-command", async () => {
+    const result = await runCli(
+      ["agents", "add", "--name", "blank", "--mcp-command", "   ", "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain("must not be empty");
+  });
+
+  it("fails for unknown agents", async () => {
+    const result = await runCli(["agents", "link", "nope", "--json"], env);
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain('Unknown agent "nope"');
+  });
+});
+
+describe("picklab agents doctor", () => {
+  it("reports ok in a clean environment", async () => {
+    const result = await runCli(["agents", "doctor", "--json"], env);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    expect(report.checks.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("reports stale codex markers and exits 1", async () => {
+    const configPath = path.join(home, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "# >>> picklab >>>\n# <<< picklab <<<\n");
+
+    const result = await runCli(["agents", "doctor", "--json"], env);
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect(report.errors.join("\n")).toContain("stale");
+  });
+
+  it("reports broken symlinks under the agents dir", async () => {
+    const agents = path.join(env.PICKLAB_HOME, "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    fs.symlinkSync(
+      path.join(tmpDir, "gone"),
+      path.join(agents, "dangling"),
+    );
+
+    const result = await runCli(["agents", "doctor", "--json"], env);
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain("broken symlink");
+  });
+});

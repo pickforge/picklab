@@ -23,6 +23,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@pickforge/picklab-agent-installers": "*",
     "@pickforge/picklab-android": "*",
     "@pickforge/picklab-core": "*",
     "@pickforge/picklab-desktop-linux": "*",

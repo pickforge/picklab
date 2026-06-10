@@ -19,6 +19,13 @@ import {
   runArtifactsReport,
 } from "./commands/artifacts.js";
 import {
+  runAgentsAdd,
+  runAgentsDoctorCommand,
+  runAgentsLink,
+  runAgentsList,
+  runAgentsUnlink,
+} from "./commands/agents.js";
+import {
   runDesktopClick,
   runDesktopKey,
   runDesktopLaunch,
@@ -406,6 +413,72 @@ export function buildProgram(): Command {
     ),
   ).action(async (runId, opts) => {
     process.exitCode = await runArtifactsReport(runId, opts);
+  });
+
+  const agents = program
+    .command("agents")
+    .description("Register the PickLab MCP server with coding agents");
+
+  withJson(
+    agents
+      .command("list")
+      .description("List known agents and their registration status"),
+  ).action(async (opts) => {
+    process.exitCode = await runAgentsList(opts);
+  });
+
+  for (const [verb, description] of [
+    ["install", "Register the picklab MCP server with an agent"],
+    ["link", "Register the picklab MCP server with an agent (alias of install)"],
+  ] as const) {
+    withJson(
+      agents
+        .command(verb)
+        .description(description)
+        .argument("<agent>", "agent name (codex, claude-code, cursor)")
+        .option(
+          "--config-path <path>",
+          "agent config file (overrides the default location)",
+        ),
+    ).action(async (agent, opts) => {
+      process.exitCode = await runAgentsLink(agent, opts);
+    });
+  }
+
+  withJson(
+    agents
+      .command("unlink")
+      .description("Remove the picklab MCP server entry from an agent config")
+      .argument("<agent>", "agent name (codex, claude-code, cursor, or custom)")
+      .option(
+        "--config-path <path>",
+        "agent config file (overrides the default location)",
+      ),
+  ).action(async (agent, opts) => {
+    process.exitCode = await runAgentsUnlink(agent, opts);
+  });
+
+  withJson(
+    agents
+      .command("doctor")
+      .description(
+        "Check agent registrations for broken symlinks and stale config",
+      ),
+  ).action(async (opts) => {
+    process.exitCode = await runAgentsDoctorCommand(opts);
+  });
+
+  withJson(
+    agents
+      .command("add")
+      .description("Store a custom agent MCP config snippet under ~/.picklab/agents")
+      .requiredOption("--name <name>", "custom agent name")
+      .requiredOption(
+        "--mcp-command <command>",
+        'MCP server command, split on whitespace (e.g. "picklab mcp serve")',
+      ),
+  ).action(async (opts) => {
+    process.exitCode = await runAgentsAdd(opts);
   });
 
   const mcp = program

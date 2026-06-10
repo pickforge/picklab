@@ -13,6 +13,9 @@ export default defineConfig({
       "@pickforge/picklab-android": fileURLToPath(
         new URL("packages/android/src/index.ts", import.meta.url),
       ),
+      "@pickforge/picklab-agent-installers": fileURLToPath(
+        new URL("packages/agent-installers/src/index.ts", import.meta.url),
+      ),
     },
   },
   test: {
