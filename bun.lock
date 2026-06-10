@@ -32,6 +32,7 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.17.0",
         "commander": "^14.0.0",
+        "zod": "^4.0.0",
       },
       "devDependencies": {
         "@pickforge/picklab-android": "*",
@@ -56,6 +57,10 @@
       "version": "0.1.0",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.17.0",
+        "@pickforge/picklab-android": "*",
+        "@pickforge/picklab-core": "*",
+        "@pickforge/picklab-desktop-linux": "*",
+        "zod": "^4.0.0",
       },
     },
   },

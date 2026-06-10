@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { createMcpServer } from "@pickforge/picklab-mcp-server";
+import { runMcpServe } from "./commands/mcp.js";
 
-void createMcpServer();
-console.error("picklab-mcp: PickLab MCP server stub (not yet implemented)");
+process.exitCode = await runMcpServe();

@@ -946,11 +946,102 @@ describe("picklab artifacts", () => {
   });
 });
 
-describe("picklab mcp serve", () => {
-  it("exits 1 with a clear stub message", async () => {
-    const env = makeEnv();
-    const result = await runCli(["mcp", "serve"], env);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("not yet implemented");
+interface JsonRpcResponse {
+  jsonrpc: string;
+  id: number;
+  result?: Record<string, any>;
+  error?: Record<string, any>;
+}
+
+function speakMcp(
+  argv: string[],
+  env: Record<string, string>,
+): Promise<Map<number, JsonRpcResponse>> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, argv, {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const responses = new Map<number, JsonRpcResponse>();
+    let buffer = "";
+    const finish = (error?: Error) => {
+      child.kill("SIGKILL");
+      if (error !== undefined) {
+        reject(error);
+      } else {
+        resolve(responses);
+      }
+    };
+    const timer = setTimeout(
+      () => finish(new Error("timed out waiting for MCP responses")),
+      30_000,
+    );
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      let newline = buffer.indexOf("\n");
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line !== "") {
+          const message = JSON.parse(line) as JsonRpcResponse;
+          if (typeof message.id === "number") {
+            responses.set(message.id, message);
+          }
+        }
+        if (responses.has(2)) {
+          clearTimeout(timer);
+          finish();
+          return;
+        }
+        newline = buffer.indexOf("\n");
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      finish(error);
+    });
+    const send = (message: Record<string, unknown>) => {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "picklab-test", version: "0.0.0" },
+      },
+    });
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
   });
+}
+
+describe("picklab mcp serve", () => {
+  const mcpEntry = fileURLToPath(
+    new URL("../dist/picklab-mcp.js", import.meta.url),
+  );
+
+  it("serves MCP over stdio via picklab mcp serve", async () => {
+    const env = makeEnv();
+    const responses = await speakMcp([cliPath, "mcp", "serve"], env);
+
+    const init = responses.get(1);
+    expect(init?.result?.serverInfo?.name).toBe("picklab");
+    const tools = responses.get(2)?.result?.tools as Array<{ name: string }>;
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain("session_create");
+    expect(names).toContain("desktop_screenshot");
+    expect(names).toContain("android_run_adb");
+    expect(names).toContain("artifact_report");
+  }, 60_000);
+
+  it("serves MCP over stdio via the picklab-mcp bin", async () => {
+    const env = makeEnv();
+    const responses = await speakMcp([mcpEntry], env);
+    expect(responses.get(1)?.result?.serverInfo?.name).toBe("picklab");
+    const tools = responses.get(2)?.result?.tools as Array<{ name: string }>;
+    expect(tools.length).toBeGreaterThanOrEqual(21);
+  }, 60_000);
 });

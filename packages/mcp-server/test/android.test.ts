@@ -1,0 +1,238 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  adbLogLines,
+  connectLab,
+  FAKE_SERIAL,
+  makeFakeAndroidSdk,
+  makeLabDirs,
+  parseToolJson,
+  PLANTED_TOKEN,
+  PNG_MAGIC,
+  removeLabDirs,
+  writeAndroidSessionRecord,
+  writeFakeAdbSdk,
+  type ConnectedLab,
+  type LabDirs,
+} from "./helpers.js";
+
+let dirs: LabDirs;
+let lab: ConnectedLab;
+let adbLog: string;
+let sessionId: string;
+
+beforeEach(async () => {
+  dirs = makeLabDirs();
+  adbLog = path.join(dirs.root, "adb.log");
+  const sdk = writeFakeAdbSdk(dirs.root, adbLog);
+  sessionId = writeAndroidSessionRecord(dirs.home, dirs.projectDir);
+  lab = await connectLab({
+    projectDir: dirs.projectDir,
+    env: { PICKLAB_HOME: dirs.home, PATH: dirs.binDir, ANDROID_HOME: sdk },
+  });
+});
+
+afterEach(async () => {
+  await lab.close();
+  removeLabDirs(dirs);
+});
+
+describe("android tools (fake adb)", () => {
+  it("threads the session serial through tap, type, back, and home", async () => {
+    const tap = parseToolJson(
+      await lab.client.callTool({
+        name: "android_tap",
+        arguments: { x: 10, y: 20 },
+      }),
+    );
+    expect(tap.ok).toBe(true);
+    expect(tap.serial).toBe(FAKE_SERIAL);
+    expect(tap.sessionId).toBe(sessionId);
+
+    await lab.client.callTool({
+      name: "android_type",
+      arguments: { text: "hi there" },
+    });
+    await lab.client.callTool({ name: "android_back", arguments: {} });
+    await lab.client.callTool({ name: "android_home", arguments: {} });
+
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell input tap 10 20`,
+      `-s ${FAKE_SERIAL} shell input text hi%sthere`,
+      `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_BACK`,
+      `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_HOME`,
+    ]);
+  });
+
+  it("installs an apk resolved against the project dir", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_install_apk",
+        arguments: { apkPath: "build/app.apk" },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    const expected = path.join(dirs.projectDir, "build", "app.apk");
+    expect(report.apkPath).toBe(expected);
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} install -r ${expected}`,
+    ]);
+  });
+
+  it("launches an app by package name", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_launch_app",
+        arguments: { packageName: "com.example.app" },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell monkey -p com.example.app ` +
+        "-c android.intent.category.LAUNCHER 1",
+    ]);
+  });
+
+  it("returns the ui tree xml", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_get_ui_tree",
+        arguments: {},
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.xml).toContain("<hierarchy");
+    expect(adbLogLines(adbLog)).toContain(
+      `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
+    );
+  });
+
+  it("redacts secrets from android_logcat output", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_logcat",
+        arguments: { lines: 5 },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.output).toContain("[REDACTED]");
+    expect(report.output).not.toContain(PLANTED_TOKEN);
+  });
+
+  it("redacts secrets from android_run_adb output", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_run_adb",
+        arguments: { args: ["logcat", "-d", "-t", "5"] },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.stdout).toContain("[REDACTED]");
+    expect(report.stdout).not.toContain(PLANTED_TOKEN);
+    expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} logcat -d -t 5`,
+    ]);
+  });
+
+  it("captures a screenshot into a run with inline image content", async () => {
+    const result = await lab.client.callTool({
+      name: "android_screenshot",
+      arguments: {},
+    });
+    const report = parseToolJson(result);
+    expect(report.ok).toBe(true);
+    expect(report.serial).toBe(FAKE_SERIAL);
+    expect(report.runId).toBeDefined();
+    const file = fs.readFileSync(report.path as string);
+    expect(file.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)).toBe(true);
+    const content = result.content as Array<Record<string, any>>;
+    const image = content.find((block) => block.type === "image");
+    expect(image).toBeDefined();
+    expect(image?.mimeType).toBe("image/png");
+    expect(
+      Buffer.from(image?.data as string, "base64")
+        .subarray(0, PNG_MAGIC.length)
+        .equals(PNG_MAGIC),
+    ).toBe(true);
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          dirs.projectDir,
+          ".picklab",
+          "runs",
+          report.runId as string,
+          "manifest.json",
+        ),
+        "utf8",
+      ),
+    );
+    expect(manifest.sessionId).toBe(sessionId);
+    expect(manifest.artifacts[0].type).toBe("screenshot");
+  });
+
+  it("uses an explicit serial without a session", async () => {
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_tap",
+        arguments: { serial: "emulator-5556", x: 1, y: 2 },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.serial).toBe("emulator-5556");
+    expect(report.sessionId).toBeUndefined();
+    expect(adbLogLines(adbLog)).toEqual([
+      "-s emulator-5556 shell input tap 1 2",
+    ]);
+  });
+
+  it("rejects passing both session and serial", async () => {
+    const result = await lab.client.callTool({
+      name: "android_tap",
+      arguments: { session: sessionId, serial: "emulator-5556", x: 1, y: 2 },
+    });
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("android_start (fake sdk)", () => {
+  it("starts and destroys an emulator session", async () => {
+    const startDirs = makeLabDirs();
+    const { sdk, pidFile } = makeFakeAndroidSdk(startDirs.root);
+    const startLab = await connectLab({
+      projectDir: startDirs.projectDir,
+      env: {
+        PICKLAB_HOME: startDirs.home,
+        PATH: startDirs.binDir,
+        ANDROID_HOME: sdk,
+      },
+    });
+    try {
+      const started = parseToolJson(
+        await startLab.client.callTool({
+          name: "android_start",
+          arguments: {},
+        }),
+      );
+      expect(started.ok).toBe(true);
+      const session = started.sessions[0];
+      expect(session.id).toMatch(/^andr-[0-9a-f]+$/);
+      expect(session.avdName).toBe("picklab-avd");
+      expect(session.serial).toMatch(/^emulator-\d+$/);
+
+      const destroyed = parseToolJson(
+        await startLab.client.callTool({
+          name: "session_destroy",
+          arguments: { sessionId: session.id },
+        }),
+      );
+      expect(destroyed.ok).toBe(true);
+      expect(destroyed.destroyed).toEqual([session.id]);
+      const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      await startLab.close();
+      removeLabDirs(startDirs);
+    }
+  }, 60_000);
+});

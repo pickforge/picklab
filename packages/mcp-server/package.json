@@ -17,6 +17,10 @@
     "build": "tsup src/index.ts --format esm --dts --clean"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0"
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@pickforge/picklab-android": "*",
+    "@pickforge/picklab-core": "*",
+    "@pickforge/picklab-desktop-linux": "*",
+    "zod": "^4.0.0"
   }
 }
