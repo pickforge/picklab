@@ -151,6 +151,24 @@ export async function createRun(
 
 export async function listRuns(projectDir: string): Promise<RunManifest[]> {
   const parent = runsDir(projectDir);
+
+  // Confine the runs root to the real `.picklab/runs` under the real project
+  // dir. This rejects a symlinked `.picklab` or `.picklab/runs` (which could
+  // redirect reads to outside runs) while still allowing the project dir
+  // itself to be a symlink.
+  try {
+    const realProject = await fs.promises.realpath(projectDir);
+    const realParent = await fs.promises.realpath(parent);
+    if (realParent !== path.join(realProject, ".picklab", "runs")) {
+      return [];
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(parent, { withFileTypes: true });
@@ -163,9 +181,12 @@ export async function listRuns(projectDir: string): Promise<RunManifest[]> {
 
   const manifests: RunManifest[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    // Skip symlinked run entries; only follow real directories.
+    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const manifestPath = path.join(parent, entry.name, "manifest.json");
     try {
+      const manifestStat = await fs.promises.lstat(manifestPath);
+      if (manifestStat.isSymbolicLink()) continue;
       const raw = await fs.promises.readFile(manifestPath, "utf8");
       const parsed: unknown = JSON.parse(raw);
       if (

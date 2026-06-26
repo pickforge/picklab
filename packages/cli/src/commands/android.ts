@@ -188,7 +188,7 @@ export async function runAndroidUiTree(
 ): Promise<number> {
   return runReported(opts, async () => {
     const target = await resolveAndroidTarget(opts);
-    const xml = await getUiTree({ serial: target.serial });
+    const xml = redactSecrets(await getUiTree({ serial: target.serial }));
     if (opts.out !== undefined) {
       const outPath = path.resolve(opts.out);
       await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
@@ -247,7 +247,19 @@ export async function runAndroidAdb(
     if (opts.serial !== undefined || opts.session !== undefined) {
       ({ serial, sessionId } = await resolveAndroidTarget(opts));
     } else {
-      const implicit = await resolveAndroidTarget(opts).catch(() => undefined);
+      // Fall back to a raw, untargeted adb call only when there is simply no
+      // running android session. Ambiguous (multiple-session) or any other
+      // resolution failure must fail closed rather than guessing a device.
+      const implicit = await resolveAndroidTarget(opts).then(
+        (target) => target,
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.startsWith("No running android session")) {
+            return undefined;
+          }
+          throw error;
+        },
+      );
       serial = implicit?.serial;
       sessionId = implicit?.sessionId;
     }

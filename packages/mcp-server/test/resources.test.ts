@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import os from "node:os";
 import {
   connectLab,
   makeLabDirs,
+  parseToolJson,
   PLANTED_TOKEN,
   PNG_MAGIC,
   removeLabDirs,
@@ -152,5 +154,430 @@ describe("traversal protection", () => {
     await expect(
       lab.client.readResource({ uri: "picklab://runs/nope/manifest" }),
     ).rejects.toThrow();
+  });
+});
+
+describe("symlink protection", () => {
+  it("rejects a screenshot symlink pointing outside the run dir", async () => {
+    const secret = path.join(dirs.root, "outside-secret.png");
+    fs.writeFileSync(secret, Buffer.concat([PNG_MAGIC, Buffer.from([9])]));
+    const linkPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "screenshots",
+      "escape.png",
+    );
+    fs.symlinkSync(secret, linkPath);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/screenshots/escape.png`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/escape.png`,
+    );
+  });
+
+  it("rejects a log symlink pointing outside the run dir", async () => {
+    const secret = path.join(dirs.root, "outside-secret.log");
+    fs.writeFileSync(secret, `token=${PLANTED_TOKEN}\n`);
+    const linkPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "logs",
+      "escape.log",
+    );
+    fs.symlinkSync(secret, linkPath);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/logs/escape.log`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/logs/escape.log`,
+    );
+  });
+
+  it("rejects a screenshot symlink pointing to a safe in-run file", async () => {
+    const linkPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "screenshots",
+      "link.png",
+    );
+    fs.symlinkSync("screenshot.png", linkPath);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/screenshots/link.png`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/link.png`,
+    );
+  });
+
+  it("rejects a log symlink pointing to a safe in-run file", async () => {
+    const linkPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "logs",
+      "link.log",
+    );
+    fs.symlinkSync("app.log", linkPath);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/logs/link.log`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/logs/link.log`,
+    );
+  });
+
+  it("rejects a symlinked screenshots dir pointing outside the run dir", async () => {
+    const outsideDir = path.join(dirs.root, "outside-screenshots");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideDir, "leak.png"),
+      Buffer.concat([PNG_MAGIC, Buffer.from([9])]),
+    );
+    const subdir = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "screenshots",
+    );
+    fs.rmSync(subdir, { recursive: true, force: true });
+    fs.symlinkSync(outsideDir, subdir);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+    );
+  });
+
+  it("rejects a manifest symlink pointing outside the run dir", async () => {
+    const secret = path.join(dirs.root, "outside-manifest.json");
+    fs.writeFileSync(secret, JSON.stringify({ runId: "evil-leak" }));
+    const manifestPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "manifest.json",
+    );
+    fs.rmSync(manifestPath, { force: true });
+    fs.symlinkSync(secret, manifestPath);
+
+    const result = lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/manifest`,
+    });
+    await expect(result).rejects.toThrow(/Run not found/i);
+    await expect(result).rejects.not.toThrow(/evil-leak/);
+  });
+
+  it("does not leak a symlinked manifest via listings", async () => {
+    const secret = path.join(dirs.root, "outside-manifest-leak.json");
+    fs.writeFileSync(
+      secret,
+      JSON.stringify({
+        runId: "evil-leak",
+        slug: "leaked-slug",
+        secretField: PLANTED_TOKEN,
+        artifacts: [],
+      }),
+    );
+    const manifestPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "manifest.json",
+    );
+    fs.rmSync(manifestPath, { force: true });
+    fs.symlinkSync(secret, manifestPath);
+
+    // picklab://runs must not contain leaked fields/values or the skipped run.
+    const { contents } = await lab.client.readResource({
+      uri: "picklab://runs",
+    });
+    const text = first(contents).text as string;
+    expect(text).not.toContain(PLANTED_TOKEN);
+    expect(text).not.toContain("leaked-slug");
+    expect(text).not.toContain(RUN_ID);
+
+    // listResources() must not include the run's manifest or files.
+    const { resources } = await lab.client.listResources();
+    const uris = resources.map((r) => r.uri);
+    expect(uris).not.toContain(`picklab://runs/${RUN_ID}/manifest`);
+    expect(uris).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/screenshot.png`,
+    );
+    expect(uris).not.toContain(`picklab://runs/${RUN_ID}/logs/app.log`);
+
+    // Direct manifest read still rejects without leaking.
+    const result = lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/manifest`,
+    });
+    await expect(result).rejects.toThrow(/Run not found/i);
+    await expect(result).rejects.not.toThrow(/evil-leak/);
+  });
+
+  it("rejects a symlinked logs dir pointing outside the run dir", async () => {
+    const outsideDir = path.join(dirs.root, "outside-logs");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideDir, "leak.log"),
+      `token=${PLANTED_TOKEN}\n`,
+    );
+    const subdir = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "logs",
+    );
+    fs.rmSync(subdir, { recursive: true, force: true });
+    fs.symlinkSync(outsideDir, subdir);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/logs/leak.log`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((r) => r.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/logs/leak.log`,
+    );
+  });
+
+  it("rejects a symlinked run dir pointing outside the runs root", async () => {
+    const outsideRun = path.join(dirs.root, "outside-run");
+    fs.mkdirSync(path.join(outsideRun, "logs"), { recursive: true });
+    fs.mkdirSync(path.join(outsideRun, "screenshots"), { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideRun, "manifest.json"),
+      JSON.stringify({ runId: "evil-leak" }),
+    );
+    fs.writeFileSync(
+      path.join(outsideRun, "logs", "leak.log"),
+      `token=${PLANTED_TOKEN}\n`,
+    );
+    fs.writeFileSync(
+      path.join(outsideRun, "screenshots", "leak.png"),
+      Buffer.concat([PNG_MAGIC, Buffer.from([9])]),
+    );
+
+    const runDir = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+    );
+    fs.rmSync(runDir, { recursive: true, force: true });
+    fs.symlinkSync(outsideRun, runDir);
+
+    const manifestResult = lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/manifest`,
+    });
+    await expect(manifestResult).rejects.toThrow(/not found/i);
+    await expect(manifestResult).rejects.not.toThrow(/evil-leak/);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/logs/leak.log`,
+      }),
+    ).rejects.toThrow(/not found/i);
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    const uris = resources.map((r) => r.uri);
+    expect(uris).not.toContain(`picklab://runs/${RUN_ID}/logs/leak.log`);
+    expect(uris).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+    );
+  });
+
+  it("rejects a symlinked .picklab dir pointing outside the project", async () => {
+    // Build a real outside project whose `.picklab/runs` holds a leaking run,
+    // then point this project's `.picklab` at the outside `.picklab`.
+    const outsideProject = fs.mkdtempSync(
+      path.join(os.tmpdir(), "picklab-outside-proj-"),
+    );
+    try {
+      const leakRunId = "20260609-130000-leak";
+      writeSyntheticRun(outsideProject, leakRunId, {
+        logBody: `token=${PLANTED_TOKEN}\n`,
+      });
+      // Rewrite the leaking manifest to carry a recognizable slug/field.
+      const leakManifestPath = path.join(
+        outsideProject,
+        ".picklab",
+        "runs",
+        leakRunId,
+        "manifest.json",
+      );
+      fs.writeFileSync(
+        leakManifestPath,
+        JSON.stringify({
+          runId: leakRunId,
+          slug: "leaked-slug",
+          createdAt: "2026-06-09T13:00:00.000Z",
+          status: "completed",
+          secretField: PLANTED_TOKEN,
+          artifacts: [],
+        }),
+      );
+
+      const projectPicklab = path.join(dirs.projectDir, ".picklab");
+      fs.rmSync(projectPicklab, { recursive: true, force: true });
+      fs.symlinkSync(
+        path.join(outsideProject, ".picklab"),
+        projectPicklab,
+      );
+
+      // picklab://runs must be empty and leak nothing.
+      const { contents } = await lab.client.readResource({
+        uri: "picklab://runs",
+      });
+      const text = first(contents).text as string;
+      expect(JSON.parse(text)).toEqual([]);
+      expect(text).not.toContain(PLANTED_TOKEN);
+      expect(text).not.toContain("leaked-slug");
+
+      // Direct manifest/log/screenshot reads reject without leaking.
+      const manifestResult = lab.client.readResource({
+        uri: `picklab://runs/${leakRunId}/manifest`,
+      });
+      await expect(manifestResult).rejects.toThrow(/not found/i);
+      await expect(manifestResult).rejects.not.toThrow(/leaked-slug/);
+      await expect(
+        lab.client.readResource({
+          uri: `picklab://runs/${leakRunId}/logs/app.log`,
+        }),
+      ).rejects.toThrow(/not found/i);
+      await expect(
+        lab.client.readResource({
+          uri: `picklab://runs/${leakRunId}/screenshots/screenshot.png`,
+        }),
+      ).rejects.toThrow(/not found/i);
+
+      // MCP tools must not expose outside manifest data.
+      const listResult = parseToolJson(
+        await lab.client.callTool({ name: "artifact_list", arguments: {} }),
+      );
+      expect(listResult.runs).toEqual([]);
+      expect(JSON.stringify(listResult)).not.toContain(PLANTED_TOKEN);
+      expect(JSON.stringify(listResult)).not.toContain("leaked-slug");
+
+      const reportResult = await lab.client.callTool({
+        name: "artifact_report",
+        arguments: { runId: leakRunId },
+      });
+      expect(reportResult.isError).toBe(true);
+      expect(JSON.stringify(reportResult)).not.toContain(PLANTED_TOKEN);
+      expect(JSON.stringify(reportResult)).not.toContain("leaked-slug");
+    } finally {
+      fs.rmSync(outsideProject, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked runs root pointing outside the project", async () => {
+    const outsideRuns = path.join(dirs.root, "outside-runs");
+    const outsideRun = path.join(outsideRuns, RUN_ID);
+    fs.mkdirSync(path.join(outsideRun, "logs"), { recursive: true });
+    fs.mkdirSync(path.join(outsideRun, "screenshots"), { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideRun, "manifest.json"),
+      JSON.stringify({
+        runId: "evil-leak",
+        slug: "leaked-slug",
+        secretField: PLANTED_TOKEN,
+        artifacts: [],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(outsideRun, "logs", "leak.log"),
+      `token=${PLANTED_TOKEN}\n`,
+    );
+    fs.writeFileSync(
+      path.join(outsideRun, "screenshots", "leak.png"),
+      Buffer.concat([PNG_MAGIC, Buffer.from([9])]),
+    );
+
+    const runsRoot = path.join(dirs.projectDir, ".picklab", "runs");
+    fs.rmSync(runsRoot, { recursive: true, force: true });
+    fs.symlinkSync(outsideRuns, runsRoot);
+
+    // Direct manifest read rejects without leaking outside data.
+    const manifestResult = lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/manifest`,
+    });
+    await expect(manifestResult).rejects.toThrow(/not found/i);
+    await expect(manifestResult).rejects.not.toThrow(/evil-leak/);
+    await expect(manifestResult).rejects.not.toThrow(/leaked-slug/);
+
+    // Direct log read rejects without leaking outside data.
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/logs/leak.log`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    // Direct screenshot read rejects without leaking outside data.
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    // Listing remains empty and exposes no outside resources.
+    const { contents } = await lab.client.readResource({
+      uri: "picklab://runs",
+    });
+    const text = first(contents).text as string;
+    expect(JSON.parse(text)).toEqual([]);
+    expect(text).not.toContain(PLANTED_TOKEN);
+    expect(text).not.toContain("leaked-slug");
+
+    const { resources } = await lab.client.listResources();
+    const uris = resources.map((r) => r.uri);
+    expect(uris).not.toContain(`picklab://runs/${RUN_ID}/manifest`);
+    expect(uris).not.toContain(`picklab://runs/${RUN_ID}/logs/leak.log`);
+    expect(uris).not.toContain(
+      `picklab://runs/${RUN_ID}/screenshots/leak.png`,
+    );
   });
 });

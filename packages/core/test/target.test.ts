@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createSession, updateSession } from "../src/session.js";
-import { resolveRunnableSession } from "../src/target.js";
+import {
+  resolveRunnableSession,
+  resolveScreenshotTarget,
+} from "../src/target.js";
 
 let home: string;
 let env: { PICKLAB_HOME: string };
@@ -105,5 +108,97 @@ describe("resolveRunnableSession project scoping", () => {
     });
     expect(record.id).toBe(idB);
     expect(record.projectDir).toBe("/proj-b");
+  });
+});
+
+describe("resolveScreenshotTarget out confinement", () => {
+  const COMMON = {
+    projectDir: "/proj",
+    defaultSlug: "desktop",
+    conflictError: "use either --out or --run, not both",
+  };
+
+  it("leaves CLI-style out unrestricted when no outBaseDir is given", async () => {
+    const target = await resolveScreenshotTarget({
+      ...COMMON,
+      out: "/tmp/anywhere/shot.png",
+    });
+    expect(target.outPath).toBe(path.resolve("/tmp/anywhere/shot.png"));
+    expect(target.run).toBeUndefined();
+  });
+
+  it("confines an MCP-style relative out under the base dir", async () => {
+    const base = path.resolve("/base");
+    const target = await resolveScreenshotTarget({
+      ...COMMON,
+      out: "shots/shot.png",
+      outBaseDir: base,
+    });
+    expect(target.outPath).toBe(path.join(base, "shots", "shot.png"));
+  });
+
+  it("rejects a relative out that escapes the base dir", async () => {
+    await expect(
+      resolveScreenshotTarget({
+        ...COMMON,
+        out: "../escape.png",
+        outBaseDir: path.resolve("/base"),
+      }),
+    ).rejects.toThrow(/outside the project directory/);
+  });
+
+  it("rejects an out whose path symlinks outside the base dir", async () => {
+    const project = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-proj-"),
+    );
+    const outside = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-outside-"),
+    );
+    await fs.promises.symlink(outside, path.join(project, "link"));
+    try {
+      await expect(
+        resolveScreenshotTarget({
+          ...COMMON,
+          out: "link/shot.png",
+          outBaseDir: project,
+        }),
+      ).rejects.toThrow(/outside the project directory/);
+    } finally {
+      await fs.promises.rm(project, { recursive: true, force: true });
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an out that is a dangling symlink pointing outside the base dir", async () => {
+    const project = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-proj-"),
+    );
+    // Dangling symlink: target does not exist, so realpath cannot resolve it,
+    // but a subsequent write would follow it and create the outside file.
+    await fs.promises.symlink(
+      "outside/shot.png",
+      path.join(project, "shot.png"),
+    );
+    try {
+      await expect(
+        resolveScreenshotTarget({
+          ...COMMON,
+          out: "shot.png",
+          outBaseDir: project,
+        }),
+      ).rejects.toThrow(/outside the project directory/);
+    } finally {
+      await fs.promises.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an absolute out outside the base dir", async () => {
+    await expect(
+      resolveScreenshotTarget({
+        ...COMMON,
+        out: "/etc/passwd",
+        outBaseDir: path.resolve("/base"),
+      }),
+    ).rejects.toThrow(/outside the project directory/);
   });
 });

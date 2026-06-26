@@ -7,7 +7,7 @@ const JSON_FIELD_RE =
   /("[^"\r\n]*(?:token|secret|password|passwd|api[_-]?key|authorization|bearer|credential)[^"\r\n]*"\s*:\s*)"(?:[^"\\]|\\.)*"/gi;
 
 const ASSIGNMENT_RE =
-  /(\b[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key|authorization|bearer|credential)[A-Za-z0-9_.-]*\s*[=:]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]+)/gi;
+  /(\b[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key|authorization|bearer|credential)[A-Za-z0-9_.-]*\s*[=:]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\r\n"'<>]+)/gi;
 
 const LITERAL_RES: RegExp[] = [
   /ghp_[A-Za-z0-9]{36}/g,
@@ -17,7 +17,13 @@ const LITERAL_RES: RegExp[] = [
 
 export function redactSecrets(text: string): string {
   let result = text.replace(JSON_FIELD_RE, `$1"${REPLACEMENT}"`);
-  result = result.replace(ASSIGNMENT_RE, `$1${REPLACEMENT}`);
+  result = result.replace(ASSIGNMENT_RE, (_match, prefix, value) => {
+    const quote = value[0];
+    if (quote === '"' || quote === "'") {
+      return `${prefix}${quote}${REPLACEMENT}${quote}`;
+    }
+    return `${prefix}${REPLACEMENT}`;
+  });
   for (const re of LITERAL_RES) {
     result = result.replace(re, REPLACEMENT);
   }
