@@ -56,17 +56,20 @@ describe("parseDisplayNumber", () => {
 });
 
 describe("buildVncArgs", () => {
-  it("builds x11vnc args", () => {
-    expect(buildVncArgs({ display: ":92", port: 5992 })).toEqual([
+  it("builds x11vnc args bound to loopback by default", () => {
+    const args = buildVncArgs({ display: ":92", port: 5992 });
+    expect(args).toEqual([
       "-display",
       ":92",
       "-rfbport",
       "5992",
+      "-localhost",
       "-forever",
       "-shared",
       "-nopw",
       "-quiet",
     ]);
+    expect(args).toContain("-localhost");
   });
 
   it("rejects invalid ports", () => {
