@@ -132,4 +132,59 @@ describe("listRuns", () => {
   it("returns empty list when no runs exist", async () => {
     expect(await listRuns(project)).toEqual([]);
   });
+
+  it("skips runs whose manifest.json is a symlink", async () => {
+    const good = await createRun(project, "good", {
+      now: new Date("2026-06-09T08:00:00Z"),
+    });
+    const evil = await createRun(project, "evil", {
+      now: new Date("2026-06-09T09:00:00Z"),
+    });
+    const target = path.join(good.dir, "manifest.json");
+    const manifestPath = path.join(evil.dir, "manifest.json");
+    await fs.promises.rm(manifestPath);
+    await fs.promises.symlink(target, manifestPath);
+
+    const runs = await listRuns(project);
+    expect(runs.map((r) => r.slug)).toEqual(["good"]);
+  });
+
+  it("skips run entries that are symlinks", async () => {
+    const good = await createRun(project, "good", {
+      now: new Date("2026-06-09T08:00:00Z"),
+    });
+    const runsRoot = path.join(project, ".picklab", "runs");
+    await fs.promises.symlink(good.dir, path.join(runsRoot, "linked-run"));
+
+    const runs = await listRuns(project);
+    expect(runs.map((r) => r.slug)).toEqual(["good"]);
+  });
+
+  it("returns empty list when the runs root is a symlink", async () => {
+    await createRun(project, "good");
+    const runsRoot = path.join(project, ".picklab", "runs");
+    const moved = path.join(project, ".picklab", "runs-real");
+    await fs.promises.rename(runsRoot, moved);
+    await fs.promises.symlink(moved, runsRoot);
+
+    expect(await listRuns(project)).toEqual([]);
+  });
+
+  it("returns empty list when .picklab is a symlink pointing outside", async () => {
+    const outside = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-outside-"),
+    );
+    try {
+      // Build a real runs tree (with a run) outside the project, then point
+      // the project's `.picklab` at it via a symlink.
+      await createRun(outside, "leak");
+      await fs.promises.symlink(
+        path.join(outside, ".picklab"),
+        path.join(project, ".picklab"),
+      );
+      expect(await listRuns(project)).toEqual([]);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
 });

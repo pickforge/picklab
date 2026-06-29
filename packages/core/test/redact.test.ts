@@ -28,6 +28,16 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("masks values wrapped in or containing angle brackets", () => {
+    expect(redactSecrets("token=<session-secret>")).toBe("token=[REDACTED]");
+    expect(redactSecrets("authorization=Bearer <session-secret>")).toBe(
+      "authorization=[REDACTED]",
+    );
+    expect(redactSecrets("Authorization: Bearer <secret>")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
+
   it("masks GitHub tokens", () => {
     const token = "ghp_" + "a1B2".repeat(9);
     expect(redactSecrets(`saw ${token} in logs`)).toBe(
@@ -45,6 +55,23 @@ describe("redactSecrets", () => {
     expect(redactSecrets("id AKIAIOSFODNN7EXAMPLE used")).toBe(
       "id [REDACTED] used",
     );
+  });
+
+  it("redacts secrets in one-line XML without corrupting structure", () => {
+    const token = "ghp_" + "a".repeat(36);
+    const xml = `<?xml version="1.0"?><hierarchy rotation="0"><node text="token=${token}" /></hierarchy>`;
+    const out = redactSecrets(xml);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(token);
+    expect(out).toContain("</hierarchy>");
+    expect(out).toContain("/>");
+  });
+
+  it("preserves quote delimiters for quoted XML attributes", () => {
+    expect(redactSecrets('<node password="false" text="ok" />')).toBe(
+      '<node password="[REDACTED]" text="ok" />',
+    );
+    expect(redactSecrets("token='abc'")).toBe("token='[REDACTED]'");
   });
 
   it("leaves non-secrets untouched", () => {

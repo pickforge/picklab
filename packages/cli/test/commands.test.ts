@@ -98,7 +98,7 @@ function fakeAdbEnv(): { env: Record<string, string>; adbLog: string } {
     'case "$*" in',
     "  *\"screencap -p\"*) printf '\\211PNG\\r\\n\\032\\n' ;;",
     '  *"uiautomator dump"*) echo "UI hierchary dumped to: /sdcard/picklab-ui.xml" ;;',
-    "  *\"cat /sdcard/picklab-ui.xml\"*) printf '<?xml version=\"1.0\"?><hierarchy rotation=\"0\"></hierarchy>' ;;",
+    `  *"cat /sdcard/picklab-ui.xml"*) printf '<?xml version="1.0"?><hierarchy rotation="0"><node text="token=${PLANTED_TOKEN}" /></hierarchy>' ;;`,
     `  *"logcat -d"*) printf 'I/Auth( 123): authToken=${PLANTED_TOKEN}\\nI/App( 123): started\\n' ;;`,
     '  *"install -r"*) echo Success ;;',
     '  *monkey*) echo "Events injected: 1" ;;',
@@ -576,7 +576,7 @@ describe("picklab android (fake adb)", () => {
     ]);
   });
 
-  it("dumps the ui tree to stdout and to a file", async () => {
+  it("dumps the ui tree to stdout and to a file with secrets redacted", async () => {
     const { env, adbLog } = fakeAdbEnv();
     const result = await runCli(
       ["android", "ui-tree", "--serial", FAKE_SERIAL],
@@ -584,6 +584,19 @@ describe("picklab android (fake adb)", () => {
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("<hierarchy");
+    expect(result.stdout).toContain("</hierarchy>");
+    expect(result.stdout).toContain("[REDACTED]");
+    expect(result.stdout).not.toContain(PLANTED_TOKEN);
+
+    const json = await runCli(
+      ["android", "ui-tree", "--serial", FAKE_SERIAL, "--json"],
+      env,
+    );
+    expect(json.code).toBe(0);
+    const jsonReport = parseJson(json);
+    expect(jsonReport.xml).toContain("[REDACTED]");
+    expect(jsonReport.xml).toContain("</hierarchy>");
+    expect(jsonReport.xml).not.toContain(PLANTED_TOKEN);
 
     const out = path.join(tmpDir, "ui.xml");
     const fileResult = await runCli(
@@ -592,9 +605,16 @@ describe("picklab android (fake adb)", () => {
     );
     expect(fileResult.code).toBe(0);
     expect(parseJson(fileResult).path).toBe(out);
-    expect(fs.readFileSync(out, "utf8")).toContain("<hierarchy");
+    const fileContents = fs.readFileSync(out, "utf8");
+    expect(fileContents).toContain("<hierarchy");
+    expect(fileContents).toContain("</hierarchy>");
+    expect(fileContents).toContain("[REDACTED]");
+    expect(fileContents).not.toContain(PLANTED_TOKEN);
 
     expect(adbLogLines(adbLog)).toEqual([
+      `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} exec-out cat /sdcard/picklab-ui.xml`,
+      `-s ${FAKE_SERIAL} shell rm -f /sdcard/picklab-ui.xml`,
       `-s ${FAKE_SERIAL} shell uiautomator dump /sdcard/picklab-ui.xml`,
       `-s ${FAKE_SERIAL} exec-out cat /sdcard/picklab-ui.xml`,
       `-s ${FAKE_SERIAL} shell rm -f /sdcard/picklab-ui.xml`,
@@ -653,6 +673,78 @@ describe("picklab android (fake adb)", () => {
       `-s ${FAKE_SERIAL} shell ls /sdcard`,
       "devices",
     ]);
+  });
+
+  it("fails closed on ambiguous default android sessions instead of running raw adb", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const projectDir = makeProjectDir();
+    const sessionsDir = path.join(env.PICKLAB_HOME, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    for (const [id, serial] of [
+      ["andr-11111111", "emulator-5554"],
+      ["andr-22222222", "emulator-5556"],
+    ]) {
+      fs.writeFileSync(
+        path.join(sessionsDir, `${id}.json`),
+        `${JSON.stringify({
+          id,
+          type: "android",
+          createdAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+          projectDir,
+          android: { avdName: "picklab-avd", serial, consolePort: 5554 },
+        })}\n`,
+      );
+    }
+    const result = await runCli(
+      [
+        "android",
+        "adb",
+        "--json",
+        "--project-dir",
+        projectDir,
+        "--",
+        "devices",
+      ],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect(report.errors.join("\n")).toContain(
+      "Multiple running android sessions",
+    );
+    expect(adbLogLines(adbLog)).toEqual([]);
+  });
+
+  it("fails closed when another project owns the only android session", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const ownerProject = makeProjectDir("owner");
+    const otherProject = makeProjectDir("other");
+    const sessionsDir = path.join(env.PICKLAB_HOME, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "andr-33333333.json"),
+      `${JSON.stringify({
+        id: "andr-33333333",
+        type: "android",
+        createdAt: "2026-06-09T12:00:00.000Z",
+        status: "running",
+        projectDir: ownerProject,
+        android: { avdName: "picklab-avd", serial: FAKE_SERIAL, consolePort: 5554 },
+      })}\n`,
+    );
+    const result = await runCli(
+      ["android", "adb", "--json", "--project-dir", otherProject, "--", "devices"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect(report.errors.join("\n")).toContain(
+      "other projects have running android sessions",
+    );
+    expect(adbLogLines(adbLog)).toEqual([]);
   });
 
   it("rejects --session together with --serial", async () => {

@@ -1,3 +1,4 @@
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { EnvLike } from "./paths.js";
 import { createRun, type RunHandle } from "./run.js";
@@ -65,6 +66,25 @@ export function requireDisplay(record: SessionRecord): string {
   return display;
 }
 
+async function realpathNearest(target: string): Promise<string> {
+  let probe = target;
+  while (true) {
+    try {
+      const real = await realpath(probe);
+      if (probe === target) {
+        return real;
+      }
+      return path.join(real, path.relative(probe, target));
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return target;
+      }
+      probe = parent;
+    }
+  }
+}
+
 export interface ScreenshotTarget {
   outPath: string;
   run?: RunHandle;
@@ -87,12 +107,49 @@ export async function resolveScreenshotTarget(
     throw new Error(opts.conflictError);
   }
   if (opts.out !== undefined) {
-    return {
-      outPath:
-        opts.outBaseDir === undefined
-          ? path.resolve(opts.out)
-          : path.resolve(opts.outBaseDir, opts.out),
-    };
+    if (opts.outBaseDir === undefined) {
+      return { outPath: path.resolve(opts.out) };
+    }
+    const base = path.resolve(opts.outBaseDir);
+    const outPath = path.resolve(base, opts.out);
+    const relative = path.relative(base, outPath);
+    if (
+      relative === "" ||
+      relative.startsWith("..") ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(
+        `Refusing to write screenshot outside the project directory: ${opts.out}`,
+      );
+    }
+    // Reject a dangling final symlink: realpathNearest cannot resolve a
+    // symlink whose target does not exist, so check lstat directly. A symlink
+    // here would be followed by the subsequent write, creating a file outside
+    // the base dir.
+    try {
+      const outStat = await lstat(outPath);
+      if (outStat.isSymbolicLink()) {
+        throw new Error(
+          `Refusing to write screenshot outside the project directory: ${opts.out}`,
+        );
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const realBase = await realpathNearest(base);
+    const realProbe = await realpathNearest(outPath);
+    const realRelative = path.relative(realBase, realProbe);
+    if (
+      realProbe !== realBase &&
+      (realRelative.startsWith("..") || path.isAbsolute(realRelative))
+    ) {
+      throw new Error(
+        `Refusing to write screenshot outside the project directory: ${opts.out}`,
+      );
+    }
+    return { outPath };
   }
   const run = await createRun(
     opts.projectDir,

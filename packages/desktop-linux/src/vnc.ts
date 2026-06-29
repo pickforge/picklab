@@ -44,6 +44,7 @@ export function buildVncArgs(opts: VncArgsOptions): string[] {
     opts.display,
     "-rfbport",
     String(opts.port),
+    "-localhost",
     "-forever",
     "-shared",
     "-nopw",
