@@ -38,6 +38,20 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("redacts only the credential and keeps trailing same-line fields", () => {
+    expect(
+      redactSecrets("authorization=Bearer <secret> status=200"),
+    ).toBe("authorization=[REDACTED] status=200");
+    expect(redactSecrets("password=hunter2 next=field")).toBe(
+      "password=[REDACTED] next=field",
+    );
+  });
+
+  it("redacts standalone bearer tokens", () => {
+    expect(redactSecrets("Bearer <secret>")).toBe("Bearer [REDACTED]");
+    expect(redactSecrets("Bearer abc123")).toBe("Bearer [REDACTED]");
+  });
+
   it("masks GitHub tokens", () => {
     const token = "ghp_" + "a1B2".repeat(9);
     expect(redactSecrets(`saw ${token} in logs`)).toBe(
