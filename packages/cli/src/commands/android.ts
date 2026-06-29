@@ -12,7 +12,7 @@ import {
   tap,
   typeText,
 } from "@pickforge/picklab-android";
-import { redactSecrets } from "@pickforge/picklab-core";
+import { listSessions, redactSecrets } from "@pickforge/picklab-core";
 import fs from "node:fs";
 import {
   captureToTarget,
@@ -247,17 +247,30 @@ export async function runAndroidAdb(
     if (opts.serial !== undefined || opts.session !== undefined) {
       ({ serial, sessionId } = await resolveAndroidTarget(opts));
     } else {
-      // Fall back to a raw, untargeted adb call only when there is simply no
-      // running android session. Ambiguous (multiple-session) or any other
-      // resolution failure must fail closed rather than guessing a device.
+      // Fall back to a raw, untargeted adb call only when there is genuinely no
+      // running android session anywhere under PICKLAB_HOME. If this project has
+      // no session but other projects do, fail closed rather than guessing a
+      // device another project owns. Ambiguous (multiple-session) or any other
+      // resolution failure also fails closed.
       const implicit = await resolveAndroidTarget(opts).then(
         (target) => target,
-        (error: unknown) => {
+        async (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
-          if (message.startsWith("No running android session")) {
-            return undefined;
+          if (!message.startsWith("No running android session")) {
+            throw error;
           }
-          throw error;
+          const running = (await listSessions()).filter(
+            (record) =>
+              record.type === "android" && record.status === "running",
+          );
+          if (running.length > 0) {
+            throw new Error(
+              "No running android session for this project, but other projects " +
+                "have running android sessions. Pass --session <id> or --serial " +
+                "<serial>, or run the command from the project that owns the session.",
+            );
+          }
+          return undefined;
         },
       );
       serial = implicit?.serial;

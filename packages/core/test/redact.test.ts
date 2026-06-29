@@ -28,6 +28,16 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("masks values wrapped in or containing angle brackets", () => {
+    expect(redactSecrets("token=<session-secret>")).toBe("token=[REDACTED]");
+    expect(redactSecrets("authorization=Bearer <session-secret>")).toBe(
+      "authorization=[REDACTED]",
+    );
+    expect(redactSecrets("Authorization: Bearer <secret>")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
+
   it("masks GitHub tokens", () => {
     const token = "ghp_" + "a1B2".repeat(9);
     expect(redactSecrets(`saw ${token} in logs`)).toBe(

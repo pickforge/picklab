@@ -717,6 +717,36 @@ describe("picklab android (fake adb)", () => {
     expect(adbLogLines(adbLog)).toEqual([]);
   });
 
+  it("fails closed when another project owns the only android session", async () => {
+    const { env, adbLog } = fakeAdbEnv();
+    const ownerProject = makeProjectDir("owner");
+    const otherProject = makeProjectDir("other");
+    const sessionsDir = path.join(env.PICKLAB_HOME, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "andr-33333333.json"),
+      `${JSON.stringify({
+        id: "andr-33333333",
+        type: "android",
+        createdAt: "2026-06-09T12:00:00.000Z",
+        status: "running",
+        projectDir: ownerProject,
+        android: { avdName: "picklab-avd", serial: FAKE_SERIAL, consolePort: 5554 },
+      })}\n`,
+    );
+    const result = await runCli(
+      ["android", "adb", "--json", "--project-dir", otherProject, "--", "devices"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.ok).toBe(false);
+    expect(report.errors.join("\n")).toContain(
+      "other projects have running android sessions",
+    );
+    expect(adbLogLines(adbLog)).toEqual([]);
+  });
+
   it("rejects --session together with --serial", async () => {
     const { env } = fakeAdbEnv();
     const result = await runCli(
