@@ -31,6 +31,15 @@ jobs:
 
       - run: bun run typecheck
 
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            imagemagick \
+            xdotool \
+            xterm \
+            xvfb
+
       - run: bun run test
 
       - run: bun run build

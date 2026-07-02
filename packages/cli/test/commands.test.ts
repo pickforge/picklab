@@ -413,7 +413,17 @@ describe("picklab desktop", () => {
       );
 
       const launched = await runCli(
-        ["desktop", "launch", "--json", "--wait-window", "xterm", "--", "xterm"],
+        [
+          "desktop",
+          "launch",
+          "--json",
+          "--wait-window",
+          "xterm",
+          "--",
+          "xterm",
+          "-xrm",
+          "XTerm.vt100.allowTitleOps: false",
+        ],
         env,
         tmpDir,
       );

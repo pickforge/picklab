@@ -337,7 +337,12 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
         const app = await launchApp({
           display: session.display,
           command: "xterm",
-          args: ["-T", "picklab-itest"],
+          args: [
+            "-xrm",
+            "XTerm.vt100.allowTitleOps: false",
+            "-T",
+            "picklab-itest",
+          ],
           logDir: session.logDir,
         });
         const win = await waitForWindow(
@@ -373,7 +378,12 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
         await launchApp({
           display: session.display,
           command: "xterm",
-          args: ["-T", "picklab c++ [itest]"],
+          args: [
+            "-xrm",
+            "XTerm.vt100.allowTitleOps: false",
+            "-T",
+            "picklab c++ [itest]",
+          ],
           logDir: session.logDir,
         });
         const win = await waitForWindow(
