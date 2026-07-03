@@ -1,6 +1,6 @@
 {
   "name": "@pickforge/picklab",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Native app and Android emulator automation for AI coding agents",
   "type": "module",
   "license": "MIT",
@@ -37,8 +37,7 @@
   ],
   "scripts": {
     "build": "tsup",
-    "prepack": "node -e \"const fs=require('node:fs');fs.copyFileSync('../../README.md','README.md');fs.copyFileSync('../../LICENSE','LICENSE')\"",
-    "postpack": "node -e \"const fs=require('node:fs');fs.rmSync('README.md',{force:true});fs.rmSync('LICENSE',{force:true})\""
+    "prepack": "node -e \"const fs=require('node:fs');fs.copyFileSync('../../README.md','README.md');fs.copyFileSync('../../LICENSE','LICENSE')\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
