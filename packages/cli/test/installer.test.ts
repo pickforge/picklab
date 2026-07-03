@@ -9,6 +9,11 @@ import { ensureCliBuilt } from "./build-once.js";
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const cliPackageDir = path.join(repoRoot, "packages", "cli");
 const installScript = path.join(repoRoot, "scripts", "install.sh");
+const cliVersion = (
+  JSON.parse(
+    fs.readFileSync(path.join(cliPackageDir, "package.json"), "utf8"),
+  ) as { version: string }
+).version;
 
 const NETWORK_TIMEOUT = 300_000;
 
@@ -126,14 +131,14 @@ describe("install.sh", () => {
       });
       const result = await run("sh", [installScript], { cwd: dir, env });
       expect(result.code, describeFailure(result)).toBe(0);
-      expect(result.stdout).toContain("picklab 0.1.0 installed.");
+      expect(result.stdout).toContain(`picklab ${cliVersion} installed.`);
       expect(result.stdout).toContain("picklab agents install");
       expect(result.stdout).toContain("picklab init --profile");
 
       const binary = path.join(prefix, "bin", "picklab");
       const version = await run(binary, ["--version"], { env: baseEnv(home) });
       expect(version.code, describeFailure(version)).toBe(0);
-      expect(version.stdout.trim()).toBe("0.1.0");
+      expect(version.stdout.trim()).toBe(cliVersion);
     },
     NETWORK_TIMEOUT,
   );
@@ -186,7 +191,7 @@ describe("install.sh", () => {
       });
       const result = await run("sh", [installScript], { cwd: dir, env });
       expect(result.code, describeFailure(result)).toBe(0);
-      expect(result.stdout).toContain("picklab 0.1.0 installed.");
+      expect(result.stdout).toContain(`picklab ${cliVersion} installed.`);
 
       const version = await run(
         path.join(bunInstall, "bin", "picklab"),
@@ -194,7 +199,7 @@ describe("install.sh", () => {
         { env: baseEnv(home) },
       );
       expect(version.code, describeFailure(version)).toBe(0);
-      expect(version.stdout.trim()).toBe("0.1.0");
+      expect(version.stdout.trim()).toBe(cliVersion);
     },
     NETWORK_TIMEOUT,
   );
@@ -236,7 +241,7 @@ describe("packed tarball execution", () => {
         { cwd: dir, env: baseEnv(home) },
       );
       expect(result.code, describeFailure(result)).toBe(0);
-      expect(result.stdout.trim()).toContain("0.1.0");
+      expect(result.stdout.trim()).toContain(cliVersion);
     },
     NETWORK_TIMEOUT,
   );
@@ -294,7 +299,7 @@ describe("packed tarball execution", () => {
         { cwd: project, env },
       );
       expect(picklab.code, describeFailure(picklab)).toBe(0);
-      expect(picklab.stdout.trim()).toBe("0.1.0");
+      expect(picklab.stdout.trim()).toBe(cliVersion);
 
       const mcpBin = path.join(project, "node_modules", ".bin", "picklab-mcp");
       expect(fs.existsSync(mcpBin)).toBe(true);
