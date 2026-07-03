@@ -89,7 +89,11 @@ verify_install() {
   if ! command -v picklab >/dev/null 2>&1; then
     echo "note: ${bin_dir} is not on your PATH; add it to run \"picklab\" directly."
   fi
-  echo "Next: run \"picklab init\" inside your project."
+  echo "Next steps:"
+  echo "  1. picklab agents install <codex|claude-code|cursor>  # register the MCP server"
+  echo "  2. picklab init --profile <flutter-desktop|android|desktop+android>  # inside your project"
+  echo "  3. picklab doctor  # verify dependencies; --fix repairs what it can"
+  echo "Agent-driven setup guide: https://github.com/pickforge/picklab/blob/main/INSTALL.md"
 }
 
 main() {

@@ -240,5 +240,11 @@ function emit(report: InitReport, opts: InitCliOptions): void {
         ? `[dry-run] init complete for profile ${report.profile} (no changes made)`
         : `Initialized PickLab project (profile: ${report.profile}) in ${report.projectDir}`,
     );
+    if (!report.dryRun) {
+      console.log(
+        "Next: picklab agents install <codex|claude-code|cursor> to register " +
+          "the MCP server, then picklab doctor to verify dependencies.",
+      );
+    }
   }
 }

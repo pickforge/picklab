@@ -127,7 +127,8 @@ describe("install.sh", () => {
       const result = await run("sh", [installScript], { cwd: dir, env });
       expect(result.code, describeFailure(result)).toBe(0);
       expect(result.stdout).toContain("picklab 0.1.0 installed.");
-      expect(result.stdout).toContain('run "picklab init"');
+      expect(result.stdout).toContain("picklab agents install");
+      expect(result.stdout).toContain("picklab init --profile");
 
       const binary = path.join(prefix, "bin", "picklab");
       const version = await run(binary, ["--version"], { env: baseEnv(home) });

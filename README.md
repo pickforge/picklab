@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/picklab-lockup-horizontal.svg" alt="PickLab" width="560">
+  <img src="https://raw.githubusercontent.com/pickforge/picklab/main/assets/brand/picklab-lockup-horizontal.svg" alt="PickLab" width="560">
 </p>
 
 # PickLab
@@ -11,6 +11,14 @@ PickForge builds the app. PickLab lets agents see, run, and test it. PickArena m
 Local-first. Open source. Built for people who ship.
 
 ## Install
+
+Let your coding agent do the whole setup — paste this into its prompt:
+
+```text
+Install and configure PickLab by following https://raw.githubusercontent.com/pickforge/picklab/main/INSTALL.md
+```
+
+Or install by hand:
 
 ```sh
 curl -fsSL https://pickforge.dev/picklab/install.sh | sh
@@ -55,7 +63,7 @@ Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manif
 Each session gets its own isolated display or emulator, so several agents and projects can run labs side by side. When a command or tool is called without an explicit session id, the default resolves per project: only running sessions created for the same project directory are considered. Pass `session` ids (CLI: `--session <id>`) to target a specific lab, including one belonging to another project.
 
 <p align="center">
-  <img src="assets/brand/picklab-run-lab-mock.svg" alt="PICKLAB · RUN LAB — desktop session, Android emulator, live screenshots, logs, and agent terminal" width="900">
+  <img src="https://raw.githubusercontent.com/pickforge/picklab/main/assets/brand/picklab-run-lab-mock.svg" alt="PICKLAB · RUN LAB — desktop session, Android emulator, live screenshots, logs, and agent terminal" width="900">
 </p>
 
 ## MCP setup for agents
@@ -160,6 +168,6 @@ MIT — see [LICENSE](LICENSE).
 
 <p align="center">
   <a href="https://pickforge.dev">
-    <img src="assets/brand/pickforge-studio-footer.svg" alt="Pickforge Studio — local-first, open source, built for people who ship" width="560">
+    <img src="https://raw.githubusercontent.com/pickforge/picklab/main/assets/brand/pickforge-studio-footer.svg" alt="Pickforge Studio — local-first, open source, built for people who ship" width="560">
   </a>
 </p>
