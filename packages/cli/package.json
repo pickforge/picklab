@@ -4,6 +4,27 @@
   "description": "Native app and Android emulator automation for AI coding agents",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pickforge/picklab.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/pickforge/picklab#readme",
+  "bugs": "https://github.com/pickforge/picklab/issues",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "android",
+    "emulator",
+    "xvfb",
+    "automation",
+    "testing",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "flutter"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -15,7 +36,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepack": "node -e \"const fs=require('node:fs');fs.copyFileSync('../../README.md','README.md');fs.copyFileSync('../../LICENSE','LICENSE')\"",
+    "postpack": "node -e \"const fs=require('node:fs');fs.rmSync('README.md',{force:true});fs.rmSync('LICENSE',{force:true})\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
