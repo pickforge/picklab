@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, sessionsDir, type EnvLike } from "./paths.js";
+import { isPidAlive, stopPid } from "./proc.js";
 
 export type SessionType = "desktop" | "android" | "desktop+android";
 export type SessionStatus = "starting" | "running" | "stopped" | "error";
@@ -39,6 +40,10 @@ export interface CreateSessionInput {
   android?: AndroidSessionInfo;
   meta?: Record<string, unknown>;
 }
+
+export type SessionLivenessCheck = (
+  record: SessionRecord,
+) => boolean | Promise<boolean>;
 
 const ID_PREFIXES: Record<SessionType, string> = {
   desktop: "desk",
@@ -174,6 +179,66 @@ export async function listSessions(
   }
   records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return records;
+}
+
+export function isSessionProcessAlive(record: SessionRecord): boolean {
+  if (record.type === "desktop") {
+    return (
+      record.desktop?.xvfbPid !== undefined &&
+      isPidAlive(record.desktop.xvfbPid)
+    );
+  }
+  if (record.type === "android") {
+    return (
+      record.android?.emulatorPid !== undefined &&
+      isPidAlive(record.android.emulatorPid)
+    );
+  }
+
+  const alive = [
+    record.desktop?.xvfbPid === undefined
+      ? false
+      : isPidAlive(record.desktop.xvfbPid),
+    record.android?.emulatorPid === undefined
+      ? false
+      : isPidAlive(record.android.emulatorPid),
+  ];
+  return alive.some(Boolean);
+}
+
+export async function reapDeadRunningSessions(
+  env: EnvLike = process.env,
+  isAlive: SessionLivenessCheck = isSessionProcessAlive,
+): Promise<SessionRecord[]> {
+  const reaped: SessionRecord[] = [];
+  for (const record of await listSessions(env)) {
+    if (record.status !== "running") continue;
+    if (await isAlive(record)) continue;
+    await stopRecordedPids(record);
+    await destroySessionRecord(record.id, env);
+    reaped.push(record);
+  }
+  return reaped;
+}
+
+async function stopRecordedPids(record: SessionRecord): Promise<void> {
+  const pids = new Set(
+    [
+      record.desktop?.xvfbPid,
+      record.desktop?.vncPid,
+      record.android?.emulatorPid,
+    ].filter((pid): pid is number => pid !== undefined),
+  );
+  for (const pid of pids) {
+    if (!isPidAlive(pid)) {
+      continue;
+    }
+    try {
+      await stopPid(pid);
+    } catch {
+      continue;
+    }
+  }
 }
 
 export async function updateSession(

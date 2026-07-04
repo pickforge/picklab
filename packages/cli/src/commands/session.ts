@@ -122,6 +122,9 @@ async function sessionStatusEntry(
   };
   if (record.type === "desktop") {
     const status = await getDesktopSessionStatus(record.id);
+    if (record.status === "running" && !status.xvfbAlive) {
+      entry.status = "dead";
+    }
     entry.desktop = {
       ...record.desktop,
       xvfbAlive: status.xvfbAlive,
@@ -130,6 +133,9 @@ async function sessionStatusEntry(
     };
   } else if (record.type === "android") {
     const status = await getAndroidSessionStatus(record.id);
+    if (record.status === "running" && !status.emulatorAlive) {
+      entry.status = "dead";
+    }
     entry.android = {
       ...record.android,
       emulatorAlive: status.emulatorAlive,

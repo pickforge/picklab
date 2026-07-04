@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { getSession, isPidAlive, type EnvLike } from "@pickforge/picklab-core";
+import {
+  createSession,
+  getSession,
+  isPidAlive,
+  updateSession,
+  type EnvLike,
+} from "@pickforge/picklab-core";
 import {
   androidSessionLogDir,
   consolePortLockPath,
@@ -139,6 +145,52 @@ describe("createAndroidSession", () => {
         env: { PATH: "" },
       }),
     ).rejects.toThrow(/emulator binary not found[\s\S]*sdkmanager "emulator"/);
+  });
+
+  it("removes stale running records before creating a new session", async () => {
+    const sdk = makeFakeSdk({ bootCompleted: "1" });
+    const isolatedHome = path.join(tmpRoot, "home-reap-android");
+    const isolatedEnv: EnvLike = {
+      ...process.env,
+      PICKLAB_HOME: isolatedHome,
+    };
+    const stale = await createSession(
+      { type: "android", projectDir, android: { avdName: "old-avd" } },
+      isolatedEnv,
+    );
+    await updateSession(
+      stale.id,
+      {
+        status: "running",
+        android: {
+          avdName: "old-avd",
+          serial: "emulator-5590",
+          emulatorPid: 4_194_304,
+          consolePort: 5590,
+        },
+      },
+      isolatedEnv,
+    );
+
+    const session = await createAndroidSession({
+      projectDir,
+      registryEnv: isolatedEnv,
+      sdk,
+      port: 5560,
+      env: { PATH: "" },
+      bootPollIntervalMs: 20,
+      bootTimeoutMs: 5_000,
+    });
+    try {
+      expect(await getSession(stale.id, isolatedEnv)).toBeUndefined();
+      expect(await getSession(session.id, isolatedEnv)).toBeDefined();
+    } finally {
+      await destroyAndroidSession(session.id, isolatedEnv, {
+        sdk,
+        env: { PATH: "" },
+        timeoutMs: 300,
+      });
+    }
   });
 });
 

@@ -132,6 +132,38 @@ describe("evaluateChecks", () => {
     );
   });
 
+  it("hints the exact sdkmanager command when command-line tools are missing", () => {
+    const tools = {
+      sdkmanager: null,
+      avdmanager: null,
+      emulator: "/sdk/emulator/emulator",
+      adb: "/sdk/platform-tools/adb",
+    };
+    const sdkmanagerCheck = checkById(
+      snapshot({ android: { tools } }),
+      "sdkmanager",
+    );
+    const avdmanagerCheck = checkById(
+      snapshot({ android: { tools } }),
+      "avdmanager",
+    );
+
+    expect(sdkmanagerCheck.status).toBe("missing");
+    expect(sdkmanagerCheck.hint).toContain('sdkmanager "cmdline-tools;latest"');
+    expect(avdmanagerCheck.status).toBe("missing");
+    expect(avdmanagerCheck.hint).toContain('sdkmanager "cmdline-tools;latest"');
+  });
+
+  it("hints exact environment exports when the Android SDK root is missing", () => {
+    const check = checkById(
+      snapshot({ android: { sdkRoot: null } }),
+      "android-sdk",
+    );
+    expect(check.status).toBe("missing");
+    expect(check.hint).toContain('export ANDROID_HOME="$HOME/Android/Sdk"');
+    expect(check.hint).toContain('export ANDROID_SDK_ROOT="$ANDROID_HOME"');
+  });
+
   it("flags a missing AVD with a setup hint", () => {
     const check = checkById(
       snapshot({ android: { avds: [], avdExists: false } }),
@@ -141,9 +173,10 @@ describe("evaluateChecks", () => {
     expect(check.hint).toContain("picklab setup android --create-avd");
   });
 
-  it("flags a missing lab user with a setup hint", () => {
+  it("treats a missing lab user as an optional warning", () => {
     const check = checkById(snapshot({ labUser: { exists: false } }), "lab-user");
-    expect(check.status).toBe("missing");
+    expect(check.status).toBe("warn");
+    expect(check.hint).toContain("optional until session isolation ships");
     expect(check.hint).toContain("picklab setup lab-user");
   });
 });
@@ -156,12 +189,12 @@ describe("requiredChecksForProfile", () => {
     ]);
   });
 
-  it("requires desktop tooling and the lab user for flutter-desktop", () => {
+  it("requires desktop tooling for flutter-desktop", () => {
     const ids = requiredChecksForProfile("flutter-desktop");
     expect(ids).toContain("xvfb");
     expect(ids).toContain("xdotool");
     expect(ids).toContain("screenshot-tool");
-    expect(ids).toContain("lab-user");
+    expect(ids).not.toContain("lab-user");
     expect(ids).not.toContain("android-sdk");
     expect(ids).not.toContain("x11vnc");
   });
@@ -187,13 +220,14 @@ describe("requiredChecksForProfile", () => {
     const ids = requiredChecksForProfile("desktop+android");
     expect(ids).toContain("xvfb");
     expect(ids).toContain("avd");
-    expect(ids).toContain("lab-user");
+    expect(ids).not.toContain("lab-user");
   });
 
-  it("requires the lab user only for desktop profiles, not android", () => {
+  it("does not require the lab user for any profile", () => {
+    expect(PROFILE_REQUIRED_CHECKS.generic).not.toContain("lab-user");
     expect(PROFILE_REQUIRED_CHECKS.android).not.toContain("lab-user");
-    expect(PROFILE_REQUIRED_CHECKS["flutter-desktop"]).toContain("lab-user");
-    expect(PROFILE_REQUIRED_CHECKS["desktop+android"]).toContain("lab-user");
+    expect(PROFILE_REQUIRED_CHECKS["flutter-desktop"]).not.toContain("lab-user");
+    expect(PROFILE_REQUIRED_CHECKS["desktop+android"]).not.toContain("lab-user");
   });
 
   it("covers every profile", () => {

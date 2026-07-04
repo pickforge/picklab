@@ -115,15 +115,15 @@ describe("emulator serial and port helpers", () => {
     expect(() => emulatorSerial(5553)).toThrow(/Invalid console port/);
   });
 
-  it("picks the first free even console port", () => {
-    expect(pickConsolePort([])).toBe(5554);
+  it("picks the first free automatic even console port", () => {
+    expect(pickConsolePort([])).toBe(5556);
     expect(pickConsolePort(["emulator-5554", "emulator-5556"])).toBe(5558);
     expect(pickConsolePort(["emulator-5554", "0123456789ABCDEF"])).toBe(5556);
   });
 
-  it("throws when all console ports are taken", () => {
+  it("throws when all automatic console ports are taken", () => {
     const used: string[] = [];
-    for (let port = 5554; port <= 5682; port += 2) {
+    for (let port = 5556; port <= 5682; port += 2) {
       used.push(`emulator-${port}`);
     }
     expect(() => pickConsolePort(used)).toThrow(/No free emulator console port/);

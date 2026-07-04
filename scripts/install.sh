@@ -32,7 +32,8 @@ resolve_runtime() {
 
 check_node_version() {
   if ! command -v node >/dev/null 2>&1; then
-    echo "error: npm installs need Node.js >= 20, but node is not on PATH" >&2
+    echo "error: PickLab itself runs on Node.js >= 20, but node is not on PATH." >&2
+    echo "Install Node.js 20+ (with or without bun) and re-run this script." >&2
     exit 1
   fi
   node_version="$(node -v)"
@@ -44,9 +45,22 @@ check_node_version() {
       ;;
   esac
   if [ "${node_major}" -lt 20 ]; then
-    echo "error: PickLab needs Node.js >= 20 (found ${node_version})" >&2
+    echo "error: PickLab itself runs on Node.js >= 20 (found ${node_version})." >&2
+    echo "Install Node.js 20+ (with or without bun) and re-run this script." >&2
     exit 1
   fi
+}
+
+resolve_bun_bin_dir() {
+  bun_bin_dir=""
+  if bun_bin_dir="$(bun pm bin -g 2>/dev/null)"; then
+    bun_bin_dir="$(printf '%s' "${bun_bin_dir}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ "${bun_bin_dir}" != "" ]; then
+      bin_dir="${bun_bin_dir}"
+      return
+    fi
+  fi
+  bin_dir="${BUN_INSTALL:-${HOME}/.bun}/bin"
 }
 
 install_with_bun() {
@@ -59,7 +73,7 @@ install_with_bun() {
     echo "error: bun add --global failed (see output above)." >&2
     exit 1
   fi
-  bin_dir="${BUN_INSTALL:-${HOME}/.bun}/bin"
+  resolve_bun_bin_dir
 }
 
 install_with_npm() {
@@ -67,7 +81,6 @@ install_with_npm() {
     echo "error: PICKLAB_INSTALL_RUNTIME=npm but npm is not installed" >&2
     exit 1
   fi
-  check_node_version
   echo "Installing ${package_spec} with npm..."
   if ! npm install --global "${package_spec}"; then
     echo "error: npm install --global failed (see output above)." >&2
@@ -86,8 +99,12 @@ verify_install() {
   fi
   version="$("${picklab_bin}" --version)"
   echo "picklab ${version} installed."
-  if ! command -v picklab >/dev/null 2>&1; then
+  resolved="$(command -v picklab 2>/dev/null || true)"
+  if [ "${resolved}" = "" ]; then
     echo "note: ${bin_dir} is not on your PATH; add it to run \"picklab\" directly."
+  elif [ "${resolved}" != "${picklab_bin}" ]; then
+    echo "note: \"picklab\" on PATH is ${resolved}; this install wrote ${picklab_bin}."
+    echo "note: if those differ, remove the other install or reorder PATH."
   fi
   echo "Next steps:"
   echo "  1. picklab agents install <codex|claude-code|cursor>  # register the MCP server"
@@ -98,6 +115,7 @@ verify_install() {
 
 main() {
   resolve_package_spec
+  check_node_version
   resolve_runtime
 
   case "${runtime}" in

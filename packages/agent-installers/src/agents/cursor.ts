@@ -5,6 +5,7 @@ import {
   mergeMcpServerIntoJsonFile,
   removeMcpServerFromJsonFile,
 } from "../jsonConfig.js";
+import { mcpServerEntry } from "../snippet.js";
 import type { ChangeResult, RegistrationState } from "../types.js";
 import { homeDir } from "./home.js";
 
@@ -15,7 +16,7 @@ export function cursorConfigPath(env: EnvLike = process.env): string {
 export async function cursorIsRegistered(
   configPath: string,
 ): Promise<RegistrationState> {
-  return jsonFileMcpServerState(configPath);
+  return jsonFileMcpServerState(configPath, { expected: mcpServerEntry() });
 }
 
 export async function linkCursor(configPath: string): Promise<ChangeResult> {

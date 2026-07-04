@@ -43,6 +43,9 @@ export interface AndroidEnvironment {
 
 const SYSTEM_IMAGE_ID_PATTERN = /^system-images;[^;\s]+;[^;\s]+;[^;\s]+$/;
 
+const SDK_PACKAGE_ID_PATTERN =
+  /^(?:platform-tools|emulator|cmdline-tools;(?:latest|\d+(?:\.\d+)*))$/;
+
 const CMDLINE_TOOLS_VERSION_PATTERN = /^\d+(\.\d+)*$/;
 
 export function commonSdkPaths(homeDir: string = os.homedir()): string[] {
@@ -83,6 +86,8 @@ export function missingSdkMessage(): string {
     "Android SDK not found. Set ANDROID_HOME (or ANDROID_SDK_ROOT) to your SDK " +
     "directory, or install it to one of: " +
     `${commonSdkPaths().join(", ")}. ` +
+    'Set it with: export ANDROID_HOME="$HOME/Android/Sdk"; ' +
+    'export ANDROID_SDK_ROOT="$ANDROID_HOME". ' +
     "See https://developer.android.com/studio#command-line for command-line tools."
   );
 }
@@ -237,6 +242,13 @@ export function systemImageInstalled(sdk: string, packageId: string): boolean {
 
 export function sdkmanagerInstallCommand(packageId: string): string {
   assertSystemImageId(packageId);
+  return `sdkmanager "${packageId}"`;
+}
+
+export function sdkmanagerPackageInstallCommand(packageId: string): string {
+  if (!SDK_PACKAGE_ID_PATTERN.test(packageId)) {
+    throw new Error(`Invalid Android SDK package "${packageId}"`);
+  }
   return `sdkmanager "${packageId}"`;
 }
 

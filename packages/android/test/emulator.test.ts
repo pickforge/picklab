@@ -161,6 +161,36 @@ describe("console port reservation registry", () => {
     }
   });
 
+  it("accepts 5554 when explicitly requested", async () => {
+    const sdk = makeFakeSdk(BOOTING_ADB_SCRIPT);
+    const registryEnv = makeRegistryEnv();
+    const handle = await startEmulator({
+      avdName: "picklab-avd",
+      sdk,
+      port: 5554,
+      logDir: path.join(tmpRoot, "emu-explicit-5554"),
+      env: { PATH: "" },
+      registryEnv,
+      bootTimeoutMs: 5_000,
+      bootPollIntervalMs: 20,
+    });
+    try {
+      expect(handle.serial).toBe("emulator-5554");
+      expect(handle.consolePort).toBe(5554);
+      expect(fs.existsSync(consolePortLockPath(5554, registryEnv))).toBe(true);
+    } finally {
+      await stopEmulator({
+        serial: handle.serial,
+        pid: handle.pid,
+        sdk,
+        env: { PATH: "" },
+        registryEnv,
+        timeoutMs: 300,
+      });
+    }
+    expect(fs.existsSync(consolePortLockPath(5554, registryEnv))).toBe(false);
+  }, 20_000);
+
   it("reclaims a stale reservation owned by a dead process", async () => {
     const registryEnv = makeRegistryEnv();
     const stale = await deadPid();

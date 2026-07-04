@@ -6,6 +6,7 @@ import {
   mergeMcpServerIntoJsonFile,
   removeMcpServerFromJsonFile,
 } from "../jsonConfig.js";
+import { mcpServerEntry } from "../snippet.js";
 import type { ChangeResult, RegistrationState } from "../types.js";
 import { homeDir } from "./home.js";
 
@@ -51,10 +52,98 @@ function commandFailure(
   );
 }
 
+function isAlreadyRegisteredAddFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  return (
+    output.includes("mcp") &&
+    output.includes("picklab") &&
+    output.includes("already exists")
+  );
+}
+
+function isNotFoundRemoveFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  return output.includes("not found") || output.includes("no mcp server");
+}
+
+async function removeClaudeMcpServer(
+  claudeBin: string,
+  env: EnvLike,
+): Promise<boolean> {
+  const result = await runCommand(
+    claudeBin,
+    ["mcp", "remove", "--scope", "user", "picklab"],
+    { env: { ...env }, cleanEnv: true },
+  );
+  if (result.ok) {
+    return true;
+  }
+  if (isNotFoundRemoveFailure(result)) {
+    return false;
+  }
+  throw commandFailure("remove", result);
+}
+
+async function addClaudeMcpServer(
+  claudeBin: string,
+  env: EnvLike,
+): Promise<{ code: number | null; ok: boolean; stdout: string; stderr: string }> {
+  return runCommand(
+    claudeBin,
+    [
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab",
+      "--",
+      "picklab",
+      "mcp",
+      "serve",
+    ],
+    { env: { ...env }, cleanEnv: true },
+  );
+}
+
+async function addClaudeMcpServerOrRepair(
+  claudeBin: string,
+  configPath: string,
+  env: EnvLike,
+): Promise<ChangeResult> {
+  const result = await addClaudeMcpServer(claudeBin, env);
+  if (result.ok) {
+    return { configPath, changed: true };
+  }
+  if (!isAlreadyRegisteredAddFailure(result)) {
+    throw commandFailure("add", result);
+  }
+  if ((await claudeCodeIsRegistered(configPath)) === true) {
+    return { configPath, changed: false };
+  }
+  await removeClaudeMcpServer(claudeBin, env);
+  const retry = await addClaudeMcpServer(claudeBin, env);
+  if (retry.ok) {
+    return { configPath, changed: true };
+  }
+  if (
+    isAlreadyRegisteredAddFailure(retry) &&
+    (await claudeCodeIsRegistered(configPath)) === true
+  ) {
+    return { configPath, changed: false };
+  }
+  throw commandFailure("add", retry);
+}
+
 export async function claudeCodeIsRegistered(
   configPath: string,
 ): Promise<RegistrationState> {
-  return jsonFileMcpServerState(configPath);
+  return jsonFileMcpServerState(configPath, { expected: mcpServerEntry() });
 }
 
 export async function linkClaudeCode(
@@ -63,25 +152,13 @@ export async function linkClaudeCode(
 ): Promise<ChangeResult> {
   const claudeBin = findClaudeBinary(env);
   if (claudeBin !== undefined) {
-    const result = await runCommand(
-      claudeBin,
-      [
-        "mcp",
-        "add",
-        "--scope",
-        "user",
-        "picklab",
-        "--",
-        "picklab",
-        "mcp",
-        "serve",
-      ],
-      { env: { ...env }, cleanEnv: true },
-    );
-    if (!result.ok) {
-      throw commandFailure("add", result);
+    if ((await claudeCodeIsRegistered(configPath)) === true) {
+      return { configPath, changed: false };
     }
-    return { configPath, changed: true };
+    if ((await jsonFileMcpServerState(configPath)) === true) {
+      await removeClaudeMcpServer(claudeBin, env);
+    }
+    return addClaudeMcpServerOrRepair(claudeBin, configPath, env);
   }
   let exists = false;
   try {
@@ -111,19 +188,7 @@ export async function unlinkClaudeCode(
 ): Promise<ChangeResult> {
   const claudeBin = findClaudeBinary(env);
   if (claudeBin !== undefined) {
-    const result = await runCommand(
-      claudeBin,
-      ["mcp", "remove", "--scope", "user", "picklab"],
-      { env: { ...env }, cleanEnv: true },
-    );
-    if (result.ok) {
-      return { configPath, changed: true };
-    }
-    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-    if (output.includes("not found") || output.includes("no mcp server")) {
-      return { configPath, changed: false };
-    }
-    throw commandFailure("remove", result);
+    return { configPath, changed: await removeClaudeMcpServer(claudeBin, env) };
   }
   const result = await removeMcpServerFromJsonFile(configPath);
   return result.changed ? { ...result, warning: DIRECT_EDIT_WARNING } : result;

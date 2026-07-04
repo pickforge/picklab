@@ -173,6 +173,21 @@ describe("jsonFileHasMcpServer / jsonFileMcpServerState", () => {
     expect(await jsonFileMcpServerState(file)).toBe(true);
   });
 
+  it("can require the picklab entry to match the expected command", async () => {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          picklab: { command: "old-picklab", args: ["mcp", "serve"] },
+        },
+      }),
+    );
+    const expected = { command: "picklab", args: ["mcp", "serve"] };
+    expect(await jsonFileMcpServerState(file)).toBe(true);
+    expect(await jsonFileMcpServerState(file, { expected })).toBe(false);
+    expect(await jsonFileHasMcpServer(file, { expected })).toBe(false);
+  });
+
   it("reports unparseable files as unknown instead of unregistered", async () => {
     fs.writeFileSync(file, "nope");
     expect(await jsonFileHasMcpServer(file)).toBe(false);

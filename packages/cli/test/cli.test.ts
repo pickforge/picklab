@@ -151,7 +151,38 @@ describe("picklab doctor", () => {
     expect(byId["android-sdk"]).toBe("missing");
     expect(byId["x11vnc"]).toBe("warn");
     expect(byId["kvm"]).toBe("warn");
-    expect(byId["lab-user"]).toBe("missing");
+    expect(byId["lab-user"]).toBe("warn");
+  });
+
+  it("exits 0 when the only non-ok finding is the optional lab user", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), {
+      images: [IMAGE],
+      avdNames: ["picklab-avd"],
+    });
+    const env = makeEnv(tmpDir, {
+      sdk,
+      bins: {
+        Xvfb: "exit 0",
+        xdotool: "exit 0",
+        import: "exit 0",
+        x11vnc: "exit 0",
+      },
+    });
+    fs.mkdirSync(env.PICKLAB_HOME!, { recursive: true });
+    const kvmPath = path.join(tmpDir, "kvm");
+    fs.writeFileSync(kvmPath, "", { mode: 0o660 });
+    env.PICKLAB_KVM_PATH = kvmPath;
+
+    const result = await runCli(["doctor", "--json"], env, tmpDir);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    const nonOk = (
+      report.checks as Array<{ id: string; status: string }>
+    )
+      .filter((check) => check.status !== "ok")
+      .map((check) => ({ id: check.id, status: check.status }));
+    expect(nonOk).toEqual([{ id: "lab-user", status: "warn" }]);
   });
 
   it("creates the picklab home with --fix and skips privileged repairs", async () => {
@@ -289,6 +320,92 @@ describe("picklab init", () => {
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
   });
 
+  it("initializes flutter-desktop without planning lab-user sudo steps", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const env = makeEnv(tmpDir, {
+      bins: {
+        Xvfb: "exit 0",
+        xdotool: "exit 0",
+        import: "exit 0",
+        sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0`,
+      },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+
+    const result = await runCli(
+      ["init", "--profile", "flutter-desktop", "--yes", "--json"],
+      env,
+      projectDir,
+    );
+
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.ok).toBe(true);
+    expect((report.checks as Array<{ id: string }>).map((check) => check.id))
+      .not.toContain("lab-user");
+    expect((report.plan as Array<{ id: string }>).map((step) => step.id)).toEqual(
+      ["project-config", "picklab-home"],
+    );
+    expect(fs.existsSync(sudoLog)).toBe(false);
+  });
+
+  it("plans lab-user sudo steps for desktop+android with explicit consent", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), {
+      images: [IMAGE],
+      avdNames: ["picklab-avd"],
+    });
+    const env = makeEnv(tmpDir, {
+      sdk,
+      bins: {
+        Xvfb: "exit 0",
+        xdotool: "exit 0",
+        import: "exit 0",
+        sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0`,
+      },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "desktop+android",
+        "--yes",
+        "--create-lab-user",
+        "--dry-run",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    const plan = report.plan as Array<any>;
+    expect(plan.map((step) => step.id)).toEqual([
+      "project-config",
+      "picklab-home",
+      "useradd",
+      "mkdir-home",
+      "chown-home",
+      "chmod-home",
+      "persist-lab-user",
+    ]);
+    expect(plan.find((step) => step.id === "useradd").command.args).toEqual([
+      "-n",
+      "useradd",
+      "-r",
+      "-M",
+      "-s",
+      "/usr/sbin/nologin",
+      "picklab-lab",
+    ]);
+    expect(fs.existsSync(sudoLog)).toBe(false);
+  });
+
   it("prints the check snapshot before executor logs in non-JSON mode", async () => {
     const env = makeEnv(tmpDir);
     const projectDir = path.join(tmpDir, "project");
@@ -323,6 +440,34 @@ describe("picklab init", () => {
     );
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("prints a recovery hint when init fails after writing project config", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    writeScript(
+      path.join(sdk, "cmdline-tools", "latest", "bin", "avdmanager"),
+      "echo avdmanager boom >&2\nexit 7",
+    );
+    const env = makeEnv(tmpDir, { sdk });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+
+    const result = await runCli(
+      ["init", "--profile", "android", "--yes", "--create-avd", "--json"],
+      env,
+      projectDir,
+    );
+
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect((report.errors as string[]).join("\n")).toContain(
+      "Project config was written",
+    );
+    expect((report.errors as string[]).join("\n")).toContain("picklab init");
+    expect((report.errors as string[]).join("\n")).toContain("picklab doctor");
+    expect(
+      fs.existsSync(path.join(projectDir, ".picklab", "config.json")),
+    ).toBe(true);
   });
 
   it("fails closed without side effects when sudo is unavailable", async () => {

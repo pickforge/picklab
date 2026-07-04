@@ -19,6 +19,7 @@ import { findSdkTool, resolveSdkRoot } from "./sdk.js";
 import { sleep } from "./util.js";
 
 export const MIN_CONSOLE_PORT = 5554;
+export const AUTO_MIN_CONSOLE_PORT = 5556;
 export const MAX_CONSOLE_PORT = 5682;
 
 const DEFAULT_BOOT_TIMEOUT_MS = 180_000;
@@ -114,13 +115,14 @@ export function pickConsolePort(usedSerials: readonly string[]): number {
       used.add(Number(match[1]));
     }
   }
-  for (let port = MIN_CONSOLE_PORT; port <= MAX_CONSOLE_PORT; port += 2) {
+  for (let port = AUTO_MIN_CONSOLE_PORT; port <= MAX_CONSOLE_PORT; port += 2) {
     if (!used.has(port)) {
       return port;
     }
   }
   throw new Error(
-    `No free emulator console port between ${MIN_CONSOLE_PORT} and ${MAX_CONSOLE_PORT}`,
+    `No free emulator console port between ${AUTO_MIN_CONSOLE_PORT} and ` +
+      `${MAX_CONSOLE_PORT} for automatic allocation`,
   );
 }
 
@@ -262,7 +264,7 @@ async function allocateConsolePort(opts: {
     }
   }
   const registryEnv = opts.registryEnv ?? process.env;
-  for (let port = MIN_CONSOLE_PORT; port <= MAX_CONSOLE_PORT; port += 2) {
+  for (let port = AUTO_MIN_CONSOLE_PORT; port <= MAX_CONSOLE_PORT; port += 2) {
     if (used.has(port)) {
       continue;
     }
@@ -271,7 +273,8 @@ async function allocateConsolePort(opts: {
     }
   }
   throw new Error(
-    `No free emulator console port between ${MIN_CONSOLE_PORT} and ${MAX_CONSOLE_PORT}`,
+    `No free emulator console port between ${AUTO_MIN_CONSOLE_PORT} and ` +
+      `${MAX_CONSOLE_PORT} for automatic allocation`,
   );
 }
 

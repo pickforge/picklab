@@ -44,7 +44,7 @@ This ships two binaries: `picklab` (CLI) and `picklab-mcp` (MCP stdio server). T
 
 ```sh
 cd your-app
-picklab init --profile desktop+android   # provision lab user + AVD, write project config
+picklab init --profile desktop+android   # write project config and provision the AVD (lab user is opt-in: --create-lab-user)
 picklab doctor                           # verify dependencies; --fix repairs what it can
 picklab session create --type desktop+android
 picklab desktop launch ./build/your-app
@@ -53,7 +53,7 @@ picklab android install-apk build/app-release.apk
 picklab android launch-app com.example.app
 picklab android screenshot
 picklab artifacts report                 # render the latest run
-picklab session destroy
+picklab session destroy --all
 ```
 
 Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manifest, so a run is inspectable and reproducible after the fact.
@@ -100,7 +100,7 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 | Group | Commands |
 | --- | --- |
 | Setup | `doctor`, `init`, `setup lab-user`, `setup android` |
-| Sessions | `session create`, `session status [id]`, `session destroy [id]` |
+| Sessions | `session create`, `session status [id]`, `session destroy <id\|--all>` |
 | Desktop | `desktop launch <cmd>`, `desktop screenshot`, `desktop click <x> <y>`, `desktop type <text>`, `desktop key <keys>` |
 | Android | `android start`, `android install-apk <apk>`, `android launch-app <pkg>`, `android screenshot`, `android tap <x> <y>`, `android type <text>`, `android back`, `android home`, `android ui-tree`, `android logcat`, `android adb [args...]` |
 | Artifacts | `artifacts list`, `artifacts open <runId>`, `artifacts report [runId]` |
@@ -144,7 +144,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 
 ## Security model
 
-- MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`), with explicit consent (`--yes` or a prompt).
+- MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`, or `init` with explicit `--create-lab-user`), with explicit consent (`--yes` or a prompt).
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
 - VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.

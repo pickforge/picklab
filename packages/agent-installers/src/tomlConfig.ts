@@ -167,7 +167,21 @@ export async function inspectTomlFile(
 
 export async function tomlFileHasMcpServer(
   filePath: string,
+  expected: McpServerEntry | undefined = undefined,
 ): Promise<boolean> {
+  if (expected !== undefined) {
+    const existing = await readTextIfExists(filePath);
+    if (existing === undefined) {
+      return false;
+    }
+    let split: MarkerSplit;
+    try {
+      split = splitMarkers(existing, filePath);
+    } catch {
+      return false;
+    }
+    return split.block === markerBlock(expected);
+  }
   const inspection = await inspectTomlFile(filePath);
   return inspection.markersHaveSection || inspection.foreignSection;
 }
