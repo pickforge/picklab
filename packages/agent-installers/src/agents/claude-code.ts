@@ -51,6 +51,18 @@ function commandFailure(
   );
 }
 
+function isAlreadyRegisteredAddFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  return (
+    output.includes("mcp") &&
+    output.includes("picklab") &&
+    output.includes("already exists")
+  );
+}
+
 export async function claudeCodeIsRegistered(
   configPath: string,
 ): Promise<RegistrationState> {
@@ -63,6 +75,9 @@ export async function linkClaudeCode(
 ): Promise<ChangeResult> {
   const claudeBin = findClaudeBinary(env);
   if (claudeBin !== undefined) {
+    if ((await claudeCodeIsRegistered(configPath)) === true) {
+      return { configPath, changed: false };
+    }
     const result = await runCommand(
       claudeBin,
       [
@@ -79,6 +94,9 @@ export async function linkClaudeCode(
       { env: { ...env }, cleanEnv: true },
     );
     if (!result.ok) {
+      if (isAlreadyRegisteredAddFailure(result)) {
+        return { configPath, changed: false };
+      }
       throw commandFailure("add", result);
     }
     return { configPath, changed: true };

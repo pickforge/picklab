@@ -143,6 +143,26 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
+  it("does not shell out when ~/.claude.json already has picklab registered", async () => {
+    const env = installFakeClaude(
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\nexit 99\n',
+    );
+    const configPath = path.join(home, ".claude.json");
+    const original = JSON.stringify({
+      numStartups: 2,
+      mcpServers: {
+        picklab: { command: "picklab", args: ["mcp", "serve"] },
+      },
+    });
+    fs.writeFileSync(configPath, original);
+
+    const result = await linkClaudeCode(configPath, env);
+
+    expect(result).toEqual({ configPath, changed: false });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(fs.existsSync(env.CLAUDE_ARGS_FILE)).toBe(false);
+  });
+
   it("shells out to claude mcp remove on unlink", async () => {
     const env = installFakeClaude(RECORDING_CLAUDE);
     const result = await unlinkClaudeCode(path.join(home, ".claude.json"), env);
@@ -156,11 +176,20 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     ]);
   });
 
-  it("fails the link when claude mcp add exits non-zero", async () => {
+  it("treats an already-exists claude mcp add failure as a no-op", async () => {
+    const env = installFakeClaude(
+      '#!/bin/sh\necho "MCP server picklab already exists in user config." >&2\nexit 1\n',
+    );
+    const configPath = path.join(home, ".claude.json");
+    const result = await linkClaudeCode(configPath, env);
+    expect(result).toEqual({ configPath, changed: false });
+  });
+
+  it("fails the link when claude mcp add exits with an unrelated error", async () => {
     const env = installFakeClaude('#!/bin/sh\necho "boom" >&2\nexit 1\n');
     await expect(
       linkClaudeCode(path.join(home, ".claude.json"), env),
-    ).rejects.toThrow('"claude mcp add" failed');
+    ).rejects.toThrow('"claude mcp add" failed (exit code 1): boom');
   });
 
   it("treats a not-found claude mcp remove as a no-op", async () => {

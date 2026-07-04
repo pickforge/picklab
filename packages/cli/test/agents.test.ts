@@ -288,14 +288,13 @@ describe("picklab agents link claude-code (claude binary absent)", () => {
 });
 
 describe("picklab agents link claude-code (claude binary on PATH)", () => {
-  function installFakeClaude(): { binDir: string; argsFile: string } {
+  function installFakeClaude(
+    script = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\n',
+  ): { binDir: string; argsFile: string } {
     const binDir = path.join(tmpDir, "fake-bin");
     fs.mkdirSync(binDir, { recursive: true });
     const claude = path.join(binDir, "claude");
-    fs.writeFileSync(
-      claude,
-      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\n',
-    );
+    fs.writeFileSync(claude, script);
     fs.chmodSync(claude, 0o755);
     return { binDir, argsFile: path.join(tmpDir, "claude-args.txt") };
   }
@@ -330,6 +329,49 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
       "serve",
     ]);
     expect(fs.existsSync(path.join(home, ".claude.json"))).toBe(false);
+  });
+
+  it("reports install as already registered without invoking claude again", async () => {
+    const { binDir, argsFile } = installFakeClaude(
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\nexit 99\n',
+    );
+    const configPath = path.join(home, ".claude.json");
+    const original = JSON.stringify({
+      numStartups: 1,
+      mcpServers: {
+        picklab: { command: "picklab", args: ["mcp", "serve"] },
+      },
+    });
+    fs.writeFileSync(configPath, original);
+
+    const result = await runCli(
+      ["agents", "install", "claude-code"],
+      { ...env, PATH: binDir, CLAUDE_ARGS_FILE: argsFile },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(
+      `claude-code is already registered in ${configPath} (no changes made)`,
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(fs.existsSync(argsFile)).toBe(false);
+  });
+
+  it("surfaces unrelated claude mcp add failures", async () => {
+    const { binDir, argsFile } = installFakeClaude(
+      '#!/bin/sh\necho "network unavailable" >&2\nexit 1\n',
+    );
+    const result = await runCli(
+      ["agents", "install", "claude-code"],
+      { ...env, PATH: binDir, CLAUDE_ARGS_FILE: argsFile },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      'error: "claude mcp add" failed (exit code 1): network unavailable',
+    );
   });
 
   it("prefers claude mcp remove on unlink", async () => {
