@@ -52,7 +52,7 @@ Check what is missing:
 picklab doctor
 ```
 
-For desktop sessions PickLab needs `Xvfb`, `xdotool`, and a screenshot tool (`import` from ImageMagick, or `scrot`). `x11vnc` is optional but recommended — it lets the user watch lab sessions live. These come from the distro package manager and need sudo, so show the user the command and ask before running it:
+For desktop sessions PickLab needs `Xvfb`, `xdotool`, and one screenshot path: `import` from ImageMagick, `scrot`, or `xwd` plus `convert`. `x11vnc` is optional but recommended — it lets the user watch lab sessions live. These come from the distro package manager and need sudo, so show the user the command and ask before running it:
 
 | Distro | Command |
 | --- | --- |
@@ -60,26 +60,26 @@ For desktop sessions PickLab needs `Xvfb`, `xdotool`, and a screenshot tool (`im
 | Arch | `sudo pacman -S --needed xorg-server-xvfb xdotool imagemagick x11vnc` |
 | Fedora | `sudo dnf install xorg-x11-server-Xvfb xdotool ImageMagick x11vnc` |
 
-For Android profiles the user needs an Android SDK with `cmdline-tools`, `platform-tools`, `emulator`, and a system image. `picklab doctor` prints the exact `sdkmanager` command for anything missing.
+For Android profiles the user needs an Android SDK with `cmdline-tools`, `platform-tools`, `emulator`, and a system image. `picklab doctor` prints exact `sdkmanager` commands for missing SDK pieces, and exact `export` commands when the SDK root is unset.
 
 ## 4. Initialize the project
 
 Ask the user which profile fits the app, then run inside the project:
 
 ```sh
-picklab init --profile <flutter-desktop|android|desktop+android|generic>
+picklab init --profile <flutter-desktop|android|desktop+android|generic> --yes
 ```
 
-This writes the project config and plans the provisioning for that profile. It prompts before anything privileged.
+Bare `picklab init` is interactive. In agent or other non-interactive contexts, use `--yes`. This writes the project config and plans the provisioning for that profile. Privileged lab-user creation happens only with explicit `--yes --create-lab-user`; it is optional for every profile.
 
 ## 5. Provision lab resources
 
-Two dedicated resources keep lab workloads off the user's personal account:
+PickLab can provision two lab resources:
 
-- **Lab user** (`picklab-lab`, desktop profiles) — locked system user, created with sudo. Ask the user, then: `picklab setup lab-user`
-- **AVD** (`picklab-avd`, Android profiles) — dedicated emulator image, no sudo: `picklab setup android --create-avd`
+- **Lab user** (`picklab-lab`, desktop profiles) — optional, created with sudo after explicit user approval. It will isolate desktop sessions once run-as-lab-user isolation ships; sessions currently run as the invoking user. If the user wants it: `picklab setup lab-user`
+- **AVD** (`picklab-avd`, Android profiles) — dedicated emulator image, no sudo: `picklab setup android --create-avd`. PickLab auto-allocates emulator ports from 5556, so the user's own emulator on 5554 is untouched.
 
-Both are also offered by `picklab init` for the matching profile and by `picklab doctor --fix`.
+`picklab init` plans the AVD automatically for Android profiles and the lab user only with `--create-lab-user`; `picklab doctor --fix` offers both.
 
 ## 6. Verify everything
 
@@ -87,17 +87,17 @@ Both are also offered by `picklab init` for the matching profile and by `picklab
 picklab doctor
 ```
 
-Every check for the chosen profile must be `[ok]` (`[warn]` is acceptable for optional items like x11vnc and KVM). Then smoke-test a session:
+Checks required by the chosen profile must be `[ok]`. `[warn]` entries are acceptable for optional items like x11vnc, KVM, and the lab user. Then smoke-test a session:
 
 ```sh
 picklab session create --type desktop   # or android / desktop+android
 picklab session status
 picklab desktop screenshot
-picklab session destroy
+picklab session destroy --all
 ```
 
 Finally, remind the user to restart the agent so the `picklab` MCP tools load, and that `session_status` over MCP is the quickest end-to-end check.
 
 ## Report back
 
-Tell the user: install location and version, which agent config was updated, which system packages were installed or are still missing, whether the lab user and AVD exist, and the doctor result. Keep it short and honest — unresolved `[missing]` checks are not "non-blockers", they are setup the user still has to approve.
+Tell the user: install location and version, which agent config was updated, which system packages were installed or are still missing, whether the AVD and the optional lab user exist, and the doctor result. Keep it short and honest — unresolved `[missing]` checks are not "non-blockers", they are setup the user still has to approve.
