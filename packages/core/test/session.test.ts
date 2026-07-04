@@ -7,6 +7,7 @@ import {
   destroySessionRecord,
   getSession,
   listSessions,
+  reapDeadRunningSessions,
   updateSession,
 } from "../src/session.js";
 
@@ -139,5 +140,32 @@ describe("session registry", () => {
     expect(updated.id).toBe(created.id);
     expect(updated.type).toBe("desktop");
     expect(updated.createdAt).toBe(created.createdAt);
+  });
+
+  it("reaps running records whose process is dead", async () => {
+    const stale = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":90", xvfbPid: 4_194_304 },
+      },
+      env,
+    );
+    const stopped = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "stopped",
+        desktop: { display: ":91", xvfbPid: 4_194_305 },
+      },
+      env,
+    );
+
+    const reaped = await reapDeadRunningSessions(env);
+
+    expect(reaped.map((record) => record.id)).toEqual([stale.id]);
+    expect(await getSession(stale.id, env)).toBeUndefined();
+    expect(await getSession(stopped.id, env)).toBeDefined();
   });
 });

@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  createSession,
   createRun,
   getSession,
   isPidAlive,
   stopPid,
+  updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
 import {
@@ -58,10 +60,80 @@ function writeExecutable(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, { mode: 0o755 });
 }
 
+function writeFakeXvfb(binDir: string): void {
+  const fakeServer = path.join(binDir, "fake-xvfb.cjs");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    fakeServer,
+    [
+      'const fs = require("node:fs");',
+      'const display = process.argv[2].slice(1);',
+      'const lock = `/tmp/.X${display}-lock`;',
+      'const socketDir = "/tmp/.X11-unix";',
+      'const socket = `${socketDir}/X${display}`;',
+      "const createdSocketDir = !fs.existsSync(socketDir);",
+      "fs.mkdirSync(socketDir, { recursive: true });",
+      'fs.writeFileSync(lock, `${process.pid}\\n`);',
+      'fs.writeFileSync(socket, "");',
+      "const cleanup = () => {",
+      "  fs.rmSync(lock, { force: true });",
+      "  fs.rmSync(socket, { force: true });",
+      "  if (createdSocketDir) {",
+      "    try { fs.rmdirSync(socketDir); } catch {}",
+      "  }",
+      "};",
+      'process.on("SIGTERM", () => { cleanup(); process.exit(0); });',
+      'process.on("SIGINT", () => { cleanup(); process.exit(0); });',
+      'process.on("exit", cleanup);',
+      "setInterval(() => {}, 1000);",
+    ].join("\n"),
+  );
+  writeExecutable(
+    path.join(binDir, "Xvfb"),
+    `exec '${process.execPath}' '${fakeServer}' "$@"`,
+  );
+}
+
 describe("allocateDisplay", () => {
   it("returns a free display synchronously", () => {
     const display = allocateDisplay();
     expect(display).toMatch(/^:\d+$/);
+  });
+});
+
+describe("createDesktopSession registry reaping", () => {
+  it("removes stale running records before creating a new session", async () => {
+    const isolatedHome = path.join(tmpRoot, "home-reap-desktop");
+    const isolatedEnv: EnvLike = {
+      ...process.env,
+      PICKLAB_HOME: isolatedHome,
+    };
+    const binDir = path.join(tmpRoot, "fake-xvfb");
+    writeFakeXvfb(binDir);
+    const stale = await createSession(
+      { type: "desktop", projectDir },
+      isolatedEnv,
+    );
+    await updateSession(
+      stale.id,
+      {
+        status: "running",
+        desktop: { display: ":90", xvfbPid: 4_194_304 },
+      },
+      isolatedEnv,
+    );
+
+    const session = await createDesktopSession({
+      projectDir,
+      registryEnv: isolatedEnv,
+      env: { PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin` },
+    });
+    try {
+      expect(await getSession(stale.id, isolatedEnv)).toBeUndefined();
+      expect(await getSession(session.id, isolatedEnv)).toBeDefined();
+    } finally {
+      await destroyDesktopSession(session.id, isolatedEnv).catch(() => {});
+    }
   });
 });
 

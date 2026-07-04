@@ -4,6 +4,7 @@ import {
   destroySessionRecord,
   getSession,
   isPidAlive,
+  reapDeadRunningSessions,
   sessionsDir,
   updateSession,
   type AndroidSessionInfo,
@@ -62,6 +63,7 @@ export async function createAndroidSession(
 ): Promise<AndroidSessionHandle> {
   const registryEnv = opts.registryEnv ?? process.env;
   const avdName = opts.avdName ?? DEFAULT_AVD_NAME;
+  await reapDeadRunningSessions(registryEnv);
   const record = await createSession(
     { type: "android", projectDir: opts.projectDir, android: { avdName } },
     registryEnv,

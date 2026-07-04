@@ -4,6 +4,7 @@ import {
   destroySessionRecord,
   getSession,
   isPidAlive,
+  reapDeadRunningSessions,
   sessionsDir,
   stopPid,
   updateSession,
@@ -58,6 +59,7 @@ export async function createDesktopSession(
       "VNC was requested but x11vnc was not found on PATH; install x11vnc to enable it",
     );
   }
+  await reapDeadRunningSessions(registryEnv);
   const record = await createSession(
     { type: "desktop", projectDir: opts.projectDir },
     registryEnv,
