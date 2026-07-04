@@ -10,6 +10,7 @@ const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const FAKE_SERIAL = "emulator-5554";
+const AUTO_ALLOCATED_SERIAL = "emulator-5556";
 const PLANTED_TOKEN = `ghp_${"a".repeat(36)}`;
 
 interface CliResult {
@@ -853,7 +854,7 @@ describe("picklab android session lifecycle (fake sdk)", () => {
       expect(session.id).toMatch(/^andr-[0-9a-f]+$/);
       expect(session.type).toBe("android");
       expect(session.avdName).toBe("picklab-avd");
-      expect(session.serial).toBe(FAKE_SERIAL);
+      expect(session.serial).toBe(AUTO_ALLOCATED_SERIAL);
 
       const tap = await runCli(
         ["android", "tap", "10", "20", "--json", "--project-dir", projectDir],
@@ -862,14 +863,14 @@ describe("picklab android session lifecycle (fake sdk)", () => {
       expect(tap.code).toBe(0);
       expect(parseJson(tap).sessionId).toBe(session.id);
       expect(adbLogLines(adbLog)).toContain(
-        `-s ${FAKE_SERIAL} shell input tap 10 20`,
+        `-s ${AUTO_ALLOCATED_SERIAL} shell input tap 10 20`,
       );
 
       const status = parseJson(
         await runCli(["session", "status", session.id, "--json"], env),
       );
       expect(status.sessions[0].android.emulatorAlive).toBe(true);
-      expect(status.sessions[0].android.serial).toBe(FAKE_SERIAL);
+      expect(status.sessions[0].android.serial).toBe(AUTO_ALLOCATED_SERIAL);
 
       const destroyed = await runCli(
         ["session", "destroy", session.id, "--json"],

@@ -37,6 +37,7 @@ export {
 
 export {
   assertConsolePort,
+  AUTO_MIN_CONSOLE_PORT,
   buildEmulatorArgs,
   consolePortLockPath,
   emulatorSerial,
