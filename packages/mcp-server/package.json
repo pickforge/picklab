@@ -1,6 +1,6 @@
 {
   "name": "@pickforge/picklab-mcp-server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "MCP server implementation for PickLab",
   "type": "module",
