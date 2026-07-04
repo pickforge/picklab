@@ -70,7 +70,7 @@ Ask the user which profile fits the app, then run inside the project:
 picklab init --profile <flutter-desktop|android|desktop+android|generic> --yes
 ```
 
-Bare `picklab init` is interactive. In agent or other non-interactive contexts, use `--yes`. This writes the project config and plans the provisioning for that profile. Privileged lab-user creation happens only with explicit `--yes --create-lab-user`; it is optional for every profile.
+Without `--profile`, init defaults to `generic`; it prompts only before privileged provisioning steps. In agent or other non-interactive contexts, use `--yes`. This writes the project config and plans the provisioning for that profile. Privileged lab-user creation happens only with explicit `--yes --create-lab-user`; it is optional for every profile.
 
 ## 5. Provision lab resources
 

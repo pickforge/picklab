@@ -86,8 +86,12 @@ verify_install() {
   fi
   version="$("${picklab_bin}" --version)"
   echo "picklab ${version} installed."
-  if ! command -v picklab >/dev/null 2>&1; then
+  resolved="$(command -v picklab 2>/dev/null || true)"
+  if [ "${resolved}" = "" ]; then
     echo "note: ${bin_dir} is not on your PATH; add it to run \"picklab\" directly."
+  elif [ "${resolved}" != "${picklab_bin}" ]; then
+    echo "note: \"picklab\" on PATH is ${resolved}; this install wrote ${picklab_bin}."
+    echo "note: if those differ, remove the other install or reorder PATH."
   fi
   echo "Next steps:"
   echo "  1. picklab agents install <codex|claude-code|cursor>  # register the MCP server"
