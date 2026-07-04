@@ -62,6 +62,16 @@ function makeCase(name: string): { home: string; dir: string } {
   return { home, dir };
 }
 
+function writeExecutable(file: string, contents: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    contents.endsWith("\n") ? contents : `${contents}\n`,
+    { mode: 0o755 },
+  );
+  fs.chmodSync(file, 0o755);
+}
+
 function baseEnv(home: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
     HOME: home,
@@ -178,6 +188,95 @@ describe("install.sh", () => {
     },
     NETWORK_TIMEOUT,
   );
+
+  it("fails before installing when bun is present without Node.js", async () => {
+    const { home, dir } = makeCase("sh-bun-no-node");
+    const fakeBin = path.join(dir, "bin");
+    const bunCalled = path.join(dir, "bun-called");
+    writeExecutable(
+      path.join(fakeBin, "bun"),
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' called >\"${FAKE_BUN_CALLED}\"",
+        "exit 0",
+      ].join("\n"),
+    );
+
+    const result = await run("/bin/sh", [installScript], {
+      cwd: dir,
+      env: baseEnv(home, {
+        PATH: fakeBin,
+        PICKLAB_INSTALL_FROM_TARBALL: tarball,
+        FAKE_BUN_CALLED: bunCalled,
+      }),
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("PickLab itself runs on Node.js >= 20");
+    expect(result.stderr).toContain("Install Node.js 20+ (with or without bun)");
+    expect(result.stdout).not.toContain("Installing");
+    expect(fs.existsSync(bunCalled)).toBe(false);
+  });
+
+  it("uses bun pm bin -g to verify installs in a custom global bin dir", async () => {
+    const { home, dir } = makeCase("sh-bun-custom-bin");
+    const fakeBin = path.join(dir, "bin");
+    const customBin = path.join(dir, "custom-bin");
+    const bunInstall = path.join(dir, "fallback-bun");
+    const bunLog = path.join(dir, "bun.log");
+    writeExecutable(
+      path.join(fakeBin, "node"),
+      ["#!/bin/sh", "printf '%s\\n' v20.0.0"].join("\n"),
+    );
+    writeExecutable(
+      path.join(fakeBin, "bun"),
+      [
+        "#!/bin/sh",
+        "set -eu",
+        "printf '%s\\n' \"$*\" >>\"${FAKE_BUN_LOG}\"",
+        "if [ \"${1:-}\" = \"pm\" ] && [ \"${2:-}\" = \"bin\" ] && [ \"${3:-}\" = \"-g\" ]; then",
+        "  printf '  %s  \\n' \"${FAKE_BUN_GLOBAL_BIN}\"",
+        "  exit 0",
+        "fi",
+        "if [ \"${1:-}\" = \"add\" ] && [ \"${2:-}\" = \"--global\" ]; then",
+        "  mkdir -p \"${FAKE_BUN_GLOBAL_BIN}\"",
+        "  cat >\"${FAKE_BUN_GLOBAL_BIN}/picklab\" <<'PICKLAB_FAKE_BIN'",
+        "#!/bin/sh",
+        "if [ \"${1:-}\" = \"--version\" ]; then",
+        "  printf '%s\\n' \"${FAKE_PICKLAB_VERSION}\"",
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "PICKLAB_FAKE_BIN",
+        "  chmod +x \"${FAKE_BUN_GLOBAL_BIN}/picklab\"",
+        "  exit 0",
+        "fi",
+        "exit 64",
+      ].join("\n"),
+    );
+
+    const result = await run("/bin/sh", [installScript], {
+      cwd: dir,
+      env: baseEnv(home, {
+        PATH: [fakeBin, "/usr/bin", "/bin"].join(path.delimiter),
+        PICKLAB_INSTALL_FROM_TARBALL: tarball,
+        PICKLAB_INSTALL_RUNTIME: "bun",
+        BUN_INSTALL: bunInstall,
+        FAKE_BUN_GLOBAL_BIN: customBin,
+        FAKE_BUN_LOG: bunLog,
+        FAKE_PICKLAB_VERSION: cliVersion,
+      }),
+    });
+
+    expect(result.code, describeFailure(result)).toBe(0);
+    expect(result.stdout).toContain(`picklab ${cliVersion} installed.`);
+    expect(result.stdout).toContain(`note: ${customBin} is not on your PATH`);
+    expect(fs.existsSync(path.join(customBin, "picklab"))).toBe(true);
+    expect(fs.existsSync(path.join(bunInstall, "bin", "picklab"))).toBe(false);
+    const log = fs.readFileSync(bunLog, "utf8");
+    expect(log).toContain(`add --global ${tarball}`);
+    expect(log).toContain("pm bin -g");
+  });
 
   it.runIf(hasBun())(
     "installs from a tarball with bun into an isolated BUN_INSTALL",
