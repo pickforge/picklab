@@ -123,8 +123,13 @@ export async function removeMcpServerFromJsonFile(
   return { configPath: filePath, changed: true, backupPath };
 }
 
+export interface JsonMcpServerStateOptions {
+  expected?: McpServerEntry;
+}
+
 export async function jsonFileMcpServerState(
   filePath: string,
+  opts: JsonMcpServerStateOptions = {},
 ): Promise<RegistrationState> {
   let config: JsonObject | undefined;
   try {
@@ -135,11 +140,16 @@ export async function jsonFileMcpServerState(
   if (config === undefined || !isPlainObject(config.mcpServers)) {
     return false;
   }
-  return isPlainObject(config.mcpServers[MCP_SERVER_NAME]);
+  const current = config.mcpServers[MCP_SERVER_NAME];
+  if (!isPlainObject(current)) {
+    return false;
+  }
+  return opts.expected === undefined ? true : entryMatches(current, opts.expected);
 }
 
 export async function jsonFileHasMcpServer(
   filePath: string,
+  opts?: JsonMcpServerStateOptions,
 ): Promise<boolean> {
-  return (await jsonFileMcpServerState(filePath)) === true;
+  return (await jsonFileMcpServerState(filePath, opts)) === true;
 }

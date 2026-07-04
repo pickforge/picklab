@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, sessionsDir, type EnvLike } from "./paths.js";
-import { isPidAlive } from "./proc.js";
+import { isPidAlive, stopPid } from "./proc.js";
 
 export type SessionType = "desktop" | "android" | "desktop+android";
 export type SessionStatus = "starting" | "running" | "stopped" | "error";
@@ -214,10 +214,31 @@ export async function reapDeadRunningSessions(
   for (const record of await listSessions(env)) {
     if (record.status !== "running") continue;
     if (await isAlive(record)) continue;
+    await stopRecordedPids(record);
     await destroySessionRecord(record.id, env);
     reaped.push(record);
   }
   return reaped;
+}
+
+async function stopRecordedPids(record: SessionRecord): Promise<void> {
+  const pids = new Set(
+    [
+      record.desktop?.xvfbPid,
+      record.desktop?.vncPid,
+      record.android?.emulatorPid,
+    ].filter((pid): pid is number => pid !== undefined),
+  );
+  for (const pid of pids) {
+    if (!isPidAlive(pid)) {
+      continue;
+    }
+    try {
+      await stopPid(pid);
+    } catch {
+      continue;
+    }
+  }
 }
 
 export async function updateSession(

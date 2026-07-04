@@ -119,6 +119,12 @@ describe("inspectTomlFile / tomlFileHasMcpServer", () => {
       foreignSection: false,
     });
     expect(await tomlFileHasMcpServer(file)).toBe(true);
+    expect(
+      await tomlFileHasMcpServer(file, {
+        command: "picklab",
+        args: ["mcp", "serve"],
+      }),
+    ).toBe(true);
   });
 
   it("reports markers without content as stale", async () => {
@@ -126,6 +132,22 @@ describe("inspectTomlFile / tomlFileHasMcpServer", () => {
     const inspection = await inspectTomlFile(file);
     expect(inspection.markersPresent).toBe(true);
     expect(inspection.markersHaveSection).toBe(false);
+  });
+
+  it("reports drifted managed blocks as not matching the expected command", async () => {
+    fs.writeFileSync(
+      file,
+      `${TOML_MARKER_BEGIN}\n` +
+        '[mcp_servers.picklab]\ncommand = "old-picklab"\nargs = ["mcp", "serve"]\n' +
+        `${TOML_MARKER_END}\n`,
+    );
+    expect(await tomlFileHasMcpServer(file)).toBe(true);
+    expect(
+      await tomlFileHasMcpServer(file, {
+        command: "picklab",
+        args: ["mcp", "serve"],
+      }),
+    ).toBe(false);
   });
 
   it("reports foreign sections", async () => {

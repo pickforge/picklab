@@ -37,6 +37,7 @@ export {
   mergeMcpServerIntoJsonFile,
   removeMcpServerFromJsonFile,
   type JsonMergeOptions,
+  type JsonMcpServerStateOptions,
 } from "./jsonConfig.js";
 
 export {

@@ -163,6 +163,48 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     expect(fs.existsSync(env.CLAUDE_ARGS_FILE)).toBe(false);
   });
 
+  it("repairs a stale ~/.claude.json picklab entry via remove and add", async () => {
+    const env = installFakeClaude(
+      [
+        "#!/bin/sh",
+        'printf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"',
+        'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
+        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
+        "fi",
+      ].join("\n"),
+    );
+    const configPath = path.join(home, ".claude.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          picklab: { command: "old-picklab", args: ["mcp", "serve"] },
+        },
+      }),
+    );
+
+    const result = await linkClaudeCode(configPath, env);
+
+    expect(result).toEqual({ configPath, changed: true });
+    expect(await claudeCodeIsRegistered(configPath)).toBe(true);
+    expect(recordedArgs(env)).toEqual([
+      "mcp",
+      "remove",
+      "--scope",
+      "user",
+      "picklab",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab",
+      "--",
+      "picklab",
+      "mcp",
+      "serve",
+    ]);
+  });
+
   it("shells out to claude mcp remove on unlink", async () => {
     const env = installFakeClaude(RECORDING_CLAUDE);
     const result = await unlinkClaudeCode(path.join(home, ".claude.json"), env);
@@ -178,7 +220,12 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
 
   it("treats an already-exists claude mcp add failure as a no-op", async () => {
     const env = installFakeClaude(
-      '#!/bin/sh\necho "MCP server picklab already exists in user config." >&2\nexit 1\n',
+      [
+        "#!/bin/sh",
+        'printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
+        'echo "MCP server picklab already exists in user config." >&2',
+        "exit 1",
+      ].join("\n"),
     );
     const configPath = path.join(home, ".claude.json");
     const result = await linkClaudeCode(configPath, env);

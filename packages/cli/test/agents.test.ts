@@ -358,6 +358,59 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
     expect(fs.existsSync(argsFile)).toBe(false);
   });
 
+  it("repairs a stale install via claude mcp remove and add", async () => {
+    const { binDir, argsFile } = installFakeClaude(
+      [
+        "#!/bin/sh",
+        'printf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"',
+        'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
+        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
+        "fi",
+      ].join("\n"),
+    );
+    const configPath = path.join(home, ".claude.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          picklab: { command: "old-picklab", args: ["mcp", "serve"] },
+        },
+      }),
+    );
+
+    const result = await runCli(
+      ["agents", "install", "claude-code"],
+      { ...env, PATH: binDir, CLAUDE_ARGS_FILE: argsFile },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(
+      `Registered the picklab MCP server for claude-code in ${configPath}`,
+    );
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
+      mcpServers: {
+        picklab: { command: "picklab", args: ["mcp", "serve"] },
+      },
+    });
+    expect(recordedArgs(argsFile)).toEqual([
+      "mcp",
+      "remove",
+      "--scope",
+      "user",
+      "picklab",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab",
+      "--",
+      "picklab",
+      "mcp",
+      "serve",
+    ]);
+  });
+
   it("surfaces unrelated claude mcp add failures", async () => {
     const { binDir, argsFile } = installFakeClaude(
       '#!/bin/sh\necho "network unavailable" >&2\nexit 1\n',
