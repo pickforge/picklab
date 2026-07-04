@@ -169,14 +169,10 @@ export async function runInit(
   }
 
   const avdRequired = requiredIds.includes("avd");
-  const labUserRequired = requiredIds.includes("lab-user");
   if (!snapshot.android.avdExists && (avdRequired || opts.createAvd === true)) {
     await planAvdProvisioning(snapshot, opts, steps, errors, handledCheckIds);
   }
-  if (
-    !snapshot.labUser.exists &&
-    (labUserRequired || opts.createLabUser === true)
-  ) {
+  if (!snapshot.labUser.exists && opts.createLabUser === true) {
     await planLabUserProvisioning(
       snapshot,
       opts,
@@ -220,7 +216,19 @@ export async function runInit(
   report.results = execution.results;
   if (!execution.ok) {
     report.ok = false;
-    report.errors.push(execution.error ?? "provisioning failed");
+    const error = execution.error ?? "provisioning failed";
+    if (
+      execution.results.some(
+        (result) => result.id === "project-config" && result.ok,
+      )
+    ) {
+      report.errors.push(
+        `${error}. Project config was written; fix the failed dependency and ` +
+          `re-run picklab init (idempotent), or check picklab doctor.`,
+      );
+    } else {
+      report.errors.push(error);
+    }
   }
   emit(report, opts);
   return report.ok ? 0 : 1;

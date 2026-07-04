@@ -19,7 +19,6 @@ const DESKTOP_CHECKS = [
   "xvfb",
   "xdotool",
   "screenshot-tool",
-  "lab-user",
 ] as const;
 
 const ANDROID_CHECKS = [
@@ -237,9 +236,11 @@ export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
     checks.push({
       id: "lab-user",
       title: "Dedicated lab user",
-      status: "missing",
+      status: "warn",
       detail: `user "${s.labUser.name}" not found`,
-      hint: `create it with: picklab setup lab-user --name ${s.labUser.name}`,
+      hint:
+        `optional until session isolation ships: create it with: ` +
+        `picklab setup lab-user --name ${s.labUser.name}`,
     });
   }
 
