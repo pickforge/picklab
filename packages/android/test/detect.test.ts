@@ -13,6 +13,7 @@ import {
   missingSdkMessage,
   resolveSdkRoot,
   sdkmanagerInstallCommand,
+  sdkmanagerPackageInstallCommand,
   systemImageInstalled,
 } from "../src/index.js";
 
@@ -88,8 +89,11 @@ describe("detectSdkRoot", () => {
 
   it("returns null when nothing is found, with an actionable message available", () => {
     expect(detectSdkRoot({ env: {}, commonPaths: [] })).toBeNull();
-    expect(missingSdkMessage()).toMatch(/ANDROID_HOME/);
-    expect(missingSdkMessage()).toMatch(/developer\.android\.com/);
+    const message = missingSdkMessage();
+    expect(message).toMatch(/ANDROID_HOME/);
+    expect(message).toContain('export ANDROID_HOME="$HOME/Android/Sdk"');
+    expect(message).toContain('export ANDROID_SDK_ROOT="$ANDROID_HOME"');
+    expect(message).toMatch(/developer\.android\.com/);
   });
 
   it("ignores an ANDROID_HOME pointing at a regular file", () => {
@@ -263,6 +267,29 @@ describe("sdkmanagerInstallCommand", () => {
     expect(() =>
       sdkmanagerInstallCommand('system-images;android-34;"$(reboot)";x86_64 extra'),
     ).toThrow(/Invalid system image/);
+  });
+});
+
+describe("sdkmanagerPackageInstallCommand", () => {
+  it("returns the exact sdkmanager command for known SDK package ids", () => {
+    expect(sdkmanagerPackageInstallCommand("cmdline-tools;latest")).toBe(
+      'sdkmanager "cmdline-tools;latest"',
+    );
+    expect(sdkmanagerPackageInstallCommand("platform-tools")).toBe(
+      'sdkmanager "platform-tools"',
+    );
+    expect(sdkmanagerPackageInstallCommand("emulator")).toBe(
+      'sdkmanager "emulator"',
+    );
+  });
+
+  it("rejects unsafe SDK package ids", () => {
+    expect(() =>
+      sdkmanagerPackageInstallCommand('cmdline-tools;"$(reboot)"'),
+    ).toThrow(/Invalid Android SDK package/);
+    expect(() =>
+      sdkmanagerPackageInstallCommand("platform-tools extra"),
+    ).toThrow(/Invalid Android SDK package/);
   });
 });
 

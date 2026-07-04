@@ -12,6 +12,7 @@ export {
   missingSdkMessage,
   resolveSdkRoot,
   sdkmanagerInstallCommand,
+  sdkmanagerPackageInstallCommand,
   systemImageInstalled,
   type AndroidEnvironment,
   type DetectSdkRootOptions,

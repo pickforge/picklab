@@ -132,6 +132,38 @@ describe("evaluateChecks", () => {
     );
   });
 
+  it("hints the exact sdkmanager command when command-line tools are missing", () => {
+    const tools = {
+      sdkmanager: null,
+      avdmanager: null,
+      emulator: "/sdk/emulator/emulator",
+      adb: "/sdk/platform-tools/adb",
+    };
+    const sdkmanagerCheck = checkById(
+      snapshot({ android: { tools } }),
+      "sdkmanager",
+    );
+    const avdmanagerCheck = checkById(
+      snapshot({ android: { tools } }),
+      "avdmanager",
+    );
+
+    expect(sdkmanagerCheck.status).toBe("missing");
+    expect(sdkmanagerCheck.hint).toContain('sdkmanager "cmdline-tools;latest"');
+    expect(avdmanagerCheck.status).toBe("missing");
+    expect(avdmanagerCheck.hint).toContain('sdkmanager "cmdline-tools;latest"');
+  });
+
+  it("hints exact environment exports when the Android SDK root is missing", () => {
+    const check = checkById(
+      snapshot({ android: { sdkRoot: null } }),
+      "android-sdk",
+    );
+    expect(check.status).toBe("missing");
+    expect(check.hint).toContain('export ANDROID_HOME="$HOME/Android/Sdk"');
+    expect(check.hint).toContain('export ANDROID_SDK_ROOT="$ANDROID_HOME"');
+  });
+
   it("flags a missing AVD with a setup hint", () => {
     const check = checkById(
       snapshot({ android: { avds: [], avdExists: false } }),

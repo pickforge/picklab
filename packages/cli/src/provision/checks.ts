@@ -1,4 +1,8 @@
-import { missingSdkMessage, sdkmanagerInstallCommand } from "@pickforge/picklab-android";
+import {
+  missingSdkMessage,
+  sdkmanagerInstallCommand,
+  sdkmanagerPackageInstallCommand,
+} from "@pickforge/picklab-android";
 import type { PicklabProfile } from "@pickforge/picklab-core";
 import type { DetectionSnapshot } from "./detect.js";
 import { RECOMMENDED_SYSTEM_IMAGE } from "./planner.js";
@@ -30,6 +34,13 @@ const ANDROID_CHECKS = [
   "system-image",
   "avd",
 ] as const;
+
+const CMDLINE_TOOLS_INSTALL_COMMAND = sdkmanagerPackageInstallCommand(
+  "cmdline-tools;latest",
+);
+const EMULATOR_INSTALL_COMMAND = sdkmanagerPackageInstallCommand("emulator");
+const PLATFORM_TOOLS_INSTALL_COMMAND =
+  sdkmanagerPackageInstallCommand("platform-tools");
 
 export const PROFILE_REQUIRED_CHECKS: Record<
   PicklabProfile,
@@ -144,25 +155,25 @@ export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
       "sdkmanager",
       "sdkmanager",
       s.android.tools.sdkmanager,
-      "install the Android command-line tools (cmdline-tools)",
+      `install command-line tools: ${CMDLINE_TOOLS_INSTALL_COMMAND}`,
     ),
     pathCheck(
       "avdmanager",
       "avdmanager",
       s.android.tools.avdmanager,
-      "install the Android command-line tools (cmdline-tools)",
+      `install command-line tools: ${CMDLINE_TOOLS_INSTALL_COMMAND}`,
     ),
     pathCheck(
       "emulator",
       "Android emulator",
       s.android.tools.emulator,
-      'install the emulator package: sdkmanager "emulator"',
+      `install the emulator package: ${EMULATOR_INSTALL_COMMAND}`,
     ),
     pathCheck(
       "adb",
       "adb",
       s.android.tools.adb,
-      'install platform-tools: sdkmanager "platform-tools"',
+      `install platform-tools: ${PLATFORM_TOOLS_INSTALL_COMMAND}`,
     ),
   );
 
