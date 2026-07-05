@@ -6,9 +6,15 @@ Repo-local guide for agents working in PickLab.
 
 - Install: `bun install --frozen-lockfile`
 - Typecheck: `bun run typecheck`
-- Test (all): `bun run test`
+- Test (deterministic): `bun run test`
+- Test coverage: `bun run test:coverage`
+- Test live Android/emulator: `bun run test:live:android`
 - Test (one file): `bun run test <path/to/file.test.ts>`
 - Build bundles: `bun run build`
+- Write tests in the same PR as behavior changes. For bugs, start with a
+  failing regression test when practical. For risky refactors, add
+  characterization tests first.
+- Do not lower coverage thresholds without explicit maintainer approval.
 
 ## Layout
 
@@ -33,6 +39,8 @@ Repo-local guide for agents working in PickLab.
 
 - Tests use `vitest`; CLI tests build the CLI once and spawn it with fake `adb`/SDK scripts on `PATH`.
 - Prefer asserting exact argv passed to adb and that planted tokens never leak.
+- Keep durable business/domain behavior in existing core/lib packages, not UI
+  command wrappers. Do not add DDD ceremony.
 
 ## Releasing
 

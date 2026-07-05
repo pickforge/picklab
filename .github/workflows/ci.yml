@@ -33,3 +33,38 @@ jobs:
             xvfb
 
       - run: bun run test
+
+      - run: bun run test:coverage
+
+      - name: Summarize coverage
+        if: ${{ !cancelled() }}
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("fs");
+          if (!fs.existsSync("coverage/lcov.info")) {
+            console.log("## Coverage\n\nCoverage report was not generated.");
+            process.exit(0);
+          }
+          const lcov = fs.readFileSync("coverage/lcov.info", "utf8");
+          let found = 0;
+          let hit = 0;
+          for (const line of lcov.split("\n")) {
+            if (line.startsWith("LF:")) found += Number(line.slice(3));
+            if (line.startsWith("LH:")) hit += Number(line.slice(3));
+          }
+          const pct = found === 0 ? "0.00" : ((hit / found) * 100).toFixed(2);
+          console.log(`## Coverage\n\nLines: ${pct}% (${hit}/${found})`);
+          NODE
+
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage/lcov.info
+            coverage/index.html
+            coverage/
+          retention-days: 7
+
+      - run: bun run build
