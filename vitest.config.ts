@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const runLiveAndroid = process.env.PICKLAB_LIVE_ANDROID === "1";
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -23,7 +25,7 @@ export default defineConfig({
   },
   test: {
     include: ["packages/*/test/**/*.test.ts", "test/**/*.test.ts"],
-    exclude: ["packages/android/test/integration.test.ts"],
+    exclude: runLiveAndroid ? [] : ["packages/android/test/integration.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

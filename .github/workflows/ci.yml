@@ -37,9 +37,14 @@ jobs:
       - run: bun run test:coverage
 
       - name: Summarize coverage
+        if: ${{ !cancelled() }}
         run: |
           node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
           const fs = require("fs");
+          if (!fs.existsSync("coverage/lcov.info")) {
+            console.log("## Coverage\n\nCoverage report was not generated.");
+            process.exit(0);
+          }
           const lcov = fs.readFileSync("coverage/lcov.info", "utf8");
           let found = 0;
           let hit = 0;
@@ -52,6 +57,7 @@ jobs:
           NODE
 
       - name: Upload coverage
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage
