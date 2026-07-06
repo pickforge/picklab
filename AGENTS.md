@@ -44,6 +44,11 @@ Repo-local guide for agents working in PickLab.
 
 ## Releasing
 
+- Keep [`docs/releases/UNRELEASED.md`](docs/releases/UNRELEASED.md) current on
+  PRs with user-facing or release-relevant changes. Track user-facing changes,
+  internal/release changes, what was tested, what was not tested yet, and known
+  blockers. At release time, use it to polish the generated GitHub release
+  description, then reset the draft.
 - Bump `packages/cli/package.json` to the new version, land on `main`, tag
   `vX.Y.Z`, push the tag. CI runs the full suite, publishes
   `@pickforge/picklab` to npm, and creates the GitHub release — both go live
