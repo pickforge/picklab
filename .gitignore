@@ -2,6 +2,7 @@ node_modules/
 dist/
 .picklab/
 coverage/
+.codegraph/
 *.tsbuildinfo
 .cli-build.lock/
 packages/cli/README.md
