@@ -27,12 +27,27 @@ export function initTelemetry(env: EnvLike = process.env): void {
     dsn: DSN,
     release: `picklab@${version}`,
     tracesSampleRate: 0,
-    includeLocalVariables: false,
-    integrations: (defaults) => defaults.filter((i) => i.name !== "ContextLines"),
+    defaultIntegrations: false,
+    integrations: [
+      Sentry.inboundFiltersIntegration(),
+      Sentry.functionToStringIntegration(),
+      Sentry.linkedErrorsIntegration(),
+      Sentry.dedupeIntegration(),
+      Sentry.onUncaughtExceptionIntegration(),
+      Sentry.onUnhandledRejectionIntegration(),
+      Sentry.nodeContextIntegration(),
+    ],
     beforeBreadcrumb: () => null,
     beforeSend: (event) => {
       delete event.server_name;
       delete event.modules;
+      if (event.contexts) {
+        for (const key of Object.keys(event.contexts)) {
+          if (key !== "os" && key !== "runtime") {
+            delete event.contexts[key];
+          }
+        }
+      }
       if (typeof event.message === "string") {
         event.message = redactSecrets(event.message);
       }
