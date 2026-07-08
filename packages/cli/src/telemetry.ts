@@ -34,7 +34,7 @@ export function initTelemetry(env: EnvLike = process.env): void {
       Sentry.linkedErrorsIntegration(),
       Sentry.dedupeIntegration(),
       Sentry.onUncaughtExceptionIntegration(),
-      Sentry.onUnhandledRejectionIntegration(),
+      Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
       Sentry.nodeContextIntegration(),
     ],
     beforeBreadcrumb: () => null,
