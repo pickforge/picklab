@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import * as Sentry from "@sentry/node";
+import type { ErrorEvent } from "@sentry/node";
 import { redactSecrets } from "@pickforge/picklab-core";
 
 export type EnvLike = Record<string, string | undefined>;
@@ -37,28 +38,34 @@ export function initTelemetry(env: EnvLike = process.env): void {
       Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
       Sentry.nodeContextIntegration(),
     ],
-    beforeBreadcrumb: () => null,
-    beforeSend: (event) => {
-      delete event.server_name;
-      delete event.modules;
-      if (event.contexts) {
-        for (const key of Object.keys(event.contexts)) {
-          if (key !== "os" && key !== "runtime") {
-            delete event.contexts[key];
-          }
-        }
-      }
-      if (typeof event.message === "string") {
-        event.message = redactSecrets(event.message);
-      }
-      for (const exception of event.exception?.values ?? []) {
-        if (exception.value !== undefined) {
-          exception.value = redactSecrets(exception.value);
-        }
-      }
-      return event;
-    },
+    beforeBreadcrumb: dropBreadcrumb,
+    beforeSend: scrubEvent,
   });
+}
+
+export function dropBreadcrumb(): null {
+  return null;
+}
+
+export function scrubEvent(event: ErrorEvent): ErrorEvent {
+  delete event.server_name;
+  delete event.modules;
+  if (event.contexts) {
+    for (const key of Object.keys(event.contexts)) {
+      if (key !== "os" && key !== "runtime") {
+        delete event.contexts[key];
+      }
+    }
+  }
+  if (typeof event.message === "string") {
+    event.message = redactSecrets(event.message);
+  }
+  for (const exception of event.exception?.values ?? []) {
+    if (exception.value !== undefined) {
+      exception.value = redactSecrets(exception.value);
+    }
+  }
+  return event;
 }
 
 export async function captureFatal(err: unknown): Promise<void> {
