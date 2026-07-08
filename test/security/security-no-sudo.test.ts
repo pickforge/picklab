@@ -230,7 +230,7 @@ describe("bundle: built picklab-mcp entrypoint", () => {
       const content = fs.readFileSync(path.join(distDir, name), "utf8");
       contents.set(name, content);
       for (const match of content.matchAll(
-        /\bfrom\s*["'](\.\.?\/[^"']+)["']/g,
+        /(?:\bfrom\s*|\bimport\s*\(\s*)["'](\.\.?\/[^"']+)["']/g,
       )) {
         queue.push(path.normalize(path.join(path.dirname(name), match[1])));
       }

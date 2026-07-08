@@ -68,7 +68,7 @@ Each session gets its own isolated display or emulator, so several agents and pr
 
 ## Telemetry
 
-When the `picklab` CLI or `picklab-mcp` server hits a fatal error, it reports the error message, stack trace, OS, and app version to Sentry so we can fix it. No commands, arguments, file contents, or device data are collected. Disable with `PICKLAB_TELEMETRY=0`.
+When the `picklab` CLI or `picklab-mcp` server hits a fatal error, it reports the error message and stack trace — the message can reference the failing command and its output, with secrets redacted — plus OS and app version to Sentry so we can fix it. Nothing else is collected. Disable with `PICKLAB_TELEMETRY=0`.
 
 ## MCP setup for agents
 

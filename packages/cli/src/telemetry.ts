@@ -27,6 +27,8 @@ export function initTelemetry(env: EnvLike = process.env): void {
     dsn: DSN,
     release: `picklab@${version}`,
     tracesSampleRate: 0,
+    includeLocalVariables: false,
+    integrations: (defaults) => defaults.filter((i) => i.name !== "ContextLines"),
     beforeBreadcrumb: () => null,
     beforeSend: (event) => {
       delete event.server_name;
