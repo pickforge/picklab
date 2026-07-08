@@ -5,5 +5,6 @@ export default defineConfig({
   format: ["esm"],
   platform: "node",
   clean: true,
+  sourcemap: true,
   noExternal: [/^@pickforge\//],
 });

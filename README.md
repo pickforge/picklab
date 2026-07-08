@@ -66,6 +66,10 @@ Each session gets its own isolated display or emulator, so several agents and pr
   <img src="https://raw.githubusercontent.com/pickforge/picklab/main/assets/brand/picklab-run-lab-mock.svg" alt="PICKLAB · RUN LAB — desktop session, Android emulator, live screenshots, logs, and agent terminal" width="900">
 </p>
 
+## Telemetry
+
+When the `picklab` CLI or `picklab-mcp` server hits a fatal error, it reports the error message and stack trace — the message can reference the failing command and its output, with secrets redacted — plus OS, Node.js, and app versions to Sentry so we can fix it. Nothing else is collected. Disable with `PICKLAB_TELEMETRY=0`.
+
 ## MCP setup for agents
 
 Register the MCP server with your coding agent:

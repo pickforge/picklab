@@ -44,6 +44,25 @@ jobs:
 
       - run: bun run build
 
+      - name: Upload sourcemaps to Sentry
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: pickforge
+          SENTRY_PROJECT: picklab
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "SENTRY_AUTH_TOKEN not set; skipping"
+            exit 0
+          fi
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          if ! {
+            npx --yes @sentry/cli sourcemaps inject packages/cli/dist &&
+            npx --yes @sentry/cli sourcemaps upload --release "picklab@$VERSION" packages/cli/dist
+          }; then
+            echo "::warning::Sentry sourcemap upload failed; continuing release"
+          fi
+
       - name: Publish @pickforge/picklab
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: packages/cli

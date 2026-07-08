@@ -24,6 +24,8 @@ command -v picklab && picklab --version
 
 If `picklab` is not on PATH, the global bin dir (`npm prefix -g`/bin or `~/.bun/bin`) is missing from PATH — fix the user's shell profile or tell them, don't fall back to a local install.
 
+On fatal errors the CLI and MCP server report the error message and stack trace — the message can reference the failing command and its output, with secrets redacted — plus OS, Node.js, and app versions to Sentry; nothing else is collected. Tell the user they can disable this with `PICKLAB_TELEMETRY=0`.
+
 ## 2. Register the MCP server with the agent the user uses
 
 That is probably you. Built-in support:
