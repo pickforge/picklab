@@ -38,7 +38,15 @@ export async function launchApp(opts: LaunchAppOptions): Promise<AppHandle> {
   const daemon = await startDaemon(opts.command, opts.args ?? [], {
     logDir: opts.logDir,
     cwd: opts.cwd,
-    env: { ...opts.env, DISPLAY: opts.display },
+    env: {
+      ...opts.env,
+      DISPLAY: opts.display,
+      // Toolkits (GTK, Qt, Electron, Flutter) prefer Wayland when these are
+      // set, which would open the app on the user's real desktop instead of
+      // the isolated lab display. undefined values are dropped at spawn.
+      WAYLAND_DISPLAY: undefined,
+      WAYLAND_SOCKET: undefined,
+    },
   });
   const graceDeadline = Date.now() + LAUNCH_GRACE_MS;
   while (Date.now() < graceDeadline) {

@@ -167,6 +167,34 @@ describe("screenshot output validation", () => {
   });
 });
 
+describe("launchApp display isolation", () => {
+  it("strips Wayland variables so apps render on the lab display", async () => {
+    const outFile = path.join(tmpRoot, "env-capture.txt");
+    const binDir = path.join(tmpRoot, "env-capture-bin");
+    writeExecutable(
+      path.join(binDir, "capture-env"),
+      "#!/bin/sh\n" +
+        "printf 'DISPLAY=%s\\nWAYLAND_DISPLAY=%s\\n' " +
+        '"$DISPLAY" "${WAYLAND_DISPLAY-unset}" > ' +
+        `'${outFile}'\n` +
+        "sleep 5\n",
+    );
+    const app = await launchApp({
+      display: DEAD_DISPLAY,
+      command: path.join(binDir, "capture-env"),
+      env: { ...process.env, WAYLAND_DISPLAY: "wayland-1" },
+      logDir: path.join(tmpRoot, "env-capture-logs"),
+    });
+    try {
+      const captured = fs.readFileSync(outFile, "utf8");
+      expect(captured).toContain(`DISPLAY=${DEAD_DISPLAY}`);
+      expect(captured).toContain("WAYLAND_DISPLAY=unset");
+    } finally {
+      await stopPid(app.pid);
+    }
+  });
+});
+
 describe("launchApp early exit", () => {
   it("rejects with the log path when the command exits immediately", async () => {
     await expect(
