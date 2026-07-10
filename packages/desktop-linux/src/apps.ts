@@ -38,7 +38,17 @@ export async function launchApp(opts: LaunchAppOptions): Promise<AppHandle> {
   const daemon = await startDaemon(opts.command, opts.args ?? [], {
     logDir: opts.logDir,
     cwd: opts.cwd,
-    env: { ...opts.env, DISPLAY: opts.display },
+    env: {
+      ...opts.env,
+      DISPLAY: opts.display,
+      // Toolkits (GTK, Qt, Electron, Flutter) try Wayland first, which would
+      // open the app on the user's real desktop instead of the isolated lab
+      // display. Merely unsetting WAYLAND_DISPLAY is not enough: libwayland
+      // then falls back to the default "wayland-0" socket, so point it at a
+      // socket that cannot exist to force the X11 fallback.
+      WAYLAND_DISPLAY: "picklab-no-wayland",
+      WAYLAND_SOCKET: undefined,
+    },
   });
   const graceDeadline = Date.now() + LAUNCH_GRACE_MS;
   while (Date.now() < graceDeadline) {

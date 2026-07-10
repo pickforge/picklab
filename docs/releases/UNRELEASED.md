@@ -6,7 +6,10 @@ then reset this file.
 
 ## User-facing changes
 
-- None yet.
+- `desktop_launch` now points `WAYLAND_DISPLAY` at a non-existent socket (and
+  strips `WAYLAND_SOCKET`), so GTK/Qt/Electron/Flutter apps always fall back
+  to X11 and render inside the isolated lab display instead of opening on the
+  user's real Wayland desktop (where driving them moved the real cursor).
 
 ## Internal/release changes
 
@@ -16,7 +19,9 @@ then reset this file.
 
 ### Tested
 
-- None yet.
+- Regression test asserting launched apps get `DISPLAY=<lab display>` with
+  Wayland variables unset; full desktop-linux integration suite (Xvfb +
+  xdotool + xterm) passes.
 
 ### Not tested yet
 
