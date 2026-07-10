@@ -41,10 +41,12 @@ export async function launchApp(opts: LaunchAppOptions): Promise<AppHandle> {
     env: {
       ...opts.env,
       DISPLAY: opts.display,
-      // Toolkits (GTK, Qt, Electron, Flutter) prefer Wayland when these are
-      // set, which would open the app on the user's real desktop instead of
-      // the isolated lab display. undefined values are dropped at spawn.
-      WAYLAND_DISPLAY: undefined,
+      // Toolkits (GTK, Qt, Electron, Flutter) try Wayland first, which would
+      // open the app on the user's real desktop instead of the isolated lab
+      // display. Merely unsetting WAYLAND_DISPLAY is not enough: libwayland
+      // then falls back to the default "wayland-0" socket, so point it at a
+      // socket that cannot exist to force the X11 fallback.
+      WAYLAND_DISPLAY: "picklab-no-wayland",
       WAYLAND_SOCKET: undefined,
     },
   });

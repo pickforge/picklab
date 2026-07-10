@@ -168,7 +168,7 @@ describe("screenshot output validation", () => {
 });
 
 describe("launchApp display isolation", () => {
-  it("strips Wayland variables so apps render on the lab display", async () => {
+  it("redirects Wayland variables so apps render on the lab display", async () => {
     const outFile = path.join(tmpRoot, "env-capture.txt");
     const binDir = path.join(tmpRoot, "env-capture-bin");
     writeExecutable(
@@ -188,7 +188,7 @@ describe("launchApp display isolation", () => {
     try {
       const captured = fs.readFileSync(outFile, "utf8");
       expect(captured).toContain(`DISPLAY=${DEAD_DISPLAY}`);
-      expect(captured).toContain("WAYLAND_DISPLAY=unset");
+      expect(captured).toContain("WAYLAND_DISPLAY=picklab-no-wayland");
     } finally {
       await stopPid(app.pid);
     }
