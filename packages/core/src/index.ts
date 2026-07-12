@@ -38,13 +38,21 @@ export { isSecretKey, redactEnv, redactSecrets } from "./redact.js";
 export {
   CommandError,
   isPidAlive,
+  listProcessGroupMembers,
+  processIdentityMatches,
+  readProcessIdentity,
+  readProcessStartTicks,
   runCommand,
   startDaemon,
   stopPid,
+  stopProcessGroupVerified,
   type DaemonHandle,
+  type ProcessIdentity,
   type RunCommandOptions,
   type RunCommandResult,
   type StartDaemonOptions,
+  type StopProcessGroupOutcome,
+  type StopProcessGroupResult,
 } from "./proc.js";
 
 export {
@@ -52,10 +60,12 @@ export {
   requireDisplay,
   resolveRunnableSession,
   resolveScreenshotTarget,
+  sessionHasCapability,
   type ResolveRunnableSessionOptions,
   type ResolveScreenshotTargetOptions,
   type RunnableSessionType,
   type ScreenshotTarget,
+  type SessionCapability,
 } from "./target.js";
 
 export {
@@ -67,6 +77,7 @@ export {
   reapDeadRunningSessions,
   updateSession,
   type AndroidSessionInfo,
+  type BrowserSessionInfo,
   type CreateSessionInput,
   type DesktopSessionInfo,
   type SessionLivenessCheck,

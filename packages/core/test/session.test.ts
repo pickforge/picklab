@@ -4,11 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { isPidAlive, stopPid } from "../src/proc.js";
+import { isPidAlive, readProcessIdentity, stopPid } from "../src/proc.js";
 import {
   createSession,
   destroySessionRecord,
   getSession,
+  isSessionProcessAlive,
   listSessions,
   reapDeadRunningSessions,
   updateSession,
@@ -48,6 +49,61 @@ describe("session registry", () => {
     expect(
       fs.existsSync(path.join(home, "sessions", `${session.id}.json`)),
     ).toBe(true);
+  });
+
+  it("creates a browser session with the brow prefix and persists both legs", async () => {
+    const created = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":120", xvfbPid: 4242, width: 1280, height: 800 },
+        browser: {
+          browserPid: 4243,
+          browserStartTimeTicks: 987654,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: "/tmp/picklab-profile",
+          cdpPort: 45123,
+        },
+      },
+      env,
+    );
+    expect(created.id).toMatch(/^brow-[0-9a-f]{8}$/);
+    const loaded = await getSession(created.id, env);
+    expect(loaded).toEqual(created);
+    expect(loaded?.browser?.profileMode).toBe("ephemeral");
+    expect(loaded?.browser?.cdpPort).toBe(45123);
+    expect(loaded?.desktop?.width).toBe(1280);
+    expect(loaded?.desktop?.height).toBe(800);
+  });
+
+  it("persists desktop width and height while staying compatible without them", async () => {
+    const withGeometry = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":99", xvfbPid: 1, width: 1600, height: 900 },
+      },
+      env,
+    );
+    const loadedGeometry = await getSession(withGeometry.id, env);
+    expect(loadedGeometry?.desktop?.width).toBe(1600);
+    expect(loadedGeometry?.desktop?.height).toBe(900);
+
+    const legacy = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":98", xvfbPid: 2 },
+      },
+      env,
+    );
+    const loadedLegacy = await getSession(legacy.id, env);
+    expect(loadedLegacy?.desktop?.width).toBeUndefined();
+    expect(loadedLegacy?.desktop?.height).toBeUndefined();
   });
 
   it("round-trips through getSession", async () => {
@@ -214,6 +270,151 @@ describe("session registry", () => {
     } finally {
       if (isPidAlive(vncPid)) {
         await stopPid(vncPid, { timeoutMs: 1000 });
+        await waitForExit(helper);
+      }
+    }
+  });
+
+  it("treats a browser session as alive only when the recorded start identity matches", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const pid = helper.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const identity = readProcessIdentity(pid);
+      if (identity === undefined) {
+        throw new Error("could not read child identity");
+      }
+      const makeBrowser = (
+        browserStartTimeTicks: number,
+        xvfbPid: number = pid,
+      ) =>
+        createSession(
+          {
+            type: "browser",
+            projectDir: "/proj",
+            status: "running",
+            desktop: { display: ":120", xvfbPid },
+            browser: {
+              browserPid: pid,
+              browserStartTimeTicks,
+              binaryPath: "/usr/bin/chromium",
+              profileMode: "ephemeral",
+              profileDir: "/tmp/picklab-profile",
+              cdpPort: 1,
+            },
+          },
+          env,
+        );
+
+      const alive = await makeBrowser(identity.startTicks);
+      expect(isSessionProcessAlive(alive)).toBe(true);
+
+      // A recorded pid whose start time no longer matches is a reused pid.
+      const stale = await makeBrowser(identity.startTicks + 1);
+      expect(isSessionProcessAlive(stale)).toBe(false);
+
+      const deadDisplay = await makeBrowser(identity.startTicks, 4_194_307);
+      expect(isSessionProcessAlive(deadDisplay)).toBe(false);
+    } finally {
+      if (isPidAlive(pid)) {
+        await stopPid(pid, { timeoutMs: 1000 });
+        await waitForExit(helper);
+      }
+    }
+  });
+
+  it("reaps a dead browser session and stops its recorded desktop helper", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const xvfbPid = helper.pid;
+    if (xvfbPid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":121", xvfbPid },
+        browser: {
+          browserPid: 4_194_306,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: "/tmp/picklab-profile",
+          cdpPort: 1,
+        },
+      },
+      env,
+    );
+
+    try {
+      expect(isPidAlive(xvfbPid)).toBe(true);
+
+      const reaped = await reapDeadRunningSessions(env);
+
+      expect(reaped.map((record) => record.id)).toEqual([stale.id]);
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      await waitForExit(helper);
+      expect(isPidAlive(xvfbPid)).toBe(false);
+    } finally {
+      if (isPidAlive(xvfbPid)) {
+        await stopPid(xvfbPid, { timeoutMs: 1000 });
+        await waitForExit(helper);
+      }
+    }
+  });
+
+  it("does not kill a reused browser pid when reaping", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const pid = helper.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const identity = readProcessIdentity(pid);
+      if (identity === undefined) {
+        throw new Error("could not read child identity");
+      }
+      // Record a browser pid that matches a live process but whose start
+      // identity does not: the reaper must treat it as reused, not signal it.
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          browser: {
+            browserPid: pid,
+            browserStartTimeTicks: identity.startTicks + 1,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir: "/tmp/picklab-profile",
+            cdpPort: 1,
+          },
+        },
+        env,
+      );
+
+      const reaped = await reapDeadRunningSessions(env);
+
+      expect(reaped.map((record) => record.id)).toEqual([stale.id]);
+      expect(isPidAlive(pid)).toBe(true);
+    } finally {
+      if (isPidAlive(pid)) {
+        await stopPid(pid, { timeoutMs: 1000 });
         await waitForExit(helper);
       }
     }

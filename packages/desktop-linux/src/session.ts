@@ -90,6 +90,8 @@ export async function createDesktopSession(
     const desktop: DesktopSessionInfo = {
       display: xvfb.display,
       xvfbPid: xvfb.pid,
+      width: xvfb.width,
+      height: xvfb.height,
     };
     if (vnc !== undefined) {
       desktop.vncPid = vnc.pid;
