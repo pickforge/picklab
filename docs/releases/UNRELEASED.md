@@ -28,7 +28,7 @@ then reset this file.
 - Regression test asserting launched apps get `DISPLAY=<lab display>` with
   Wayland variables unset; full desktop-linux integration suite (Xvfb +
   xdotool + xterm) passes.
-- `bun run typecheck`, `bun run test` (49 files, 580 passed / 1 skipped),
+- `bun run typecheck`, `bun run test` (49 files, 581 passed / 1 skipped),
   `bun run test:coverage` (all thresholds met), and `bun run build` all pass.
 - Process-group regression tests cover reused PID refusal, stubborn children,
   and zombie-only groups.
