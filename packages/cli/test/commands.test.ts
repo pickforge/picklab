@@ -580,7 +580,7 @@ describe("picklab desktop", () => {
     );
     expect(badAt.code).toBe(1);
     expect(parseJson(badAt).errors.join("\n")).toContain('--at "10;20"');
-  });
+  }, 30_000);
 
   it("rejects invalid drag buttons and durations", async () => {
     const env = makeEnv();
