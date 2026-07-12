@@ -278,6 +278,54 @@ describe("process identity and group termination", () => {
     expect(result).toEqual({ outcome: "already-dead", signaled: false });
   });
 
+  it("refuses to signal an unverifiable group after its leader exits", async () => {
+    const stubbornChild = [
+      'process.on("SIGTERM", () => {});',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      `spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], { stdio: "ignore" });`,
+      "setTimeout(() => process.exit(0), 300);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+      const deadline = Date.now() + 3000;
+      while (
+        Date.now() < deadline &&
+        (processIdentityMatches(identity as ProcessIdentity) ||
+          listProcessGroupMembers(pid).length === 0)
+      ) {
+        await delay(50);
+      }
+      expect(processIdentityMatches(identity as ProcessIdentity)).toBe(false);
+      expect(listProcessGroupMembers(pid).length).toBeGreaterThan(0);
+
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: false });
+      expect(listProcessGroupMembers(pid).length).toBeGreaterThan(0);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+    }
+  });
+
   it("terminates the whole verified process group and confirms it is gone", async () => {
     const script = [
       'const { spawn } = require("node:child_process");',
