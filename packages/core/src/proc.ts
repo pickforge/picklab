@@ -330,6 +330,7 @@ export interface ProcessIdentity {
 }
 
 interface ProcStat {
+  state: string;
   pgrp: number;
   startTicks: number;
 }
@@ -340,15 +341,22 @@ interface ProcStat {
  * parentheses, so we anchor on the final `)` and index the numeric fields that
  * follow it.
  */
-function parseProcStat(content: string): ProcStat | undefined {
+export function parseProcStat(content: string): ProcStat | undefined {
   const close = content.lastIndexOf(")");
   if (close === -1) return undefined;
   const fields = content.slice(close + 1).trim().split(/\s+/);
   // fields[0] is field 3 (state); field N maps to fields[N - 3].
+  const state = fields[0];
   const pgrp = Number(fields[5 - 3]);
   const startTicks = Number(fields[22 - 3]);
-  if (!Number.isFinite(pgrp) || !Number.isFinite(startTicks)) return undefined;
-  return { pgrp, startTicks };
+  if (
+    state === undefined ||
+    !Number.isFinite(pgrp) ||
+    !Number.isFinite(startTicks)
+  ) {
+    return undefined;
+  }
+  return { state, pgrp, startTicks };
 }
 
 function readProcStat(pid: number): ProcStat | undefined {
@@ -394,7 +402,7 @@ export function listProcessGroupMembers(pgid: number): number[] {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number(entry);
     const stat = readProcStat(pid);
-    if (stat !== undefined && stat.pgrp === pgid) {
+    if (stat !== undefined && stat.state !== "Z" && stat.pgrp === pgid) {
       members.push(pid);
     }
   }

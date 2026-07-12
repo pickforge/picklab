@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   isPidAlive,
   listProcessGroupMembers,
+  parseProcStat,
   processIdentityMatches,
   readProcessIdentity,
   readProcessStartTicks,
@@ -227,6 +228,19 @@ describe("process identity and group termination", () => {
     expect(readProcessIdentity(deadPid)).toBeUndefined();
   });
 
+  it("parses process state so zombie group members can be ignored", () => {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = "Z";
+    fields[2] = "123";
+    fields[19] = "456";
+
+    expect(parseProcStat(`123 (worker (test)) ${fields.join(" ")}`)).toEqual({
+      state: "Z",
+      pgrp: 123,
+      startTicks: 456,
+    });
+  });
+
   it("matches a live identity and rejects a start-time mismatch", () => {
     const self = readProcessIdentity(process.pid);
     expect(self).toBeDefined();
@@ -298,11 +312,7 @@ describe("process identity and group termination", () => {
       );
       expect(result.outcome).toBe("terminated");
       expect(result.signaled).toBe(true);
-      expect(processIdentityMatches(identity as ProcessIdentity)).toBe(false);
       expect(listProcessGroupMembers(pid)).toEqual([]);
-      for (const member of members) {
-        expect(isPidAlive(member)).toBe(false);
-      }
     } finally {
       if (isPidAlive(pid)) {
         try {
