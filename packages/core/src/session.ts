@@ -247,18 +247,39 @@ export async function reapDeadRunningSessions(
   for (const record of await listSessions(env)) {
     if (record.status !== "running") continue;
     if (await isAlive(record)) continue;
-    await stopRecordedPids(record);
+    if (!(await stopRecordedPids(record))) {
+      await updateSession(record.id, { status: "error" }, env).catch(() => {});
+      continue;
+    }
     await destroySessionRecord(record.id, env);
     reaped.push(record);
   }
   return reaped;
 }
 
-async function stopRecordedPids(record: SessionRecord): Promise<void> {
+async function stopRecordedPids(record: SessionRecord): Promise<boolean> {
+  const browser = record.browser;
+  if (browser !== undefined) {
+    try {
+      const result = await stopProcessGroupVerified({
+        pid: browser.browserPid,
+        startTicks: browser.browserStartTimeTicks,
+      });
+      if (
+        result.outcome !== "terminated" &&
+        result.outcome !== "already-dead"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
   const pids = new Set(
     [
-      record.desktop?.xvfbPid,
       record.desktop?.vncPid,
+      record.desktop?.xvfbPid,
       record.android?.emulatorPid,
     ].filter((pid): pid is number => pid !== undefined),
   );
@@ -272,17 +293,7 @@ async function stopRecordedPids(record: SessionRecord): Promise<void> {
       continue;
     }
   }
-  const browser = record.browser;
-  if (browser?.browserPid !== undefined) {
-    try {
-      await stopProcessGroupVerified({
-        pid: browser.browserPid,
-        startTicks: browser.browserStartTimeTicks,
-      });
-    } catch {
-      // Best-effort cleanup: never let a stubborn browser leg block reaping.
-    }
-  }
+  return true;
 }
 
 export async function updateSession(

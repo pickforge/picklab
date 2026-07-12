@@ -39,6 +39,10 @@ then reset this file.
   (`stopProcessGroupVerified`, `processIdentityMatches`, and friends) now
   wired into the session reaper. No CLI/MCP-visible behavior yet; the browser
   lifecycle wiring lands in a later PR.
+- Browser reaping now confirms the recorded browser process group is gone
+  before stopping VNC/Xvfb helpers or deleting the session record. Reused or
+  otherwise unconfirmed groups leave dependent helpers and profile data intact
+  and mark the record as errored for inspection.
 
 ## Validation
 
@@ -60,6 +64,9 @@ then reset this file.
   asserting the pointer position via `xdotool getmouselocation`.
 - Process-group regression tests cover reused PID refusal, stubborn children,
   and zombie-only groups.
+- `bun run test packages/core` (8 files, 101 passed) and
+  `bun run typecheck` pass. Core session regressions verify browser-group-first
+  teardown and fail-closed handling for an unconfirmed browser identity.
 
 ### Not tested yet
 

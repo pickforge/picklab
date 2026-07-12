@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { isPidAlive, readProcessIdentity, stopPid } from "../src/proc.js";
 import {
   createSession,
@@ -374,31 +375,46 @@ describe("session registry", () => {
     }
   });
 
-  it("does not kill a reused browser pid when reaping", async () => {
-    const helper = spawn(
-      process.execPath,
-      ["-e", "setInterval(() => {}, 1000)"],
-      { stdio: "ignore" },
-    );
-    const pid = helper.pid;
-    if (pid === undefined) {
+  it("stops the browser group before VNC and Xvfb when reaping", async () => {
+    const orderFile = path.join(home, "stop-order.txt");
+    const stopLogger = (label: string) =>
+      `const fs=require("node:fs");process.on("SIGTERM",()=>{fs.appendFileSync(${JSON.stringify(orderFile)},${JSON.stringify(`${label}\n`)});process.exit(0)});setInterval(()=>{},1000)`;
+    const browser = spawn(process.execPath, ["-e", stopLogger("browser")], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const vnc = spawn(process.execPath, ["-e", stopLogger("vnc")], {
+      stdio: "ignore",
+    });
+    const xvfb = spawn(process.execPath, ["-e", stopLogger("xvfb")], {
+      stdio: "ignore",
+    });
+    if (
+      browser.pid === undefined ||
+      vnc.pid === undefined ||
+      xvfb.pid === undefined
+    ) {
       throw new Error("child process did not expose a pid");
     }
     try {
-      const identity = readProcessIdentity(pid);
+      await delay(100);
+      const identity = readProcessIdentity(browser.pid);
       if (identity === undefined) {
-        throw new Error("could not read child identity");
+        throw new Error("could not read browser identity");
       }
-      // Record a browser pid that matches a live process but whose start
-      // identity does not: the reaper must treat it as reused, not signal it.
       const stale = await createSession(
         {
           type: "browser",
           projectDir: "/proj",
           status: "running",
+          desktop: {
+            display: ":124",
+            vncPid: vnc.pid,
+            xvfbPid: xvfb.pid,
+          },
           browser: {
-            browserPid: pid,
-            browserStartTimeTicks: identity.startTicks + 1,
+            browserPid: identity.pid,
+            browserStartTimeTicks: identity.startTicks,
             binaryPath: "/usr/bin/chromium",
             profileMode: "ephemeral",
             profileDir: "/tmp/picklab-profile",
@@ -408,14 +424,94 @@ describe("session registry", () => {
         env,
       );
 
-      const reaped = await reapDeadRunningSessions(env);
+      const reaped = await reapDeadRunningSessions(env, () => false);
 
       expect(reaped.map((record) => record.id)).toEqual([stale.id]);
-      expect(isPidAlive(pid)).toBe(true);
+      expect(fs.readFileSync(orderFile, "utf8").trim().split("\n")).toEqual([
+        "browser",
+        "vnc",
+        "xvfb",
+      ]);
     } finally {
-      if (isPidAlive(pid)) {
-        await stopPid(pid, { timeoutMs: 1000 });
-        await waitForExit(helper);
+      for (const child of [browser, vnc, xvfb]) {
+        if (child.pid !== undefined && isPidAlive(child.pid)) {
+          try {
+            process.kill(child === browser ? -child.pid : child.pid, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+      }
+    }
+  });
+
+  it("leaves helpers and profile intact for an unconfirmed browser group", async () => {
+    const browser = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const vnc = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const xvfb = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    if (
+      browser.pid === undefined ||
+      vnc.pid === undefined ||
+      xvfb.pid === undefined
+    ) {
+      throw new Error("child process did not expose a pid");
+    }
+    const profileDir = path.join(home, "reused-profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await fs.promises.writeFile(path.join(profileDir, "Cookies"), "secret");
+    try {
+      const identity = readProcessIdentity(browser.pid);
+      if (identity === undefined) {
+        throw new Error("could not read browser identity");
+      }
+      // The numeric PID is live but the start identity is not ours. Reaping
+      // must fail closed before touching any dependent desktop process.
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":125",
+            vncPid: vnc.pid,
+            xvfbPid: xvfb.pid,
+          },
+          browser: {
+            browserPid: browser.pid,
+            browserStartTimeTicks: identity.startTicks + 1,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir,
+            cdpPort: 1,
+          },
+        },
+        env,
+      );
+
+      const reaped = await reapDeadRunningSessions(env);
+
+      expect(reaped).toEqual([]);
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+      expect(isPidAlive(browser.pid)).toBe(true);
+      expect(isPidAlive(vnc.pid)).toBe(true);
+      expect(isPidAlive(xvfb.pid)).toBe(true);
+      expect(fs.existsSync(path.join(profileDir, "Cookies"))).toBe(true);
+    } finally {
+      for (const child of [browser, vnc, xvfb]) {
+        if (child.pid !== undefined && isPidAlive(child.pid)) {
+          await stopPid(child.pid, { timeoutMs: 1000 });
+          await waitForExit(child);
+        }
       }
     }
   });
