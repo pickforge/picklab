@@ -317,3 +317,190 @@ export async function stopPid(
   }
   return !isPidAlive(pid);
 }
+
+/**
+ * A process's identity: its PID plus the `/proc` start time (field 22 of
+ * `/proc/<pid>/stat`, in clock ticks). The start time distinguishes a live
+ * process from a later, unrelated process that the kernel happened to assign
+ * the same PID, so callers can refuse to signal a reused PID.
+ */
+export interface ProcessIdentity {
+  pid: number;
+  startTicks: number;
+}
+
+interface ProcStat {
+  state: string;
+  pgrp: number;
+  startTicks: number;
+}
+
+/**
+ * Parse the fields we care about out of a `/proc/<pid>/stat` line. The `comm`
+ * field (field 2) is wrapped in parentheses and may itself contain spaces or
+ * parentheses, so we anchor on the final `)` and index the numeric fields that
+ * follow it.
+ */
+export function parseProcStat(content: string): ProcStat | undefined {
+  const close = content.lastIndexOf(")");
+  if (close === -1) return undefined;
+  const fields = content.slice(close + 1).trim().split(/\s+/);
+  // fields[0] is field 3 (state); field N maps to fields[N - 3].
+  const state = fields[0];
+  const pgrp = Number(fields[5 - 3]);
+  const startTicks = Number(fields[22 - 3]);
+  if (
+    state === undefined ||
+    !Number.isFinite(pgrp) ||
+    !Number.isFinite(startTicks)
+  ) {
+    return undefined;
+  }
+  return { state, pgrp, startTicks };
+}
+
+function readProcStat(pid: number): ProcStat | undefined {
+  let content: string;
+  try {
+    content = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch {
+    return undefined;
+  }
+  return parseProcStat(content);
+}
+
+/** Read a process's start time in clock ticks, or undefined if it is gone. */
+export function readProcessStartTicks(pid: number): number | undefined {
+  const stat = readProcStat(pid);
+  return stat === undefined || stat.state === "Z" ? undefined : stat.startTicks;
+}
+
+/** Snapshot a live process's identity, or undefined if it is not running. */
+export function readProcessIdentity(pid: number): ProcessIdentity | undefined {
+  const startTicks = readProcessStartTicks(pid);
+  return startTicks === undefined ? undefined : { pid, startTicks };
+}
+
+/**
+ * Confirm the PID still refers to the same process it did when the identity
+ * was captured. Returns false if the process exited or the PID was reused.
+ */
+export function processIdentityMatches(identity: ProcessIdentity): boolean {
+  const startTicks = readProcessStartTicks(identity.pid);
+  return startTicks !== undefined && startTicks === identity.startTicks;
+}
+
+/** List the PIDs whose process group id equals `pgid`. */
+export function listProcessGroupMembers(pgid: number): number[] {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch {
+    return [];
+  }
+  const members: number[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    const stat = readProcStat(pid);
+    if (stat !== undefined && stat.state !== "Z" && stat.pgrp === pgid) {
+      members.push(pid);
+    }
+  }
+  return members;
+}
+
+export type StopProcessGroupOutcome =
+  | "already-dead"
+  | "reused"
+  | "terminated"
+  | "survived";
+
+export interface StopProcessGroupResult {
+  outcome: StopProcessGroupOutcome;
+  signaled: boolean;
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Terminate a whole process group, identified by its group-leader identity,
+ * with SIGTERM then SIGKILL escalation. Before the first signal, the recorded
+ * process must still exist with its recorded start identity and lead the
+ * recorded group. This remains verifiable while the leader is a zombie.
+ * Before escalation, a reused PID leading that group is rejected so an
+ * unrelated group is never killed.
+ *
+ * The leader must have been spawned as a process-group leader (e.g. `spawn`
+ * with `detached: true`), so its PID doubles as the group id.
+ */
+export async function stopProcessGroupVerified(
+  identity: ProcessIdentity,
+  opts: { timeoutMs?: number } = {},
+): Promise<StopProcessGroupResult> {
+  const timeoutMs = opts.timeoutMs ?? 5_000;
+  const leader = readProcStat(identity.pid);
+  if (leader === undefined) {
+    return {
+      outcome:
+        listProcessGroupMembers(identity.pid).length === 0
+          ? "already-dead"
+          : "reused",
+      signaled: false,
+    };
+  }
+  if (
+    leader.startTicks !== identity.startTicks ||
+    leader.pgrp !== identity.pid
+  ) {
+    return { outcome: "reused", signaled: false };
+  }
+
+  signalGroup(identity.pid, "SIGTERM");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
+    ) {
+      return { outcome: "terminated", signaled: true };
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  const currentLeader = readProcStat(identity.pid);
+  if (
+    currentLeader !== undefined &&
+    currentLeader.startTicks !== identity.startTicks &&
+    currentLeader.pgrp === identity.pid
+  ) {
+    return { outcome: "reused", signaled: true };
+  }
+  signalGroup(identity.pid, "SIGKILL");
+  const killDeadline = Date.now() + 1_000;
+  while (Date.now() < killDeadline) {
+    if (
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
+    ) {
+      return { outcome: "terminated", signaled: true };
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return {
+    outcome:
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
+        ? "terminated"
+        : "survived",
+    signaled: true,
+  };
+}

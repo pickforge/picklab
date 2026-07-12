@@ -1,10 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isPidAlive, runCommand, startDaemon, stopPid } from "../src/proc.js";
+import {
+  isPidAlive,
+  listProcessGroupMembers,
+  parseProcStat,
+  processIdentityMatches,
+  readProcessIdentity,
+  readProcessStartTicks,
+  runCommand,
+  startDaemon,
+  stopPid,
+  stopProcessGroupVerified,
+  type ProcessIdentity,
+} from "../src/proc.js";
 
 const node = process.execPath;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 describe("runCommand", () => {
   it("passes arguments verbatim without shell interpretation", async () => {
@@ -192,5 +209,368 @@ describe("daemon supervision", () => {
     const result = await runCommand(node, ["-e", "console.log(process.pid)"]);
     const deadPid = Number(result.stdout.trim());
     expect(await stopPid(deadPid, { timeoutMs: 500 })).toBe(true);
+  });
+});
+
+describe("process identity and group termination", () => {
+  function procStat(
+    pid: number,
+    state: string,
+    pgrp: number,
+    startTicks: number,
+  ): string {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = state;
+    fields[2] = String(pgrp);
+    fields[19] = String(startTicks);
+    return `${pid} (browser) ${fields.join(" ")}`;
+  }
+
+  it("reads a live identity and returns undefined for a dead pid", async () => {
+    const self = readProcessIdentity(process.pid);
+    expect(self?.pid).toBe(process.pid);
+    expect(typeof self?.startTicks).toBe("number");
+    expect(self?.startTicks).toBeGreaterThan(0);
+
+    const { stdout } = await runCommand(node, [
+      "-e",
+      "console.log(process.pid)",
+    ]);
+    const deadPid = Number(stdout.trim());
+    expect(readProcessStartTicks(deadPid)).toBeUndefined();
+    expect(readProcessIdentity(deadPid)).toBeUndefined();
+  });
+
+  it("parses process state so zombie group members can be ignored", () => {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = "Z";
+    fields[2] = "123";
+    fields[19] = "456";
+
+    expect(parseProcStat(`123 (worker (test)) ${fields.join(" ")}`)).toEqual({
+      state: "Z",
+      pgrp: 123,
+      startTicks: 456,
+    });
+  });
+
+  it("treats a zombie process identity as dead", () => {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = "Z";
+    fields[2] = "123";
+    fields[19] = "456";
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(`123 (browser) ${fields.join(" ")}`);
+    try {
+      expect(readProcessStartTicks(123)).toBeUndefined();
+      expect(readProcessIdentity(123)).toBeUndefined();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("terminates a verified group whose matching leader is a zombie", async () => {
+    const pid = 1_234_567;
+    const memberPid = pid + 1;
+    const startTicks = 456;
+    let signaled = false;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((filePath: fs.PathOrFileDescriptor) => {
+        if (signaled) {
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        }
+        return String(filePath).endsWith(`/${pid}/stat`)
+          ? procStat(pid, "Z", pid, startTicks)
+          : procStat(memberPid, "S", pid, startTicks + 1);
+      }) as typeof fs.readFileSync);
+    const entries = vi
+      .spyOn(fs, "readdirSync")
+      .mockReturnValue([String(memberPid)] as never);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      signaled = true;
+      return true;
+    });
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "terminated", signaled: true });
+      expect(kill.mock.calls).toEqual([[-pid, "SIGTERM"]]);
+    } finally {
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("matches a live identity and rejects a start-time mismatch", () => {
+    const self = readProcessIdentity(process.pid);
+    expect(self).toBeDefined();
+    const identity = self as ProcessIdentity;
+    expect(processIdentityMatches(identity)).toBe(true);
+    // Same live pid, different start ticks => a reused pid, not our process.
+    expect(
+      processIdentityMatches({
+        pid: identity.pid,
+        startTicks: identity.startTicks + 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses to signal a live pid whose start identity no longer matches", async () => {
+    const startTicks = readProcessStartTicks(process.pid) ?? 0;
+    const result = await stopProcessGroupVerified(
+      { pid: process.pid, startTicks: startTicks + 1 },
+      { timeoutMs: 200 },
+    );
+    expect(result).toEqual({ outcome: "reused", signaled: false });
+    expect(isPidAlive(process.pid)).toBe(true);
+  });
+
+  it("refuses to signal a matching pid that is not the group leader", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(procStat(pid, "S", pid + 1, startTicks));
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: false });
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("does not report termination while the recorded identity is still live", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(procStat(pid, "S", pid, startTicks));
+    const entries = vi.spyOn(fs, "readdirSync").mockReturnValue([]);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    vi.useFakeTimers();
+    try {
+      const pending = stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 100 },
+      );
+      await vi.advanceTimersByTimeAsync(1_200);
+
+      await expect(pending).resolves.toEqual({
+        outcome: "survived",
+        signaled: true,
+      });
+      expect(kill.mock.calls).toEqual([
+        [-pid, "SIGTERM"],
+        [-pid, "SIGKILL"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("refuses SIGKILL when the leader pid is reused after SIGTERM", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValueOnce(procStat(pid, "S", pid, startTicks))
+      .mockReturnValue(procStat(pid, "S", pid, startTicks + 1));
+    const entries = vi.spyOn(fs, "readdirSync").mockReturnValue([]);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 0 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: true });
+      expect(kill.mock.calls).toEqual([[-pid, "SIGTERM"]]);
+    } finally {
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("reports an already-dead leader without signaling", async () => {
+    const { stdout } = await runCommand(node, [
+      "-e",
+      "console.log(process.pid)",
+    ]);
+    const deadPid = Number(stdout.trim());
+    const result = await stopProcessGroupVerified(
+      { pid: deadPid, startTicks: 1 },
+      { timeoutMs: 200 },
+    );
+    expect(result).toEqual({ outcome: "already-dead", signaled: false });
+  });
+
+  it("refuses to signal an unverifiable group after its leader exits", async () => {
+    const stubbornChild = [
+      'process.on("SIGTERM", () => {});',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      `spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], { stdio: "ignore" });`,
+      "setTimeout(() => process.exit(0), 300);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+      const deadline = Date.now() + 3000;
+      while (
+        Date.now() < deadline &&
+        (processIdentityMatches(identity as ProcessIdentity) ||
+          listProcessGroupMembers(pid).length === 0)
+      ) {
+        await delay(50);
+      }
+      expect(processIdentityMatches(identity as ProcessIdentity)).toBe(false);
+      expect(listProcessGroupMembers(pid).length).toBeGreaterThan(0);
+
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: false });
+      expect(listProcessGroupMembers(pid).length).toBeGreaterThan(0);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+    }
+  });
+
+  it("terminates the whole verified process group and confirms it is gone", async () => {
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    let members: number[] = [];
+    try {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        members = listProcessGroupMembers(pid);
+        if (members.length >= 2) break;
+        await delay(50);
+      }
+      expect(members).toContain(pid);
+      expect(members.length).toBeGreaterThanOrEqual(2);
+
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 3000 },
+      );
+      expect(result.outcome).toBe("terminated");
+      expect(result.signaled).toBe(true);
+      expect(listProcessGroupMembers(pid)).toEqual([]);
+    } finally {
+      if (isPidAlive(pid)) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // group already gone
+        }
+      }
+      for (const member of members) {
+        if (isPidAlive(member)) {
+          try {
+            process.kill(member, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+      }
+    }
+  });
+
+  it("kills surviving group members after the leader exits", async () => {
+    const stubbornChild = [
+      'process.on("SIGTERM", () => {});',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      `spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], { stdio: "ignore" });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    let members: number[] = [];
+    try {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        members = listProcessGroupMembers(pid);
+        if (members.length >= 2) break;
+        await delay(50);
+      }
+      expect(members.length).toBeGreaterThanOrEqual(2);
+      await delay(100);
+
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "terminated", signaled: true });
+      expect(listProcessGroupMembers(pid)).toEqual([]);
+      for (const member of members) {
+        expect(isPidAlive(member)).toBe(false);
+      }
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+    }
   });
 });

@@ -32,6 +32,17 @@ then reset this file.
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
   skipping on a misconfigured runner.
+- Added internal browser session contracts to `@pickforge/picklab-core`
+  (private, unpublished): a `browser` session type with `BrowserSessionInfo`,
+  capability-based session resolution (`SessionCapability`,
+  `sessionHasCapability`), and verified process-group stop primitives
+  (`stopProcessGroupVerified`, `processIdentityMatches`, and friends) now
+  wired into the session reaper. No CLI/MCP-visible behavior yet; the browser
+  lifecycle wiring lands in a later PR.
+- Browser reaping now confirms the recorded browser process group is gone
+  before stopping VNC/Xvfb helpers or deleting the session record. Reused or
+  otherwise unconfirmed groups leave dependent helpers and profile data intact
+  and mark the record as errored for inspection.
 
 ## Validation
 
@@ -51,6 +62,11 @@ then reset this file.
   validation tests for out-of-range buttons, deltas, durations, and
   intervals; live Xvfb smoke driving move, scroll, drag, and double-click and
   asserting the pointer position via `xdotool getmouselocation`.
+- Process-group regression tests cover reused PID refusal, stubborn children,
+  and zombie-only groups.
+- `bun run test packages/core` (8 files, 107 passed) and
+  `bun run typecheck` pass. Core session regressions verify browser-group-first
+  teardown and fail-closed handling for an unconfirmed browser identity.
 
 ### Not tested yet
 

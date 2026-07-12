@@ -4,7 +4,29 @@ import type { EnvLike } from "./paths.js";
 import { createRun, type RunHandle } from "./run.js";
 import { getSession, listSessions, type SessionRecord } from "./session.js";
 
-export type RunnableSessionType = "desktop" | "android";
+/**
+ * A capability a session record can provide. Resolution keys off which legs a
+ * record carries, not its declared `type`: a browser session owns a desktop
+ * leg, so it satisfies the `desktop` capability as well as `browser`.
+ */
+export type SessionCapability = "desktop" | "android" | "browser";
+
+/** Backwards-compatible alias for the capability a consumer resolves against. */
+export type RunnableSessionType = SessionCapability;
+
+export function sessionHasCapability(
+  record: SessionRecord,
+  capability: SessionCapability,
+): boolean {
+  switch (capability) {
+    case "desktop":
+      return record.desktop !== undefined;
+    case "android":
+      return record.android !== undefined;
+    case "browser":
+      return record.browser !== undefined;
+  }
+}
 
 export interface ResolveRunnableSessionOptions {
   env?: EnvLike;
@@ -15,7 +37,7 @@ export interface ResolveRunnableSessionOptions {
 }
 
 export async function resolveRunnableSession(
-  type: RunnableSessionType,
+  capability: SessionCapability,
   id: string | undefined,
   opts: ResolveRunnableSessionOptions,
 ): Promise<SessionRecord> {
@@ -25,15 +47,17 @@ export async function resolveRunnableSession(
     if (record === undefined) {
       throw new Error(`Session not found: ${id}`);
     }
-    if (record.type !== type) {
+    if (!sessionHasCapability(record, capability)) {
       throw new Error(
-        `Session ${id} is of type "${record.type}", but this ${opts.consumerLabel} needs a ${type} session`,
+        `Session ${id} is of type "${record.type}" and has no ${capability} capability, ` +
+          `but this ${opts.consumerLabel} needs a ${capability} session`,
       );
     }
     return record;
   }
   let candidates = (await listSessions(env)).filter(
-    (record) => record.type === type && record.status === "running",
+    (record) =>
+      record.status === "running" && sessionHasCapability(record, capability),
   );
   let scopeLabel = "found";
   if (opts.projectDir !== undefined) {
@@ -45,12 +69,12 @@ export async function resolveRunnableSession(
   }
   if (candidates.length === 0) {
     throw new Error(
-      `No running ${type} session ${scopeLabel}; ${opts.createHint}`,
+      `No running ${capability} session ${scopeLabel}; ${opts.createHint}`,
     );
   }
   if (candidates.length > 1) {
     throw new Error(
-      `Multiple running ${type} sessions ${scopeLabel} ` +
+      `Multiple running ${capability} sessions ${scopeLabel} ` +
         `(${candidates.map((record) => record.id).join(", ")}); ` +
         opts.selectHint,
     );
