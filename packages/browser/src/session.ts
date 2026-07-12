@@ -33,6 +33,7 @@ import {
   type BrowserRuntimeLayout,
 } from "./env.js";
 import { waitForDevToolsPort } from "./devtools.js";
+import { buildSupervisedBrowserCommand } from "./supervisor.js";
 import { asError } from "./util.js";
 
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
@@ -44,6 +45,12 @@ const DEFAULT_XVFB_WAIT_TIMEOUT_MS = 30_000;
 // Allocate browser displays from a range separate from desktop sessions (which
 // start at :90) so the two kinds never contend for the same display number.
 const BROWSER_DISPLAY_START = 200;
+
+function assertNotAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new Error("Browser session creation aborted by the client");
+  }
+}
 
 export interface CreateBrowserSessionOptions {
   projectDir: string;
@@ -59,6 +66,7 @@ export interface CreateBrowserSessionOptions {
   startUrl?: string;
   cdpTimeoutMs?: number;
   xvfbWaitTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface BrowserSessionHandle {
@@ -126,7 +134,10 @@ async function stopBrowserGroup(
   }
   try {
     const result = await stopProcessGroupVerified(identity);
-    return { gone: result.outcome !== "survived" };
+    return {
+      gone:
+        result.outcome === "terminated" || result.outcome === "already-dead",
+    };
   } catch (error) {
     return { gone: false, error: asError(error) };
   }
@@ -143,6 +154,7 @@ export async function createBrowserSession(
 ): Promise<BrowserSessionHandle> {
   const registryEnv = opts.registryEnv ?? process.env;
   const spawnEnv = opts.env ?? process.env;
+  assertNotAborted(opts.signal);
   const binaryPath = requireChromeBinary({
     env: spawnEnv,
     ...(opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : {}),
@@ -183,7 +195,13 @@ export async function createBrowserSession(
       layout,
       sourceEnv: spawnEnv,
     });
-    const daemon = await startDaemon(binaryPath, args, {
+    assertNotAborted(opts.signal);
+    const supervised = buildSupervisedBrowserCommand(
+      process.execPath,
+      binaryPath,
+      args,
+    );
+    const daemon = await startDaemon(supervised.command, supervised.args, {
       logDir,
       name: "chrome",
       env: childEnv,
@@ -196,9 +214,14 @@ export async function createBrowserSession(
     const waited = await waitForDevToolsPort({
       profileDir: layout.profileDir,
       timeoutMs: opts.cdpTimeoutMs ?? DEFAULT_CDP_TIMEOUT_MS,
-      isAlive: () => isPidAlive(daemon.pid),
+      isAlive: () =>
+        browserIdentity !== undefined && processIdentityMatches(browserIdentity),
+      signal: opts.signal,
     });
     if (!waited.ok) {
+      if (waited.reason === "aborted") {
+        throw new Error("Browser session creation aborted by the client");
+      }
       throw new Error(
         waited.reason === "exited"
           ? `Chrome exited during startup before exposing a DevTools port; ` +
@@ -250,7 +273,7 @@ export async function createBrowserSession(
     };
   } catch (error) {
     const { gone } = await stopBrowserGroup(browserIdentity);
-    if (xvfb !== undefined) {
+    if (gone && xvfb !== undefined) {
       await stopXvfb(xvfb.pid).catch(() => {});
     }
     if (gone) {
@@ -330,7 +353,7 @@ export async function destroyBrowserSession(
   }
 
   const xvfbPid = record.desktop?.xvfbPid;
-  if (xvfbPid !== undefined) {
+  if (xvfbPid !== undefined && gone) {
     try {
       const stopped = await stopXvfb(xvfbPid);
       if (!stopped) {
@@ -341,6 +364,12 @@ export async function destroyBrowserSession(
     } catch (error) {
       failures.push(asError(error));
     }
+  } else if (xvfbPid !== undefined) {
+    failures.push(
+      new Error(
+        `Refusing to stop Xvfb for ${id}: Chrome process group is not confirmed gone`,
+      ),
+    );
   }
 
   const sessionDir = browserSessionDir(id, registryEnv);

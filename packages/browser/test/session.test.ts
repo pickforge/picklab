@@ -7,6 +7,8 @@ import {
   getSession,
   isPidAlive,
   listProcessGroupMembers,
+  stopPid,
+  updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
 import { findOnPath } from "@pickforge/picklab-desktop-linux";
@@ -44,8 +46,14 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-function spawnEnvFor(mode: "ready" | "crash" | "stall", extra: EnvLike = {}): EnvLike {
-  const binDir = path.join(tmp, `bin-${mode}-${Math.random().toString(36).slice(2)}`);
+function spawnEnvFor(
+  mode: "ready" | "crash" | "launcher" | "stall",
+  extra: EnvLike = {},
+): EnvLike {
+  const binDir = path.join(
+    tmp,
+    `bin-${mode}-${Math.random().toString(36).slice(2)}`,
+  );
   writeFakeChrome(binDir, mode);
   return { PATH: fakePath(binDir), ...extra };
 }
@@ -110,6 +118,30 @@ describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
     } finally {
       await destroyBrowserSession(session.id, registryEnv).catch(() => {});
     }
+  }, TEST_TIMEOUT_MS);
+
+  it("keeps a stable group leader when a browser launcher exits", async () => {
+    const session = await createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: spawnEnvFor("launcher"),
+      cdpTimeoutMs: 5000,
+    });
+    const childPid = Number(
+      fs.readFileSync(path.join(session.logDir, "chrome.pid"), "utf8").trim(),
+    );
+    try {
+      expect(childPid).not.toBe(session.browserPid);
+      expect(isPidAlive(session.browserPid)).toBe(true);
+      expect(isPidAlive(childPid)).toBe(true);
+      expect((await getBrowserSessionStatus(session.id, registryEnv)).alive).toBe(
+        true,
+      );
+    } finally {
+      await destroyBrowserSession(session.id, registryEnv);
+    }
+    expect(isPidAlive(session.browserPid)).toBe(false);
+    expect(isPidAlive(childPid)).toBe(false);
   }, TEST_TIMEOUT_MS);
 
   it("hands Chrome a scrubbed environment with no inherited secrets", async () => {
@@ -199,6 +231,46 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
     expect(await getSession(session.id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
+  it("leaves the display alive when the browser group is unverifiable", async () => {
+    const session = await createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: spawnEnvFor("ready"),
+      cdpTimeoutMs: 5000,
+    });
+    const record = await getSession(session.id, registryEnv);
+    if (record?.browser === undefined) {
+      throw new Error("browser record missing");
+    }
+    await updateSession(
+      session.id,
+      {
+        browser: {
+          ...record.browser,
+          browserStartTimeTicks: record.browser.browserStartTimeTicks + 1,
+        },
+      },
+      registryEnv,
+    );
+
+    try {
+      await expect(destroyBrowserSession(session.id, registryEnv)).rejects.toThrow(
+        /Failed to fully destroy browser session/,
+      );
+      expect(isPidAlive(session.browserPid)).toBe(true);
+      expect(isPidAlive(session.xvfbPid)).toBe(true);
+      expect(fs.existsSync(session.profileDir)).toBe(true);
+      expect((await getSession(session.id, registryEnv))?.status).toBe("error");
+    } finally {
+      try {
+        process.kill(-session.browserPid, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+      await stopPid(session.xvfbPid, { timeoutMs: 1000 });
+    }
+  }, TEST_TIMEOUT_MS);
+
   it("rejects destroying a non-browser session", async () => {
     // A desktop-only record has no browser leg.
     const { createSession } = await import("@pickforge/picklab-core");
@@ -235,6 +307,29 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     if (xvfbPid !== undefined) {
       expect(isPidAlive(xvfbPid)).toBe(false);
     }
+  }, TEST_TIMEOUT_MS);
+
+  it("cancels startup and cleans up the browser group", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    await expect(
+      createBrowserSession({
+        projectDir,
+        registryEnv,
+        env: spawnEnvFor("stall"),
+        cdpTimeoutMs: 5000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/aborted/);
+
+    const sessions = fs
+      .readdirSync(path.join(home, "sessions"))
+      .filter((f) => f.endsWith(".json"));
+    expect(sessions).toHaveLength(1);
+    const id = sessions[0]!.slice(0, -".json".length);
+    expect(
+      fs.existsSync(path.join(browserSessionDir(id, registryEnv), "profile")),
+    ).toBe(false);
   }, TEST_TIMEOUT_MS);
 
   it("kills the process group and removes the profile when Chrome stalls", async () => {

@@ -38,13 +38,14 @@ export function readDevToolsActivePort(profileDir: string): number | undefined {
 
 export type DevToolsPortResult =
   | { ok: true; port: number }
-  | { ok: false; reason: "exited" | "timeout" };
+  | { ok: false; reason: "aborted" | "exited" | "timeout" };
 
 export interface WaitForDevToolsPortOptions {
   profileDir: string;
   timeoutMs: number;
   /** Liveness probe for the Chrome process; a dead process ends the wait. */
   isAlive: () => boolean;
+  signal?: AbortSignal;
   pollIntervalMs?: number;
 }
 
@@ -59,6 +60,9 @@ export async function waitForDevToolsPort(
   const poll = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const deadline = Date.now() + opts.timeoutMs;
   for (;;) {
+    if (opts.signal?.aborted === true) {
+      return { ok: false, reason: "aborted" };
+    }
     const port = readDevToolsActivePort(opts.profileDir);
     if (port !== undefined) {
       return { ok: true, port };

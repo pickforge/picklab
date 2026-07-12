@@ -61,6 +61,19 @@ describe("waitForDevToolsPort", () => {
     expect(result).toEqual({ ok: true, port: 5555 });
   });
 
+  it("stops waiting when creation is aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await waitForDevToolsPort({
+      profileDir: tmp,
+      timeoutMs: 2000,
+      isAlive: () => true,
+      signal: controller.signal,
+      pollIntervalMs: 10,
+    });
+    expect(result).toEqual({ ok: false, reason: "aborted" });
+  });
+
   it("fails with 'exited' when the process dies before publishing a port", async () => {
     const result = await waitForDevToolsPort({
       profileDir: tmp,

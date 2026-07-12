@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
-import { agentsDir, picklabHome, sessionsDir } from "../src/paths.js";
+import {
+  agentsDir,
+  isProfileConfined,
+  picklabHome,
+  sessionsDir,
+} from "../src/paths.js";
 
 describe("picklabHome", () => {
   it("uses PICKLAB_HOME when set and non-empty", () => {
@@ -28,5 +33,32 @@ describe("global subdirs", () => {
 
   it("builds the agents dir", () => {
     expect(agentsDir(env)).toBe(path.join("/lab", "agents"));
+  });
+});
+
+describe("isProfileConfined", () => {
+  it("accepts the profile and runtime paths beneath a resolved session", () => {
+    const sessionDir = "/tmp/picklab/sessions/../sessions/brow-12345678";
+    expect(
+      isProfileConfined(
+        sessionDir,
+        "/tmp/picklab/sessions/brow-12345678/profile",
+      ),
+    ).toBe(true);
+    expect(
+      isProfileConfined(
+        sessionDir,
+        "/tmp/picklab/sessions/brow-12345678/home/.cache",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects sibling paths with a shared prefix", () => {
+    expect(
+      isProfileConfined(
+        "/tmp/picklab/sessions/brow-12345678",
+        "/tmp/picklab/sessions/brow-123456789/profile",
+      ),
+    ).toBe(false);
   });
 });

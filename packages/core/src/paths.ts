@@ -48,9 +48,10 @@ export function isProfileConfined(
   sessionDir: string,
   profileDir: string,
 ): boolean {
+  const base = path.resolve(sessionDir);
   const resolved = path.resolve(profileDir);
   return (
-    resolved === path.join(sessionDir, "profile") ||
-    resolved.startsWith(sessionDir + path.sep)
+    resolved === path.join(base, "profile") ||
+    resolved.startsWith(base + path.sep)
   );
 }

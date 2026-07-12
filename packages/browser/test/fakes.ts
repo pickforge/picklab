@@ -6,7 +6,7 @@ export function writeExecutable(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, { mode: 0o755 });
 }
 
-export type FakeChromeMode = "ready" | "crash" | "stall";
+export type FakeChromeMode = "ready" | "crash" | "launcher" | "stall";
 
 /**
  * A fake Chrome binary. It is named `google-chrome-stable` — the first entry in
@@ -28,7 +28,7 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       'const fs = require("node:fs");',
       'const net = require("node:net");',
       'const path = require("node:path");',
-      `const MODE = ${JSON.stringify(mode)};`,
+      `const MODE = ${JSON.stringify(mode === "launcher" ? "ready" : mode)};`,
       "let profile = null;",
       "for (const a of process.argv.slice(2)) {",
       '  if (a.startsWith("--user-data-dir=")) profile = a.slice("--user-data-dir=".length);',
@@ -56,7 +56,9 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
   );
   writeExecutable(
     path.join(binDir, "google-chrome-stable"),
-    `#!/bin/sh\nexec '${process.execPath}' '${server}' "$@"\n`,
+    mode === "launcher"
+      ? `#!/bin/sh\n'${process.execPath}' '${server}' "$@" &\nexit 0\n`
+      : `#!/bin/sh\nexec '${process.execPath}' '${server}' "$@"\n`,
   );
 }
 

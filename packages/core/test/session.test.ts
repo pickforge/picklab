@@ -413,8 +413,20 @@ describe("session registry", () => {
           browserStartTimeTicks: 1,
           binaryPath: "/usr/bin/chromium",
           profileMode: "ephemeral",
-          profileDir: "/tmp/picklab-profile",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
           cdpPort: 1,
+        },
+      },
+      env,
+    );
+    const profileDir = path.join(home, "sessions", stale.id, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          ...stale.browser!,
+          profileDir,
         },
       },
       env,
@@ -506,8 +518,9 @@ describe("session registry", () => {
 
       await reapDeadRunningSessions(env);
 
-      expect(await getSession(stale.id, env)).toBeUndefined();
-      // The confinement guard must leave an out-of-tree path untouched.
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+      // The confinement guard must leave the record for inspection and the
+      // out-of-tree path untouched.
       expect(fs.existsSync(outside)).toBe(true);
     } finally {
       await fs.promises.rm(outside, { recursive: true, force: true });

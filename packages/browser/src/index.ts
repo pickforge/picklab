@@ -17,6 +17,11 @@ export {
 export { buildChromeArgs, type BuildChromeArgsOptions } from "./args.js";
 
 export {
+  buildSupervisedBrowserCommand,
+  type SupervisedBrowserCommand,
+} from "./supervisor.js";
+
+export {
   parseDevToolsActivePort,
   readDevToolsActivePort,
   waitForDevToolsPort,

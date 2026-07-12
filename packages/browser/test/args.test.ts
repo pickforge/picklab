@@ -40,6 +40,28 @@ describe("buildChromeArgs", () => {
     expect(() => buildChromeArgs({ profileDir: "" })).toThrow(/profileDir/);
   });
 
+  it("rejects start URLs that escape the web sandbox", () => {
+    for (const startUrl of ["file:///etc/passwd", "chrome://settings", "data:text/html,x"]) {
+      expect(() => buildChromeArgs({ profileDir: "/p", startUrl })).toThrow(
+        /unsupported protocol/,
+      );
+    }
+  });
+
+  it("rejects extra args that override isolation or CDP", () => {
+    for (const arg of [
+      "--user-data-dir=/tmp/personal",
+      "--remote-debugging-address=0.0.0.0",
+      "--remote-debugging-port=9222",
+      "--remote-debugging-pipe",
+      "--profile-directory=Default",
+    ]) {
+      expect(() =>
+        buildChromeArgs({ profileDir: "/p", extraArgs: [arg] }),
+      ).toThrow(/reserved option/);
+    }
+  });
+
   it("appends caller extra args before the start URL", () => {
     const args = buildChromeArgs({
       profileDir: "/p",
