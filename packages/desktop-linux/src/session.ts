@@ -22,6 +22,7 @@ export interface CreateDesktopSessionOptions {
   width?: number;
   height?: number;
   vnc?: boolean;
+  vncControl?: boolean;
 }
 
 export interface DesktopSessionHandle {
@@ -30,6 +31,7 @@ export interface DesktopSessionHandle {
   xvfbPid: number;
   vncPid?: number;
   vncPort?: number;
+  vncViewOnly?: boolean;
   logDir: string;
 }
 
@@ -51,8 +53,9 @@ export async function createDesktopSession(
   opts: CreateDesktopSessionOptions,
 ): Promise<DesktopSessionHandle> {
   const registryEnv = opts.registryEnv ?? process.env;
+  const wantsVnc = opts.vnc === true || opts.vncControl === true;
   if (
-    opts.vnc === true &&
+    wantsVnc &&
     detectVncBinary({ ...process.env, ...opts.env }) === null
   ) {
     throw new Error(
@@ -75,8 +78,13 @@ export async function createDesktopSession(
       logDir,
       env: opts.env,
     });
-    if (opts.vnc === true) {
-      vnc = await startVnc({ display: xvfb.display, logDir, env: opts.env });
+    if (wantsVnc) {
+      vnc = await startVnc({
+        display: xvfb.display,
+        logDir,
+        env: opts.env,
+        viewOnly: opts.vncControl !== true,
+      });
     }
 
     const desktop: DesktopSessionInfo = {
@@ -86,6 +94,7 @@ export async function createDesktopSession(
     if (vnc !== undefined) {
       desktop.vncPid = vnc.pid;
       desktop.vncPort = vnc.port;
+      desktop.vncViewOnly = opts.vncControl !== true;
     }
     await updateSession(record.id, { status: "running", desktop }, registryEnv);
 
@@ -98,6 +107,7 @@ export async function createDesktopSession(
     if (vnc !== undefined) {
       handle.vncPid = vnc.pid;
       handle.vncPort = vnc.port;
+      handle.vncViewOnly = opts.vncControl !== true;
     }
     return handle;
   } catch (error) {

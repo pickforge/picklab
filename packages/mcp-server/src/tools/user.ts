@@ -9,8 +9,9 @@ const SECRET_QUESTION_PATTERN =
 const SECRET_GUIDANCE =
   "This looks like a request for a secret (password, API key, token, 2FA " +
   "code, or other credential). Never collect secrets through this tool. " +
-  "Ask the user to enter the secret directly into the lab app (e.g. via " +
-  'VNC) or into the environment, then confirm out-of-band with kind ' +
+  "Ask the user to enter the secret directly into the lab app through an " +
+  "explicit writable VNC control session (`--vnc-control`), or into the environment, then " +
+  "confirm out-of-band with kind " +
   '"confirm" (e.g. "I\'ve entered the password, continue?").';
 
 const NO_ELICITATION_GUIDANCE =
@@ -28,8 +29,8 @@ export function registerUserTools(server: McpServer): void {
         "judgment call, a license acceptance, a click you cannot perform, " +
         "or confirmation that an out-of-band step is done. SECURITY: never " +
         "request passwords, API keys, or tokens through this tool — ask " +
-        "the user to enter them directly into the lab app (e.g. via VNC) " +
-        "or environment instead, then confirm completion with kind " +
+        "the user to enter them directly through an explicit writable VNC " +
+        "control session, or into the environment, then confirm with kind " +
         '"confirm".',
       inputSchema: {
         question: z

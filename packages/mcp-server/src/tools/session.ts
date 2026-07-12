@@ -54,7 +54,12 @@ export function progressReporter(
 
 async function createDesktopLeg(
   ctx: ServerContext,
-  args: { width?: number; height?: number; vnc?: boolean },
+  args: {
+    width?: number;
+    height?: number;
+    vnc?: boolean;
+    vncControl?: boolean;
+  },
 ): Promise<SessionSummary> {
   const handle = await createDesktopSession({
     projectDir: ctx.projectDir,
@@ -63,6 +68,7 @@ async function createDesktopLeg(
     width: args.width,
     height: args.height,
     vnc: args.vnc,
+    vncControl: args.vncControl,
   });
   const summary: SessionSummary = {
     id: handle.id,
@@ -72,6 +78,7 @@ async function createDesktopLeg(
   };
   if (handle.vncPort !== undefined) {
     summary.vncPort = handle.vncPort;
+    summary.vncViewOnly = handle.vncViewOnly;
   }
   return summary;
 }
@@ -108,6 +115,7 @@ export async function createSessions(
     width?: number;
     height?: number;
     vnc?: boolean;
+    vncControl?: boolean;
     avdName?: string;
   },
   lifecycle: SessionLifecycle = {},
@@ -218,7 +226,13 @@ export function registerSessionTools(
         vnc: z
           .boolean()
           .optional()
-          .describe("Expose the desktop display over VNC"),
+          .describe("Expose the desktop display over read-only VNC"),
+        vncControl: z
+          .boolean()
+          .optional()
+          .describe(
+            "Expose writable VNC for explicit manual secret entry; input is not coordinated with the agent",
+          ),
         avdName: z.string().min(1).optional().describe("Android AVD name"),
       },
     },

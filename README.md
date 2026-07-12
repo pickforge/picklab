@@ -113,6 +113,8 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 
 Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedicated AVD), `desktop+android`. Most commands accept `--json` for machine-readable output and `--project-dir` to target another project.
 
+`session create --vnc` is read-only. When a human must enter a password, API key, or OTP directly into the lab app, `--vnc-control` creates an explicitly writable VNC session instead. Pause agent input while using it; coordinated human takeover is tracked separately.
+
 ## MCP surface
 
 `picklab mcp serve` exposes 22 tools over stdio:
@@ -150,7 +152,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 
 - MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`, or `init` with explicit `--create-lab-user`), with explicit consent (`--yes` or a prompt).
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
-- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal observation is also server-enforced read-only (`-viewonly`).
+- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` observation is server-enforced read-only (`-viewonly`); `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
 - PickLab provisions a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`) so lab workloads do not borrow your personal resources. Running session processes under the lab user is planned post-MVP.
 - Agent config edits are atomic, with backups of the previous config.

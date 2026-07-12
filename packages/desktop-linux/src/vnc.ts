@@ -15,6 +15,7 @@ const STARTUP_POLL_INTERVAL_MS = 100;
 export interface VncArgsOptions {
   display: string;
   port: number;
+  viewOnly?: boolean;
 }
 
 export interface StartVncOptions {
@@ -22,6 +23,7 @@ export interface StartVncOptions {
   port?: number;
   logDir: string;
   env?: EnvLike;
+  viewOnly?: boolean;
 }
 
 export interface VncHandle {
@@ -39,7 +41,7 @@ function assertValidPort(port: number): void {
 export function buildVncArgs(opts: VncArgsOptions): string[] {
   parseDisplayNumber(opts.display);
   assertValidPort(opts.port);
-  return [
+  const args = [
     "-display",
     opts.display,
     "-rfbport",
@@ -48,9 +50,12 @@ export function buildVncArgs(opts: VncArgsOptions): string[] {
     "-forever",
     "-shared",
     "-nopw",
-    "-viewonly",
-    "-quiet",
   ];
+  if (opts.viewOnly !== false) {
+    args.push("-viewonly");
+  }
+  args.push("-quiet");
+  return args;
 }
 
 export function detectVncBinary(env: EnvLike = process.env): string | null {
@@ -73,7 +78,11 @@ function isPortListening(port: number): Promise<boolean> {
 
 export async function startVnc(opts: StartVncOptions): Promise<VncHandle> {
   const port = opts.port ?? VNC_BASE_PORT + parseDisplayNumber(opts.display);
-  const args = buildVncArgs({ display: opts.display, port });
+  const args = buildVncArgs({
+    display: opts.display,
+    port,
+    viewOnly: opts.viewOnly,
+  });
   const binary = detectVncBinary({ ...process.env, ...opts.env });
   if (binary === null) {
     throw new Error(

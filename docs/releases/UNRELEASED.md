@@ -10,10 +10,11 @@ then reset this file.
   strips `WAYLAND_SOCKET`), so GTK/Qt/Electron/Flutter apps always fall back
   to X11 and render inside the isolated lab display instead of opening on the
   user's real Wayland desktop (where driving them moved the real cursor).
-- `x11vnc` now always launches with `-viewonly`, so normal VNC observation of
-  a desktop session is server-enforced read-only. Loopback binding
-  (`-localhost`), `-shared`, `-forever`, and no-password (`-nopw`) behavior is
-  unchanged.
+- Normal `--vnc` sessions now launch x11vnc with `-viewonly`, so observation is
+  server-enforced read-only. `--vnc-control` provides an explicit writable path
+  when a human must enter a password, API key, or OTP directly into the lab app;
+  it does not yet coordinate with agent input. Loopback binding (`-localhost`),
+  `-shared`, `-forever`, and no-password (`-nopw`) behavior is unchanged.
 
 ## Internal/release changes
 

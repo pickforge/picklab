@@ -74,6 +74,16 @@ describe("buildVncArgs", () => {
     expect(args).toContain("-viewonly");
   });
 
+  it("omits view-only mode for an explicit writable control session", () => {
+    const args = buildVncArgs({
+      display: ":92",
+      port: 5992,
+      viewOnly: false,
+    });
+    expect(args).toContain("-localhost");
+    expect(args).not.toContain("-viewonly");
+  });
+
   it("rejects invalid ports", () => {
     expect(() => buildVncArgs({ display: ":92", port: 0 })).toThrow(/port/i);
     expect(() => buildVncArgs({ display: ":92", port: 65536 })).toThrow(
