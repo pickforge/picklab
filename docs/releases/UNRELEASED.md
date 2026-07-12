@@ -33,13 +33,12 @@ then reset this file.
 - `buildVncArgs` exact-argv test updated to require `-viewonly`; hosted-CI
   prerequisite assertion verified to fail loudly (not skip) when `CI=true`
   and `x11vnc` is absent, and to pass once `x11vnc` is on `PATH`.
-- `bun run typecheck`, `bun run test` (49 files, 563 passed / 1 skipped
-  locally without `x11vnc` installed), `bun run test:coverage` (all
+- `bun run typecheck`, `bun run test` (49 files, 564 passed / 2 skipped
+  locally without real `x11vnc` installed), `bun run test:coverage` (all
   thresholds met), and `bun run build` all pass.
 
 ### Not tested yet
 
-- App build.
 - Installer or updater flow.
 - Platform smoke checks.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
