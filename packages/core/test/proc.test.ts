@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -239,6 +239,22 @@ describe("process identity and group termination", () => {
       pgrp: 123,
       startTicks: 456,
     });
+  });
+
+  it("treats a zombie process identity as dead", () => {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = "Z";
+    fields[2] = "123";
+    fields[19] = "456";
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(`123 (browser) ${fields.join(" ")}`);
+    try {
+      expect(readProcessStartTicks(123)).toBeUndefined();
+      expect(readProcessIdentity(123)).toBeUndefined();
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("matches a live identity and rejects a start-time mismatch", () => {

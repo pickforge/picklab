@@ -371,7 +371,8 @@ function readProcStat(pid: number): ProcStat | undefined {
 
 /** Read a process's start time in clock ticks, or undefined if it is gone. */
 export function readProcessStartTicks(pid: number): number | undefined {
-  return readProcStat(pid)?.startTicks;
+  const stat = readProcStat(pid);
+  return stat === undefined || stat.state === "Z" ? undefined : stat.startTicks;
 }
 
 /** Snapshot a live process's identity, or undefined if it is not running. */
