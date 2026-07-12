@@ -48,6 +48,7 @@ picklab init --profile desktop+android   # write project config and provision th
 picklab doctor                           # verify dependencies; --fix repairs what it can
 picklab session create --type desktop+android
 picklab desktop launch ./build/your-app
+picklab watch                              # attach a read-only host viewer
 picklab desktop screenshot
 picklab android install-apk build/app-release.apk
 picklab android launch-app com.example.app
@@ -105,6 +106,7 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 | --- | --- |
 | Setup | `doctor`, `init`, `setup lab-user`, `setup android` |
 | Sessions | `session create`, `session status [id]`, `session destroy <id\|--all>` |
+| Watch | `watch [--session <id>]` |
 | Desktop | `desktop launch <cmd>`, `desktop screenshot`, `desktop click <x> <y>`, `desktop move <x> <y>`, `desktop scroll <deltaX> <deltaY>`, `desktop drag <fromX> <fromY> <toX> <toY>`, `desktop double-click <x> <y>`, `desktop type <text>`, `desktop key <keys>` |
 | Android | `android start`, `android install-apk <apk>`, `android launch-app <pkg>`, `android screenshot`, `android tap <x> <y>`, `android type <text>`, `android back`, `android home`, `android ui-tree`, `android logcat`, `android adb [args...]` |
 | Artifacts | `artifacts list`, `artifacts open <runId>`, `artifacts report [runId]` |
@@ -116,6 +118,39 @@ Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedica
 `session create --vnc` is read-only. When a human must enter a password, API key, or OTP directly into the lab app, `--vnc-control` creates an explicitly writable VNC session instead. Pause agent input while using it; coordinated human takeover is tracked separately.
 
 Scroll deltas are integer wheel steps: positive `deltaY` scrolls down, negative up; positive `deltaX` scrolls right, negative left (put negative values after `--`, e.g. `picklab desktop scroll -- 0 -3`). `desktop scroll` accepts `--at <x,y>` to position the pointer first; `desktop drag` accepts `--button` and `--duration <ms>`; `desktop double-click` accepts `--button` and `--interval <ms>`.
+`picklab watch [--session <id>]` attaches a normal host-side VNC window to an
+already-running desktop-capable session. It lazily starts one loopback-only,
+server-enforced read-only x11vnc server and reuses it on later watches. Closing
+the viewer leaves x11vnc, Xvfb, and the session running. With no matching
+session it prints the create command; with multiple matches it fails closed
+until `--session` selects one.
+Desktop capability is resolved from the persisted desktop leg rather than the
+session type, so browser sessions are watchable without watch-specific browser
+contracts.
+
+Viewer launch defaults to manual. Set it globally or in
+`.picklab/config.json` for a project:
+
+```json
+{
+  "viewer": {
+    "mode": "auto"
+  }
+}
+```
+
+`session create --viewer` and `session create --no-viewer` override that mode
+for one desktop or browser creation. If the host has no graphical session or
+supported client
+(`remote-viewer` from virt-viewer, or a TigerVNC-compatible `vncviewer`),
+PickLab opens nothing and prints the loopback endpoint, install guidance, and
+an SSH tunnel command instead.
+Explicit `picklab watch` waits until the viewer closes. In contrast, automatic
+or `session create --viewer` launch returns as soon as the client starts, so the
+viewer never owns or delays session creation. A requested attach failure is
+reported alongside the successfully created session. `--viewer` and
+`--vnc-control` are rejected together before creation; `viewer.mode: "auto"` is
+reported as suppressed for an explicitly writable `--vnc-control` session.
 
 ## MCP surface
 
@@ -134,6 +169,8 @@ Resources, addressable as `picklab://` URIs:
 - `picklab://runs/{runId}/screenshots/{name}` — screenshots
 - `picklab://runs/{runId}/logs/{name}` — logs
 - `picklab://sessions/{sessionId}/status` — session liveness
+  The status includes a read-only viewer endpoint/readiness report when VNC is
+  present. MCP never opens a host GUI; only the CLI launches viewer windows.
 
 Prompts: `test-flutter-desktop-visually`, `debug-android-apk`, `run-visual-regression-check`.
 
@@ -154,7 +191,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 
 - MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`, or `init` with explicit `--create-lab-user`), with explicit consent (`--yes` or a prompt).
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
-- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` observation is server-enforced read-only (`-viewonly`); `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
+- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
 - PickLab provisions a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`) so lab workloads do not borrow your personal resources. Running session processes under the lab user is planned post-MVP.
 - Agent config edits are atomic, with backups of the previous config.

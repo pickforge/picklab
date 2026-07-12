@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ensureCliBuilt } from "./build-once.js";
 
@@ -90,6 +91,18 @@ function makeProjectDir(name = "project"): string {
   const dir = path.join(tmpDir, name);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await sleep(20);
+  }
+  throw new Error("timed out waiting for test condition");
 }
 
 function fakeAdbEnv(): { env: Record<string, string>; adbLog: string } {
@@ -259,6 +272,15 @@ describe("picklab session (desktop)", () => {
     expect(parseJson(result).sessions).toEqual([]);
   });
 
+  it("watch gives a create hint when no desktop session exists", async () => {
+    const env = makeEnv();
+    const result = await runCli(["watch", "--json"], env, tmpDir);
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain(
+      "picklab session create --type desktop",
+    );
+  });
+
   it("fails destroy without an id or --all", async () => {
     const env = makeEnv();
     const result = await runCli(["session", "destroy", "--json"], env);
@@ -307,6 +329,12 @@ describe("picklab session (desktop)", () => {
       expect(clickReport.errors.join("\n")).toContain(first.id);
       expect(clickReport.errors.join("\n")).toContain(second.id);
 
+      const watch = await runCli(["watch", "--json"], env, tmpDir);
+      expect(watch.code).toBe(1);
+      expect(parseJson(watch).errors.join("\n")).toContain(
+        "Multiple running desktop sessions",
+      );
+
       const destroyed = await runCli(
         ["session", "destroy", "--all", "--json"],
         env,
@@ -344,6 +372,241 @@ describe("picklab session (desktop)", () => {
         (entry: any) => entry.type === "desktop",
       );
       expect(desktops).toEqual([]);
+    },
+    60_000,
+  );
+  it(
+    "watches with exact viewer argv and leaves VNC alive after viewer exit",
+    async () => {
+      const viewerArgs = path.join(tmpDir, "viewer-args");
+      const env = makeEnv({
+        realPath: true,
+        bins: {
+          "remote-viewer":
+            `printf 'viewer noise\\n'; printf '%s\\n' \"$@\" > \"${viewerArgs}\"`,
+        },
+        extra: { DISPLAY: ":0" },
+      });
+      cleanupEnvs.push(env);
+      const created = parseJson(
+        await runCli(
+          ["session", "create", "--type", "desktop", "--json"],
+          env,
+          tmpDir,
+        ),
+      ).sessions[0];
+
+      const watched = parseJson(
+        await runCli(
+          ["watch", "--session", created.id, "--json"],
+          env,
+          tmpDir,
+        ),
+      );
+      expect(watched.ok).toBe(true);
+      expect(watched.opened).toBe(true);
+      expect(watched.endpoint).toBe(
+        `vnc://127.0.0.1:${watched.vncPort}`,
+      );
+      expect(fs.readFileSync(viewerArgs, "utf8").trim().split("\n")).toEqual([
+        watched.endpoint,
+      ]);
+
+      const headlessEnv = { ...env };
+      delete headlessEnv.DISPLAY;
+      const headless = parseJson(
+        await runCli(
+          ["watch", "--session", created.id, "--json"],
+          headlessEnv,
+          tmpDir,
+        ),
+      );
+      expect(headless.opened).toBe(false);
+      expect(headless.endpoint).toBe(watched.endpoint);
+      expect(headless.guidance).toContain("No graphical host session");
+      expect(headless.guidance).toContain("ssh -N -L");
+
+      const status = parseJson(
+        await runCli(["session", "status", created.id, "--json"], env),
+      ).sessions[0];
+      expect(status.status).toBe("running");
+      expect(status.desktop.xvfbAlive).toBe(true);
+      expect(status.desktop.vncAlive).toBe(true);
+      expect(status.desktop.vncViewOnly).toBe(true);
+      expect(status.viewer).toMatchObject({
+        endpoint: watched.endpoint,
+        ready: true,
+        readOnly: true,
+      });
+    },
+    60_000,
+  );
+
+  it(
+    "applies auto/manual viewer mode with one-shot overrides",
+    async () => {
+      const opens = path.join(tmpDir, "viewer-opens");
+      const env = makeEnv({
+        realPath: true,
+        bins: {
+          "remote-viewer": `printf '%s\\n' \"$1\" >> \"${opens}\"; sleep 3`,
+        },
+        extra: { DISPLAY: ":0" },
+      });
+      cleanupEnvs.push(env);
+      const projectDir = makeProjectDir();
+      const configPath = path.join(projectDir, ".picklab", "config.json");
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify({ viewer: { mode: "auto" } }));
+
+      const automaticStartedAt = Date.now();
+      const automatic = parseJson(
+        await runCli(
+          ["session", "create", "--type", "desktop", "--json"],
+          env,
+          projectDir,
+        ),
+      );
+      expect(automatic.viewer.opened).toBe(true);
+      expect(Date.now() - automaticStartedAt).toBeLessThan(2_500);
+      await waitFor(() => fs.existsSync(opens));
+      expect(fs.readFileSync(opens, "utf8").trim().split("\n")).toHaveLength(1);
+
+      const disabled = parseJson(
+        await runCli(
+          [
+            "session",
+            "create",
+            "--type",
+            "desktop",
+            "--no-viewer",
+            "--json",
+          ],
+          env,
+          projectDir,
+        ),
+      );
+      expect(disabled.viewer).toBeUndefined();
+      expect(fs.readFileSync(opens, "utf8").trim().split("\n")).toHaveLength(1);
+
+      const beforeConflict = parseJson(
+        await runCli(["session", "status", "--json"], env),
+      ).sessions.length;
+      const conflict = await runCli(
+        [
+          "session",
+          "create",
+          "--type",
+          "desktop",
+          "--vnc-control",
+          "--viewer",
+          "--json",
+        ],
+        env,
+        projectDir,
+      );
+      expect(conflict.code).toBe(1);
+      expect(parseJson(conflict).errors.join("\n")).toContain(
+        "--viewer cannot be combined with --vnc-control",
+      );
+      expect(
+        parseJson(await runCli(["session", "status", "--json"], env)).sessions,
+      ).toHaveLength(beforeConflict);
+
+      const controlled = parseJson(
+        await runCli(
+          [
+            "session",
+            "create",
+            "--type",
+            "desktop",
+            "--vnc-control",
+            "--json",
+          ],
+          env,
+          projectDir,
+        ),
+      );
+      expect(controlled.ok).toBe(true);
+      expect(controlled.viewer).toMatchObject({
+        opened: false,
+        suppressed: true,
+      });
+      expect(controlled.viewer.reason).toContain("--vnc-control");
+      expect(fs.readFileSync(opens, "utf8").trim().split("\n")).toHaveLength(1);
+
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ viewer: { mode: "manual" } }),
+      );
+      const enabled = parseJson(
+        await runCli(
+          [
+            "session",
+            "create",
+            "--type",
+            "desktop",
+            "--viewer",
+            "--json",
+          ],
+          env,
+          projectDir,
+        ),
+      );
+      expect(enabled.viewer.opened).toBe(true);
+      await waitFor(
+        () =>
+          fs.existsSync(opens) &&
+          fs.readFileSync(opens, "utf8").trim().split("\n").length === 2,
+      );
+      expect(fs.readFileSync(opens, "utf8").trim().split("\n")).toHaveLength(2);
+    },
+    60_000,
+  );
+
+
+  it(
+    "reports a created session when the requested viewer attach fails",
+    async () => {
+      const env = makeEnv({
+        realPath: true,
+        bins: {
+          x11vnc: "exit 1",
+          "remote-viewer": "exit 0",
+        },
+        extra: { DISPLAY: ":0" },
+      });
+      cleanupEnvs.push(env);
+      const result = await runCli(
+        [
+          "session",
+          "create",
+          "--type",
+          "desktop",
+          "--viewer",
+          "--json",
+        ],
+        env,
+        tmpDir,
+      );
+      expect(result.code).toBe(1);
+      const report = parseJson(result);
+      expect(report.ok).toBe(false);
+      expect(report.sessions).toHaveLength(1);
+      expect(report.viewer).toMatchObject({
+        sessionId: report.sessions[0].id,
+        opened: false,
+      });
+      expect(report.errors.join("\n")).toContain(
+        `Viewer failed after creating session ${report.sessions[0].id}`,
+      );
+      const status = parseJson(
+        await runCli(
+          ["session", "status", report.sessions[0].id, "--json"],
+          env,
+        ),
+      );
+      expect(status.sessions[0].status).toBe("running");
     },
     60_000,
   );
@@ -1050,6 +1313,40 @@ describe("picklab android session lifecycle (fake sdk)", () => {
 
       const after = await runCli(["session", "status", "--json"], env);
       expect(parseJson(after).sessions).toEqual([]);
+    },
+    60_000,
+  );
+
+  it(
+    "ignores auto viewer mode for Android-only sessions but rejects an explicit viewer",
+    async () => {
+      const { sdk } = makeFakeAndroidSdk();
+      const env = makeEnv({ extra: { ANDROID_HOME: sdk } });
+      cleanupEnvs.push(env);
+      const projectDir = makeProjectDir();
+      const configPath = path.join(projectDir, ".picklab", "config.json");
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify({ viewer: { mode: "auto" } }));
+
+      const automatic = await runCli(
+        ["session", "create", "--type", "android", "--json"],
+        env,
+        projectDir,
+      );
+      expect(automatic.code).toBe(0);
+      const automaticReport = parseJson(automatic);
+      expect(automaticReport.sessions[0].type).toBe("android");
+      expect(automaticReport.viewer).toBeUndefined();
+
+      const explicit = await runCli(
+        ["session", "create", "--type", "android", "--viewer", "--json"],
+        env,
+        projectDir,
+      );
+      expect(explicit.code).toBe(1);
+      expect(parseJson(explicit).errors.join("\n")).toContain(
+        "--viewer requires a desktop-capable session type",
+      );
     },
     60_000,
   );

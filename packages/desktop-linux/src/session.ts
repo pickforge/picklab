@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import {
   REAPER_CLEANUP_PENDING_META_KEY,
@@ -49,6 +52,17 @@ export interface DesktopSessionStatus {
   xvfbAlive: boolean;
   vncAlive: boolean;
   displayAlive: boolean;
+}
+
+export interface EnsureSessionVncOptions {
+  registryEnv?: EnvLike;
+  env?: EnvLike;
+}
+
+export interface EnsuredSessionVnc {
+  pid: number;
+  port: number;
+  reused: boolean;
 }
 
 export function desktopSessionLogDir(
@@ -205,6 +219,165 @@ export async function createDesktopSession(
       registryEnv,
     ).catch(() => {});
     throw error;
+  }
+}
+
+const VNC_LOCK_TIMEOUT_MS = 10_000;
+const VNC_LOCK_POLL_MS = 25;
+
+interface VncLockOwner {
+  pid: number;
+  token: string;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    return error.code;
+  }
+  return undefined;
+}
+
+async function readVncLockOwner(lockPath: string): Promise<VncLockOwner | null> {
+  try {
+    const value: unknown = JSON.parse(
+      await fs.promises.readFile(lockPath, "utf8"),
+    );
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "pid" in value &&
+      typeof value.pid === "number" &&
+      Number.isInteger(value.pid) &&
+      "token" in value &&
+      typeof value.token === "string"
+    ) {
+      return { pid: value.pid, token: value.token };
+    }
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+  }
+  return null;
+}
+
+async function acquireSessionVncLock(
+  id: string,
+  registryEnv: EnvLike,
+): Promise<() => Promise<void>> {
+  const logDir = desktopSessionLogDir(id, registryEnv);
+  await fs.promises.mkdir(logDir, { recursive: true });
+  const lockPath = path.join(logDir, "ensure-vnc.lock");
+  const owner = { pid: process.pid, token: randomUUID() };
+  const deadline = Date.now() + VNC_LOCK_TIMEOUT_MS;
+
+  while (true) {
+    try {
+      const handle = await fs.promises.open(lockPath, "wx");
+      try {
+        await handle.writeFile(JSON.stringify(owner), "utf8");
+      } finally {
+        await handle.close();
+      }
+      return async () => {
+        const current = await readVncLockOwner(lockPath);
+        if (current?.token === owner.token) {
+          await fs.promises.unlink(lockPath).catch(() => {});
+        }
+      };
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+    }
+
+    const current = await readVncLockOwner(lockPath);
+    if (current !== null && !isPidAlive(current.pid)) {
+      await fs.promises.unlink(lockPath).catch(() => {});
+      continue;
+    }
+    if (current === null) {
+      try {
+        const stat = await fs.promises.stat(lockPath);
+        if (Date.now() - stat.mtimeMs >= VNC_LOCK_TIMEOUT_MS) {
+          await fs.promises.unlink(lockPath).catch(() => {});
+          continue;
+        }
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") continue;
+        throw error;
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting to ensure VNC for session ${id}`);
+    }
+    await sleep(VNC_LOCK_POLL_MS);
+  }
+}
+
+export async function ensureSessionVnc(
+  id: string,
+  opts: EnsureSessionVncOptions = {},
+): Promise<EnsuredSessionVnc> {
+  const registryEnv = opts.registryEnv ?? process.env;
+  if ((await getSession(id, registryEnv)) === undefined) {
+    throw new Error(`Session not found: ${id}`);
+  }
+  const releaseLock = await acquireSessionVncLock(id, registryEnv);
+  try {
+    const record = await getSession(id, registryEnv);
+    if (record === undefined) {
+      throw new Error(`Session not found: ${id}`);
+    }
+    const desktop = record.desktop;
+    if (desktop?.display === undefined) {
+      throw new Error(`Session ${id} is not desktop-capable`);
+    }
+    if (record.status !== "running") {
+      throw new Error(`Session ${id} is not running`);
+    }
+    if (desktop.vncPid !== undefined && isPidAlive(desktop.vncPid)) {
+      if (desktop.vncViewOnly !== true) {
+        throw new Error(
+          `Session ${id} has an active writable VNC server; watch requires server-enforced read-only VNC`,
+        );
+      }
+      if (desktop.vncPort === undefined) {
+        throw new Error(
+          `Session ${id} has an active VNC server with no port recorded`,
+        );
+      }
+      return { pid: desktop.vncPid, port: desktop.vncPort, reused: true };
+    }
+
+    const vnc = await startVnc({
+      display: desktop.display,
+      port: desktop.vncPort,
+      logDir: desktopSessionLogDir(id, registryEnv),
+      env: opts.env,
+      viewOnly: true,
+    });
+    try {
+      await updateSession(
+        id,
+        {
+          desktop: {
+            ...desktop,
+            vncPid: vnc.pid,
+            vncPort: vnc.port,
+            vncViewOnly: true,
+          },
+        },
+        registryEnv,
+      );
+    } catch (error) {
+      await stopPid(vnc.pid).catch(() => {});
+      throw error;
+    }
+    return { pid: vnc.pid, port: vnc.port, reused: false };
+  } finally {
+    await releaseLock();
   }
 }
 

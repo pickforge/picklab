@@ -28,6 +28,19 @@ then reset this file.
 - `picklab session create --type browser` and the MCP `session_create` tool can
   now create isolated headed Chrome/Chromium sessions. CLI and MCP status,
   single-session destroy, and destroy-all include browser sessions.
+- `picklab watch [--session <id>]` now lazily attaches a supported host VNC
+  client to any running desktop-capable session. The server remains
+  loopback-only and read-only; closing the viewer leaves VNC, Xvfb, and the
+  session running. Zero/ambiguous session selection fails with actionable
+  guidance, and headless/missing-client hosts receive the endpoint plus
+  install and SSH-tunnel instructions without opening a window.
+- Viewer launch defaults to `viewer.mode: "manual"` and can be set to `"auto"`
+  in global/project config. `session create --viewer` and `--no-viewer` are
+  one-shot overrides. Creation returns after the client starts instead of
+  waiting for its window to close, reports attach failures alongside the
+  created session, rejects explicit viewer plus writable VNC, and suppresses
+  auto-viewing for writable VNC. MCP status and session resources report
+  viewer endpoint/readiness but never launch a host GUI.
 
 ## Internal/release changes
 
@@ -35,13 +48,11 @@ then reset this file.
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
   skipping on a misconfigured runner.
-- Added internal browser session contracts to `@pickforge/picklab-core`
-  (private, unpublished): a `browser` session type with `BrowserSessionInfo`,
-  capability-based session resolution (`SessionCapability`,
-  `sessionHasCapability`), and verified process-group stop primitives
-  (`stopProcessGroupVerified`, `processIdentityMatches`, and friends) now
-  wired into the session reaper. No CLI/MCP-visible behavior yet; the browser
-  lifecycle wiring lands in a later PR.
+- Added browser session contracts to `@pickforge/picklab-core`: a `browser`
+  session type with `BrowserSessionInfo`, capability-based session resolution
+  (`SessionCapability`, `sessionHasCapability`), and verified process-group stop
+  primitives (`stopProcessGroupVerified`, `processIdentityMatches`, and friends)
+  wired into the session reaper and the CLI/MCP browser lifecycle.
 - Browser reaping now confirms the recorded browser process group is gone
   before stopping VNC/Xvfb helpers or deleting the session record. Reused or
   otherwise unconfirmed groups leave dependent helpers and profile data intact
@@ -67,9 +78,6 @@ then reset this file.
 - `buildVncArgs` exact-argv test updated to require `-viewonly`; hosted-CI
   prerequisite assertion verified to fail loudly (not skip) when `CI=true`
   and `x11vnc` is absent, and to pass once `x11vnc` is on `PATH`.
-- `bun run typecheck`, `bun run test` (49 files, 564 passed / 2 skipped
-  locally without real `x11vnc` installed), `bun run test:coverage` (all
-  thresholds met), and `bun run build` all pass.
 - Exact xdotool argv unit tests for move, scroll (direction/ordering/repeat),
   drag (button/duration), and double click (button/interval); CLI and MCP
   validation tests for out-of-range buttons, deltas, durations, and
@@ -99,6 +107,16 @@ then reset this file.
   navigation, screenshot inspection, and destroy; Chrome, Xvfb, the ephemeral
   profile, session logs, and the session record were removed. Persisted Chrome
   logs contained no DevTools websocket capability URL.
+- `bun run typecheck` and `bun run build` pass after rebasing watch onto the
+  browser lifecycle.
+- Focused browser/core/desktop/CLI/MCP/security validation passes 226 tests in
+  18 files. Coverage includes browser create/status/destroy, lazy VNC teardown
+  after verified Chrome-group termination, process identity and group cleanup,
+  profile confinement, environment scrubbing, manual/auto viewer config,
+  zero/ambiguous/headless watch behavior, process-safe VNC reuse and endpoint
+  ownership, asynchronous viewer launch, attach-failure reporting, JSON stdout
+  isolation, browser viewer/status integration, MCP status-only behavior, and
+  secret redaction.
 
 ### Not tested yet
 
@@ -106,6 +124,8 @@ then reset this file.
 - Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
+- Human-observed attach/close recording against a real host VNC client.
+- Live remote SSH-tunnel smoke test.
 
 ### Release blockers
 

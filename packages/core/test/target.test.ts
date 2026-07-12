@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSession, updateSession } from "../src/session.js";
 import {
+  resolveDesktopCapableSession,
   resolveRunnableSession,
   resolveScreenshotTarget,
 } from "../src/target.js";
@@ -200,6 +201,70 @@ describe("resolveRunnableSession capability model", () => {
     );
     expect(error?.message).toContain(desk);
     expect(error?.message).toContain(brow);
+  });
+});
+
+describe("resolveDesktopCapableSession", () => {
+  it("gives a create hint when no running desktop session exists", async () => {
+    await expect(
+      resolveDesktopCapableSession(undefined, {
+        env,
+        projectDir: "/proj-a",
+      }),
+    ).rejects.toThrow(
+      /No running desktop session for this project; create one with: picklab session create --type desktop/,
+    );
+  });
+
+  it("uses the shared desktop capability for browser records", async () => {
+    const id = await createRunningBrowser("/proj-a");
+    const record = await resolveDesktopCapableSession(undefined, {
+      env,
+      projectDir: "/proj-a",
+    });
+    expect(record.id).toBe(id);
+    expect(record.type).toBe("browser");
+  });
+
+  it("fails closed and names all desktop-capable candidates", async () => {
+    const desktop = await createRunningDesktop("/proj-a");
+    const browser = await createRunningBrowser("/proj-a");
+    const error = await resolveDesktopCapableSession(undefined, {
+      env,
+      projectDir: "/proj-a",
+    }).then(
+      () => undefined,
+      (reason: unknown) => reason as Error,
+    );
+    expect(error?.message).toContain(
+      "Multiple running desktop sessions for this project",
+    );
+    expect(error?.message).toContain(desktop);
+    expect(error?.message).toContain(browser);
+    expect(error?.message).toContain("--session <id>");
+  });
+
+  it("rejects explicit non-desktop and stopped sessions", async () => {
+    const android = await createSession(
+      { type: "android", projectDir: "/proj-a", status: "running" },
+      env,
+    );
+    const stopped = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj-a",
+        status: "stopped",
+        desktop: { display: ":80" },
+      },
+      env,
+    );
+
+    await expect(
+      resolveDesktopCapableSession(android.id, { env }),
+    ).rejects.toThrow(/has no desktop capability/);
+    await expect(
+      resolveDesktopCapableSession(stopped.id, { env }),
+    ).rejects.toThrow(/not running/);
   });
 });
 

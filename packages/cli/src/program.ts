@@ -46,6 +46,7 @@ import {
 } from "./commands/session.js";
 import { runSetupAndroid } from "./commands/setup-android.js";
 import { runSetupLabUser } from "./commands/setup-lab-user.js";
+import { runWatch } from "./commands/watch.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -175,7 +176,12 @@ export function buildProgram(): Command {
           "--vnc-control",
           "expose writable VNC for explicit manual secret entry (not coordinated)",
         )
-        .option("--avd-name <name>", "Android AVD name"),
+        .option("--avd-name <name>", "Android AVD name")
+        .option("--viewer", "open a read-only host viewer after creation")
+        .option(
+          "--no-viewer",
+          "do not open a viewer, overriding viewer.mode=auto",
+        ),
     ),
   ).action(async (opts) => {
     process.exitCode = await runSessionCreate(opts);
@@ -198,6 +204,16 @@ export function buildProgram(): Command {
       .option("--all", "destroy all sessions"),
   ).action(async (id, opts) => {
     process.exitCode = await runSessionDestroy(id, opts);
+  });
+
+  withJson(
+    withDesktopSession(
+      program
+        .command("watch")
+        .description("Watch a running desktop-capable session read-only"),
+    ),
+  ).action(async (opts) => {
+    process.exitCode = await runWatch(opts);
   });
 
   const desktop = program

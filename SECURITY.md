@@ -23,16 +23,19 @@ fuller model.
 The desktop VNC server (`x11vnc`) is started with `-localhost`, so it listens on
 `127.0.0.1` only and is not reachable from the network. It runs without a VNC
 password (`-nopw`); that is safe precisely because the socket never leaves the
-loopback interface. Normal `--vnc` observation is also server-enforced
-read-only (`-viewonly`): a connecting client cannot inject keyboard or mouse
-input into the session, only watch it. `--vnc-control` is an explicit writable
-escape hatch for entering a password, API key, or OTP directly into the lab app.
-It does not yet pause or coordinate agent input, so stop agent actions while it
-is in use. For remote viewing, forward the port over SSH:
+loopback interface. Normal `--vnc` and `picklab watch` observation is
+server-enforced read-only (`-viewonly`): a connecting client cannot inject
+keyboard or mouse input into the session, only watch it. `picklab watch`
+starts this server lazily and closing its host-side viewer does not stop VNC,
+Xvfb, or the session. `--vnc-control` is an explicit writable escape hatch for
+entering a password, API key, or OTP directly into the lab app. Watch refuses
+to reuse an active writable server rather than weakening its read-only
+guarantee. Writable VNC does not yet pause or coordinate agent input, so stop
+agent actions while using it. For remote viewing, forward the port over SSH:
 
 ```sh
 # `session status` prints the VNC port (5900 + display number)
-ssh -L 5900:127.0.0.1:<vncPort> you@host
+ssh -N -L <vncPort>:127.0.0.1:<vncPort> you@host
 ```
 
 Do not strip `-localhost` to put VNC on a shared network. An unauthenticated,

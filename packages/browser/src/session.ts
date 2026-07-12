@@ -14,6 +14,7 @@ import {
   sessionsDir,
   startDaemon,
   stopProcessGroupVerified,
+  stopPid,
   updateSession,
   type BrowserSessionInfo,
   type DesktopSessionInfo,
@@ -481,9 +482,10 @@ export async function getBrowserSessionStatus(
 
 /**
  * Destroy a browser session: kill the verified Chrome process group and confirm
- * it is dead, stop the private Xvfb, then delete the ephemeral profile. The
- * profile is removed only after the group is confirmed gone, so no live Chrome
- * can recreate files after deletion. Cleanup failures aggregate into one error
+ * it is dead, stop lazy VNC before the private Xvfb, then delete the ephemeral
+ * profile. The profile is removed only after the group is confirmed gone, so
+ * no live Chrome can recreate files after deletion. Cleanup failures aggregate
+ * into one error
  * and leave the record in `error` state for inspection.
  */
 export async function destroyBrowserSession(
@@ -519,6 +521,26 @@ export async function destroyBrowserSession(
   }
 
   const desktop = record.desktop;
+  const vncPid = desktop?.vncPid;
+  if (vncPid !== undefined && gone) {
+    try {
+      const stopped = await stopPid(vncPid);
+      if (!stopped) {
+        failures.push(
+          new Error(`x11vnc (pid ${vncPid}) survived SIGTERM and SIGKILL`),
+        );
+      }
+    } catch (error) {
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  } else if (vncPid !== undefined) {
+    failures.push(
+      new Error(
+        `Refusing to stop x11vnc for ${id}: Chrome process group is not confirmed gone`,
+      ),
+    );
+  }
+
   const xvfbPid = desktop?.xvfbPid;
   const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
   if (xvfbPid !== undefined && gone) {

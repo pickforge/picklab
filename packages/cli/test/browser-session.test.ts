@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { findOnPath } from "@pickforge/picklab-desktop-linux";
-import { fakePath, writeFakeChrome } from "../../browser/test/fakes.js";
+import {
+  fakePath,
+  writeExecutable,
+  writeFakeChrome,
+} from "../../browser/test/fakes.js";
 import { ensureCliBuilt } from "./build-once.js";
 
 const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
@@ -139,6 +143,11 @@ describe.skipIf(!hasXvfb)("built CLI browser lifecycle", () => {
       expect(status.desktop.displayAlive).toBe(true);
       expect(status.browser.browserAlive).toBe(true);
       expect(status.browser.cdpPort).toBe(session.cdpPort);
+      expect(status.viewer).toEqual({
+        endpoint: null,
+        ready: false,
+        readOnly: false,
+      });
 
       const textStatus = await runCli([
         "session",
@@ -164,6 +173,56 @@ describe.skipIf(!hasXvfb)("built CLI browser lifecycle", () => {
       expect(destroyed.code).toBe(0);
       expect(parseJson(destroyed).destroyed).toEqual([session.id]);
       expect(fs.existsSync(profileDir)).toBe(false);
+    },
+    60_000,
+  );
+
+  it(
+    "creates a browser session with an asynchronous read-only viewer",
+    async () => {
+      const binDir = path.join(root, "bin");
+      writeExecutable(
+        path.join(binDir, "x11vnc"),
+        `#!${process.execPath}\n` +
+          'const net = require("node:net");\n' +
+          "const args = process.argv.slice(2);\n" +
+          'const port = Number(args[args.indexOf("-rfbport") + 1]);\n' +
+          "const server = net.createServer((socket) => socket.end());\n" +
+          'server.listen(port, "127.0.0.1");\n' +
+          'process.on("SIGTERM", () => server.close(() => process.exit(0)));\n',
+      );
+      writeExecutable(
+        path.join(binDir, "remote-viewer"),
+        `#!${process.execPath}\nprocess.stdout.write("ignored viewer output\\n");\n`,
+      );
+      env.DISPLAY = ":0";
+
+      const createdResult = await runCli([
+        "session",
+        "create",
+        "--type",
+        "browser",
+        "--viewer",
+        "--json",
+      ]);
+      expect(createdResult.code).toBe(0);
+      const created = parseJson(createdResult);
+      const session = created.sessions[0] as Record<string, any>;
+      expect(session.type).toBe("browser");
+      expect(created.viewer).toMatchObject({
+        sessionId: session.id,
+        opened: true,
+      });
+
+      const status = parseJson(
+        await runCli(["session", "status", session.id as string, "--json"]),
+      ).sessions[0] as Record<string, any>;
+      expect(status.browser.browserAlive).toBe(true);
+      expect(status.desktop.vncAlive).toBe(true);
+      expect(status.viewer).toMatchObject({
+        ready: true,
+        readOnly: true,
+      });
     },
     60_000,
   );

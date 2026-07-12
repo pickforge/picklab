@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -301,7 +302,7 @@ describe.skipIf(!hasXvfb)("getBrowserSessionStatus (fake binaries)", () => {
 });
 
 describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
-  it("kills the process group, removes the profile, and deletes the record", async () => {
+  it("kills the browser, lazy VNC, and Xvfb before removing runtime data", async () => {
     const session = await createBrowserSession({
       projectDir,
       registryEnv,
@@ -309,16 +310,48 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
       cdpTimeoutMs: 5000,
     });
     const { browserPid, xvfbPid, profileDir, logDir } = session;
+    const vnc = spawn(
+      process.execPath,
+      ["-e", "require('node:net').createServer().listen(0)"],
+      { stdio: "ignore" },
+    );
+    const vncPid = vnc.pid;
+    if (vncPid === undefined) throw new Error("VNC helper has no pid");
+    const record = await getSession(session.id, registryEnv);
+    if (record?.desktop === undefined) {
+      throw new Error("browser desktop leg missing");
+    }
+    await updateSession(
+      session.id,
+      {
+        desktop: {
+          ...record.desktop,
+          vncPid,
+          vncPort: 6200,
+          vncViewOnly: true,
+        },
+      },
+      registryEnv,
+    );
     expect(isPidAlive(browserPid)).toBe(true);
+    expect(isPidAlive(vncPid)).toBe(true);
 
-    await destroyBrowserSession(session.id, registryEnv);
+    try {
+      await destroyBrowserSession(session.id, registryEnv);
 
-    expect(listProcessGroupMembers(browserPid)).toEqual([]);
-    expect(isPidAlive(browserPid)).toBe(false);
-    expect(isPidAlive(xvfbPid)).toBe(false);
-    expect(fs.existsSync(profileDir)).toBe(false);
-    expect(fs.existsSync(logDir)).toBe(false);
-    expect(await getSession(session.id, registryEnv)).toBeUndefined();
+      expect(listProcessGroupMembers(browserPid)).toEqual([]);
+      expect(isPidAlive(browserPid)).toBe(false);
+      expect(isPidAlive(vncPid)).toBe(false);
+      expect(isPidAlive(xvfbPid)).toBe(false);
+      expect(fs.existsSync(profileDir)).toBe(false);
+      expect(fs.existsSync(logDir)).toBe(false);
+      expect(await getSession(session.id, registryEnv)).toBeUndefined();
+    } finally {
+      if (isPidAlive(vncPid)) {
+        await stopPid(vncPid, { timeoutMs: 500 }).catch(() => {});
+      }
+      await destroyBrowserSession(session.id, registryEnv).catch(() => {});
+    }
   }, TEST_TIMEOUT_MS);
 
   it("leaves the display alive when the browser group is unverifiable", async () => {
