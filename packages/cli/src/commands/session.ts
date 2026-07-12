@@ -4,6 +4,11 @@ import {
   getAndroidSessionStatus,
 } from "@pickforge/picklab-android";
 import {
+  createBrowserSession,
+  destroyBrowserSession,
+  getBrowserSessionStatus,
+} from "@pickforge/picklab-browser";
+import {
   getSession,
   listSessions,
   loadConfig,
@@ -32,7 +37,7 @@ export interface SessionCreateOptions extends BaseCliOptions {
 
 interface SessionSummary extends Record<string, unknown> {
   id: string;
-  type: "desktop" | "android";
+  type: "desktop" | "android" | "browser";
 }
 
 async function createDesktopLeg(
@@ -61,6 +66,28 @@ async function createDesktopLeg(
   }
   return summary;
 }
+async function createBrowserLeg(
+  opts: SessionCreateOptions,
+): Promise<SessionSummary> {
+  const handle = await createBrowserSession({
+    projectDir: resolveProjectDir(opts),
+    width:
+      opts.width === undefined ? undefined : parseIntArg(opts.width, "--width"),
+    height:
+      opts.height === undefined
+        ? undefined
+        : parseIntArg(opts.height, "--height"),
+  });
+  return {
+    id: handle.id,
+    type: "browser",
+    display: handle.display,
+    cdpPort: handle.cdpPort,
+    profileDir: handle.profileDir,
+    binaryPath: handle.binaryPath,
+    logDir: handle.logDir,
+  };
+}
 
 async function createAndroidLeg(
   opts: SessionCreateOptions,
@@ -87,6 +114,9 @@ function describeCreated(summary: SessionSummary): string {
       summary.vncPort === undefined ? "" : `, vnc port ${summary.vncPort}`;
     return `created desktop session ${summary.id} (display ${summary.display}${vnc})`;
   }
+  if (summary.type === "browser") {
+    return `created browser session ${summary.id} (display ${summary.display}, cdp port ${summary.cdpPort})`;
+  }
   return `created android session ${summary.id} (serial ${summary.serial})`;
 }
 
@@ -97,6 +127,9 @@ export async function runSessionCreate(
     const sessions: SessionSummary[] = [];
     if (opts.type === "desktop" || opts.type === "desktop+android") {
       sessions.push(await createDesktopLeg(opts));
+    }
+    if (opts.type === "browser") {
+      sessions.push(await createBrowserLeg(opts));
     }
     if (opts.type === "android" || opts.type === "desktop+android") {
       try {
@@ -134,6 +167,20 @@ async function sessionStatusEntry(
       vncAlive: status.vncAlive,
       displayAlive: status.displayAlive,
     };
+  } else if (record.type === "browser") {
+    const status = await getBrowserSessionStatus(record.id);
+    if (record.status === "running" && !status.alive) {
+      entry.status = "dead";
+    }
+    entry.desktop = {
+      ...record.desktop,
+      xvfbAlive: status.xvfbAlive,
+      displayAlive: status.displayAlive,
+    };
+    entry.browser = {
+      ...record.browser,
+      browserAlive: status.browserAlive,
+    };
   } else if (record.type === "android") {
     const status = await getAndroidSessionStatus(record.id);
     if (record.status === "running" && !status.emulatorAlive) {
@@ -159,6 +206,13 @@ function statusLine(entry: Record<string, unknown>): string {
     if (desktop.vncPort !== undefined) {
       parts.push(`vnc=${desktop.vncAlive === true ? "alive" : "dead"}`);
     }
+  }
+  const browser = entry.browser as Record<string, unknown> | undefined;
+  if (browser !== undefined) {
+    parts.push(
+      `browser=${browser.browserAlive === true ? "alive" : "dead"}`,
+      `cdp=${browser.cdpPort ?? "unknown"}`,
+    );
   }
   const android = entry.android as Record<string, unknown> | undefined;
   if (android !== undefined) {
@@ -204,6 +258,8 @@ export interface SessionDestroyOptions extends BaseCliOptions {
 async function destroyRecord(record: SessionRecord): Promise<void> {
   if (record.type === "desktop") {
     await destroyDesktopSession(record.id);
+  } else if (record.type === "browser") {
+    await destroyBrowserSession(record.id);
   } else if (record.type === "android") {
     await destroyAndroidSession(record.id);
   } else {

@@ -30,7 +30,7 @@ export {
 } from "./devtools.js";
 
 export {
-  browserSessionDir,
+  browserSessionLogDir,
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,

@@ -569,8 +569,20 @@ describe("session registry", () => {
             browserStartTimeTicks: identity.startTicks,
             binaryPath: "/usr/bin/chromium",
             profileMode: "ephemeral",
-            profileDir: "/tmp/picklab-profile",
+            profileDir: path.join(home, "sessions", "placeholder", "profile"),
             cdpPort: 1,
+          },
+        },
+        env,
+      );
+      const profileDir = path.join(home, "sessions", stale.id, "profile");
+      await fs.promises.mkdir(profileDir, { recursive: true });
+      await updateSession(
+        stale.id,
+        {
+          browser: {
+            ...stale.browser!,
+            profileDir,
           },
         },
         env,

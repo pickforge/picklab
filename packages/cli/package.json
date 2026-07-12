@@ -48,6 +48,7 @@
   "devDependencies": {
     "@pickforge/picklab-agent-installers": "*",
     "@pickforge/picklab-android": "*",
+    "@pickforge/picklab-browser": "*",
     "@pickforge/picklab-core": "*",
     "@pickforge/picklab-desktop-linux": "*",
     "@pickforge/picklab-mcp-server": "*"

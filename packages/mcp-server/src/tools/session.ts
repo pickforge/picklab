@@ -11,6 +11,11 @@ import {
   getAndroidSessionStatus,
 } from "@pickforge/picklab-android";
 import {
+  createBrowserSession,
+  destroyBrowserSession,
+  getBrowserSessionStatus,
+} from "@pickforge/picklab-browser";
+import {
   getSession,
   listSessions,
   loadConfig,
@@ -25,7 +30,7 @@ import { runTool, type ServerContext } from "../context.js";
 
 interface SessionSummary extends Record<string, unknown> {
   id: string;
-  type: "desktop" | "android";
+  type: "desktop" | "android" | "browser";
 }
 
 export interface SessionLifecycle {
@@ -82,6 +87,29 @@ async function createDesktopLeg(
   }
   return summary;
 }
+async function createBrowserLeg(
+  ctx: ServerContext,
+  args: { width?: number; height?: number },
+  lifecycle: SessionLifecycle,
+): Promise<SessionSummary> {
+  const handle = await createBrowserSession({
+    projectDir: ctx.projectDir,
+    registryEnv: ctx.env,
+    env: ctx.env,
+    width: args.width,
+    height: args.height,
+    signal: lifecycle.signal,
+  });
+  return {
+    id: handle.id,
+    type: "browser",
+    display: handle.display,
+    cdpPort: handle.cdpPort,
+    profileDir: handle.profileDir,
+    binaryPath: handle.binaryPath,
+    logDir: handle.logDir,
+  };
+}
 
 async function createAndroidLeg(
   ctx: ServerContext,
@@ -111,7 +139,7 @@ async function createAndroidLeg(
 export async function createSessions(
   ctx: ServerContext,
   args: {
-    type?: "desktop" | "android" | "desktop+android";
+    type?: "desktop" | "android" | "desktop+android" | "browser";
     width?: number;
     height?: number;
     vnc?: boolean;
@@ -124,6 +152,9 @@ export async function createSessions(
   const sessions: SessionSummary[] = [];
   if (type === "desktop" || type === "desktop+android") {
     sessions.push(await createDesktopLeg(ctx, args));
+  }
+  if (type === "browser") {
+    sessions.push(await createBrowserLeg(ctx, args, lifecycle));
   }
   if (type === "android" || type === "desktop+android") {
     try {
@@ -164,6 +195,20 @@ export async function sessionStatusEntry(
       vncAlive: status.vncAlive,
       displayAlive: status.displayAlive,
     };
+  } else if (record.type === "browser") {
+    const status = await getBrowserSessionStatus(record.id, ctx.env);
+    if (record.status === "running" && !status.alive) {
+      entry.status = "dead";
+    }
+    entry.desktop = {
+      ...record.desktop,
+      xvfbAlive: status.xvfbAlive,
+      displayAlive: status.displayAlive,
+    };
+    entry.browser = {
+      ...record.browser,
+      browserAlive: status.browserAlive,
+    };
   } else if (record.type === "android") {
     const status = await getAndroidSessionStatus(record.id, ctx.env, {
       env: ctx.env,
@@ -186,6 +231,8 @@ async function destroyRecord(
 ): Promise<void> {
   if (record.type === "desktop") {
     await destroyDesktopSession(record.id, ctx.env);
+  } else if (record.type === "browser") {
+    await destroyBrowserSession(record.id, ctx.env);
   } else if (record.type === "android") {
     await destroyAndroidSession(record.id, ctx.env, { env: ctx.env });
   } else {
@@ -204,11 +251,11 @@ export function registerSessionTools(
     {
       title: "Create lab session",
       description:
-        "Create an isolated lab session: a virtual desktop display (Xvfb) " +
-        'and/or an Android emulator. Defaults to type "desktop".',
+        "Create an isolated lab session: a virtual desktop display (Xvfb), " +
+        "headed Chrome/Chromium browser, and/or an Android emulator. Defaults to type \"desktop\".",
       inputSchema: {
         type: z
-          .enum(["desktop", "android", "desktop+android"])
+          .enum(["desktop", "android", "desktop+android", "browser"])
           .optional()
           .describe('Session type (default "desktop")'),
         width: z

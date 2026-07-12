@@ -10,13 +10,17 @@ describe("buildSupervisedBrowserCommand", () => {
     );
 
     expect(command.command).toBe("/usr/bin/node");
-    expect(command.args[0]).toBe("-e");
-    expect(command.args[1]).toContain("hasLiveGroupMembers");
-    expect(command.args.slice(2)).toEqual([
+    expect(command.args).toEqual([
+      "--input-type=module",
+      "-e",
+      expect.stringContaining('import * as fs from "node:fs";'),
       "/usr/bin/chromium",
       "--remote-debugging-port=0",
       "about:blank",
     ]);
+    expect(command.args[2]).toContain(
+      'import { spawn } from "node:child_process";',
+    );
   });
 
   it("rejects missing executable paths", () => {

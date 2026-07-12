@@ -40,7 +40,7 @@ export interface BrowserSessionInfo {
   binaryPath: string;
   profileMode: "ephemeral";
   profileDir: string;
-  cdpPort: number;
+  cdpPort?: number;
 }
 
 export interface SessionRecord {

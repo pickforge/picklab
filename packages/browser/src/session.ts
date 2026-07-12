@@ -90,7 +90,7 @@ export interface BrowserSessionStatus {
   cdpPort?: number;
 }
 
-export function browserSessionDir(
+export function browserSessionLogDir(
   id: string,
   registryEnv: EnvLike = process.env,
 ): string {
@@ -110,15 +110,24 @@ async function makeRuntimeDirs(layout: BrowserRuntimeLayout): Promise<void> {
   await fs.promises.chmod(layout.xdgRuntimeDir, 0o700).catch(() => {});
 }
 
-async function removeRuntimeData(layout: BrowserRuntimeLayout): Promise<void> {
+async function removeRuntimeData(
+  layout: BrowserRuntimeLayout,
+  profileDir = layout.profileDir,
+): Promise<Error[]> {
+  const failures: Error[] = [];
   for (const dir of [
-    layout.profileDir,
+    profileDir,
     layout.homeDir,
     layout.xdgRuntimeDir,
     layout.tmpDir,
   ]) {
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(asError(error));
+    }
   }
+  return failures;
 }
 
 /**
@@ -165,7 +174,7 @@ export async function createBrowserSession(
     { type: "browser", projectDir: opts.projectDir },
     registryEnv,
   );
-  const logDir = browserSessionDir(record.id, registryEnv);
+  const logDir = browserSessionLogDir(record.id, registryEnv);
   const layout = browserRuntimeLayout(logDir);
 
   let xvfb: XvfbHandle | undefined;
@@ -272,16 +281,50 @@ export async function createBrowserSession(
       logDir,
     };
   } catch (error) {
-    const { gone } = await stopBrowserGroup(browserIdentity);
-    if (gone && xvfb !== undefined) {
-      await stopXvfb(xvfb.pid).catch(() => {});
+    const { gone: browserGone } = await stopBrowserGroup(browserIdentity);
+    let xvfbGone = xvfb === undefined;
+    if (browserGone && xvfb !== undefined) {
+      try {
+        xvfbGone = await stopXvfb(xvfb.pid);
+      } catch {
+        xvfbGone = false;
+      }
     }
-    if (gone) {
-      await removeRuntimeData(layout);
-    }
-    await updateSession(record.id, { status: "error" }, registryEnv).catch(
-      () => {},
-    );
+    const runtimeFailures = browserGone
+      ? await removeRuntimeData(layout)
+      : [];
+    const cleanupComplete =
+      browserGone && xvfbGone && runtimeFailures.length === 0;
+    const desktop =
+      xvfb === undefined
+        ? undefined
+        : {
+            display: xvfb.display,
+            xvfbPid: xvfb.pid,
+            width: xvfb.width,
+            height: xvfb.height,
+          };
+    const browser =
+      browserIdentity === undefined
+        ? undefined
+        : {
+            browserPid: browserIdentity.pid,
+            browserStartTimeTicks: browserIdentity.startTicks,
+            binaryPath,
+            profileMode: "ephemeral" as const,
+            profileDir: layout.profileDir,
+          };
+    await updateSession(
+      record.id,
+      cleanupComplete
+        ? { status: "error" }
+        : {
+            status: "error",
+            ...(desktop === undefined ? {} : { desktop }),
+            ...(browser === undefined ? {} : { browser }),
+          },
+      registryEnv,
+    ).catch(() => {});
     throw error;
   }
 }
@@ -331,23 +374,26 @@ export async function destroyBrowserSession(
   if (record === undefined) {
     throw new Error(`Browser session not found: ${id}`);
   }
-  const browser = record.browser;
-  if (browser === undefined) {
+  if (record.type !== "browser") {
     throw new Error(`Session ${id} is not a browser session`);
   }
 
   const failures: Error[] = [];
-
-  const { gone, error: groupError } = await stopBrowserGroup({
-    pid: browser.browserPid,
-    startTicks: browser.browserStartTimeTicks,
-  });
+  const browser = record.browser;
+  const { gone, error: groupError } = await stopBrowserGroup(
+    browser === undefined
+      ? undefined
+      : {
+          pid: browser.browserPid,
+          startTicks: browser.browserStartTimeTicks,
+        },
+  );
   if (groupError !== undefined) {
     failures.push(groupError);
   } else if (!gone) {
     failures.push(
       new Error(
-        `Chrome process group (pid ${browser.browserPid}) survived SIGTERM and SIGKILL`,
+        `Chrome process group (pid ${browser?.browserPid ?? "unknown"}) could not be verified as gone`,
       ),
     );
   }
@@ -372,19 +418,20 @@ export async function destroyBrowserSession(
     );
   }
 
-  const sessionDir = browserSessionDir(id, registryEnv);
+  const sessionDir = browserSessionLogDir(id, registryEnv);
   const layout = browserRuntimeLayout(sessionDir);
+  const profileDir = browser?.profileDir ?? layout.profileDir;
   // Confinement guard: never delete a profile path a tampered record points
   // outside the session directory.
-  const confined = isProfileConfined(sessionDir, browser.profileDir);
+  const confined = isProfileConfined(sessionDir, profileDir);
   if (!confined) {
     failures.push(
       new Error(
-        `Refusing to delete profile outside the session directory: ${browser.profileDir}`,
+        `Refusing to delete profile outside the session directory: ${profileDir}`,
       ),
     );
   } else if (gone) {
-    await removeRuntimeData(layout);
+    failures.push(...(await removeRuntimeData(layout, profileDir)));
   } else {
     failures.push(
       new Error(

@@ -57,7 +57,12 @@ const PROFILES: PicklabProfile[] = [
   "generic",
 ];
 
-const SESSION_TYPES: SessionType[] = ["desktop", "android", "desktop+android"];
+const SESSION_TYPES: SessionType[] = [
+  "desktop",
+  "android",
+  "desktop+android",
+  "browser",
+];
 
 function withJson(command: Command): Command {
   return command.option("--json", "machine-readable output");
@@ -151,13 +156,13 @@ export function buildProgram(): Command {
 
   const session = program
     .command("session")
-    .description("Manage desktop and Android lab sessions");
+    .description("Manage desktop, browser, and Android lab sessions");
 
   withJson(
     withProjectDir(
       session
         .command("create")
-        .description("Create a desktop (Xvfb) and/or Android emulator session")
+        .description("Create a desktop, browser, and/or Android session")
         .addOption(
           new Option("--type <type>", "session type")
             .choices(SESSION_TYPES)

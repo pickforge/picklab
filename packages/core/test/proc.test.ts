@@ -445,12 +445,12 @@ describe("process identity and group termination", () => {
       const deadline = Date.now() + 3000;
       while (
         Date.now() < deadline &&
-        (processIdentityMatches(identity as ProcessIdentity) ||
+        (fs.existsSync(`/proc/${pid}`) ||
           listProcessGroupMembers(pid).length === 0)
       ) {
         await delay(50);
       }
-      expect(processIdentityMatches(identity as ProcessIdentity)).toBe(false);
+      expect(fs.existsSync(`/proc/${pid}`)).toBe(false);
       expect(listProcessGroupMembers(pid).length).toBeGreaterThan(0);
 
       const result = await stopProcessGroupVerified(
@@ -524,53 +524,48 @@ describe("process identity and group termination", () => {
     }
   });
 
-  it("kills surviving group members after the leader exits", async () => {
-    const stubbornChild = [
-      'process.on("SIGTERM", () => {});',
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    const script = [
-      'const { spawn } = require("node:child_process");',
-      `spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], { stdio: "ignore" });`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    const parent = spawn(node, ["-e", script], {
-      detached: true,
-      stdio: "ignore",
+  it("terminates live members with a matching zombie group leader", async () => {
+    const makeStat = (
+      pid: number,
+      state: string,
+      pgrp: number,
+      startTicks: number,
+    ): string => {
+      const fields = Array.from({ length: 20 }, () => "0");
+      fields[0] = state;
+      fields[2] = String(pgrp);
+      fields[19] = String(startTicks);
+      return `${pid} (test) ${fields.join(" ")}`;
+    };
+    const leaderStat = makeStat(100, "Z", 100, 456);
+    const memberStat = makeStat(101, "S", 100, 789);
+    let memberAlive = true;
+    const readDir = vi.spyOn(fs, "readdirSync").mockImplementation(() => {
+      const entries = memberAlive ? ["100", "101"] : ["100"];
+      return entries as never;
     });
-    const pid = parent.pid;
-    if (pid === undefined) {
-      throw new Error("child process did not expose a pid");
-    }
-    let members: number[] = [];
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((target) => {
+      return String(target).includes("/100/") ? leaderStat : memberStat;
+    });
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      expect(pid).toBe(-100);
+      if (signal === "SIGKILL") memberAlive = false;
+      return true;
+    });
     try {
-      const deadline = Date.now() + 3000;
-      while (Date.now() < deadline) {
-        members = listProcessGroupMembers(pid);
-        if (members.length >= 2) break;
-        await delay(50);
-      }
-      expect(members.length).toBeGreaterThanOrEqual(2);
-      await delay(100);
-
-      const identity = readProcessIdentity(pid);
-      expect(identity).toBeDefined();
       const result = await stopProcessGroupVerified(
-        identity as ProcessIdentity,
-        { timeoutMs: 200 },
+        { pid: 100, startTicks: 456 },
+        { timeoutMs: 0 },
       );
 
       expect(result).toEqual({ outcome: "terminated", signaled: true });
-      expect(listProcessGroupMembers(pid)).toEqual([]);
-      for (const member of members) {
-        expect(isPidAlive(member)).toBe(false);
-      }
+      expect(kill).toHaveBeenNthCalledWith(1, -100, "SIGTERM");
+      expect(kill).toHaveBeenNthCalledWith(2, -100, "SIGKILL");
+      expect(listProcessGroupMembers(100)).toEqual([]);
     } finally {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // group already gone
-      }
+      kill.mockRestore();
+      read.mockRestore();
+      readDir.mockRestore();
     }
   });
 });

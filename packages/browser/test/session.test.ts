@@ -2,18 +2,25 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createSession,
   getSession,
   isPidAlive,
   listProcessGroupMembers,
   stopPid,
   updateSession,
+  type CreateSessionInput,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { findOnPath } from "@pickforge/picklab-desktop-linux";
 import {
-  browserSessionDir,
+  findOnPath,
+  startXvfb,
+} from "@pickforge/picklab-desktop-linux";
+import {
+  browserSessionLogDir,
+  browserRuntimeLayout,
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,
@@ -72,6 +79,39 @@ function isPortListening(port: number): Promise<boolean> {
   });
 }
 
+async function waitForEntry(
+  dir: string,
+  matches: (name: string) => boolean,
+): Promise<string> {
+  const existing = fs.readdirSync(dir).find(matches);
+  if (existing !== undefined) return existing;
+
+  const controller = new AbortController();
+  const events = fs.promises.watch(dir, { signal: controller.signal });
+  try {
+    const raced = fs.readdirSync(dir).find(matches);
+    if (raced !== undefined) return raced;
+    for await (const _event of events) {
+      const entry = fs.readdirSync(dir).find(matches);
+      if (entry !== undefined) return entry;
+    }
+    throw new Error(`Stopped watching ${dir} before the expected entry appeared`);
+  } finally {
+    controller.abort();
+  }
+}
+
+function processGroupId(pid: number): number {
+  const content = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  const close = content.lastIndexOf(")");
+  const fields = content.slice(close + 1).trim().split(/\s+/);
+  const pgrp = Number(fields[2]);
+  if (!Number.isSafeInteger(pgrp) || pgrp <= 0) {
+    throw new Error(`Could not read process group for pid ${pid}`);
+  }
+  return pgrp;
+}
+
 describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
   it("brings up both legs, persists the contract, and never persists the GUID", async () => {
     const env = spawnEnvFor("ready", { SECRET_TOKEN: "leak-me-please" });
@@ -112,7 +152,7 @@ describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
 
       // The profile lives under the session directory.
       expect(session.profileDir).toBe(
-        path.join(browserSessionDir(session.id, registryEnv), "profile"),
+        path.join(browserSessionLogDir(session.id, registryEnv), "profile"),
       );
       expect(fs.existsSync(session.profileDir)).toBe(true);
     } finally {
@@ -271,9 +311,49 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
     }
   }, TEST_TIMEOUT_MS);
 
+  it("stops a known Xvfb helper and removes confined runtime for a partial record without a browser leg", async () => {
+    const record = await createSession(
+      { type: "browser", projectDir, status: "error" },
+      registryEnv,
+    );
+    const sessionDir = browserSessionLogDir(record.id, registryEnv);
+    const layout = browserRuntimeLayout(sessionDir);
+    for (const dir of [
+      layout.profileDir,
+      layout.homeDir,
+      layout.xdgRuntimeDir,
+      layout.tmpDir,
+    ]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const xvfb = await startXvfb({
+      logDir: sessionDir,
+      env: { PATH: "/usr/bin:/bin" },
+      displayStart: 300,
+    });
+    await updateSession(
+      record.id,
+      {
+        desktop: {
+          display: xvfb.display,
+          xvfbPid: xvfb.pid,
+          width: xvfb.width,
+          height: xvfb.height,
+        },
+      },
+      registryEnv,
+    );
+
+    await destroyBrowserSession(record.id, registryEnv);
+
+    expect(isPidAlive(xvfb.pid)).toBe(false);
+    expect(fs.existsSync(layout.profileDir)).toBe(false);
+    expect(fs.existsSync(layout.homeDir)).toBe(false);
+    expect(await getSession(record.id, registryEnv)).toBeUndefined();
+  }, TEST_TIMEOUT_MS);
+
   it("rejects destroying a non-browser session", async () => {
     // A desktop-only record has no browser leg.
-    const { createSession } = await import("@pickforge/picklab-core");
     const desktop = await createSession(
       { type: "desktop", projectDir, desktop: { display: ":90", xvfbPid: 1 } },
       registryEnv,
@@ -300,13 +380,16 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const id = sessions[0]!.slice(0, -".json".length);
     const record = await getSession(id, registryEnv);
     expect(record?.status).toBe("error");
-    expect(fs.existsSync(path.join(browserSessionDir(id, registryEnv), "profile"))).toBe(
+    expect(fs.existsSync(path.join(browserSessionLogDir(id, registryEnv), "profile"))).toBe(
       false,
     );
     const xvfbPid = record?.desktop?.xvfbPid;
     if (xvfbPid !== undefined) {
       expect(isPidAlive(xvfbPid)).toBe(false);
     }
+
+    await destroyBrowserSession(id, registryEnv);
+    expect(await getSession(id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
   it("cancels startup and cleans up the browser group", async () => {
@@ -328,8 +411,69 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     expect(sessions).toHaveLength(1);
     const id = sessions[0]!.slice(0, -".json".length);
     expect(
-      fs.existsSync(path.join(browserSessionDir(id, registryEnv), "profile")),
+      fs.existsSync(path.join(browserSessionLogDir(id, registryEnv), "profile")),
     ).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it("persists partial identities when startup cleanup is unverifiable and supports retry", async () => {
+    const sessionsPath = path.join(home, "sessions");
+    fs.mkdirSync(sessionsPath, { recursive: true });
+    const recordReady = waitForEntry(
+      sessionsPath,
+      (name) => name.endsWith(".json"),
+    );
+    const creating = createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: spawnEnvFor("stall"),
+      cdpTimeoutMs: 5000,
+    });
+
+    const recordFile = await recordReady;
+    const id = recordFile.slice(0, -".json".length);
+    const sessionDir = browserSessionLogDir(id, registryEnv);
+    await waitForEntry(sessionsPath, (name) => name === id);
+    const pidFile = await waitForEntry(
+      sessionDir,
+      (name) => name === "chrome.pid",
+    );
+    const childPid = Number(
+      fs.readFileSync(path.join(sessionDir, pidFile), "utf8").trim(),
+    );
+    const leaderPid = processGroupId(childPid);
+    expect(leaderPid).not.toBe(childPid);
+
+    process.kill(leaderPid, "SIGKILL");
+    while (fs.existsSync(`/proc/${leaderPid}`)) {
+      await scheduler.yield();
+    }
+    await expect(creating).rejects.toThrow(/exited during startup/);
+
+    const failed = await getSession(id, registryEnv);
+    expect(failed?.status).toBe("error");
+    const failedXvfbPid = failed?.desktop?.xvfbPid;
+    if (failedXvfbPid === undefined) {
+      throw new Error("Failed create did not persist the Xvfb pid");
+    }
+    expect(failed?.browser).toMatchObject({
+      browserPid: leaderPid,
+      profileMode: "ephemeral",
+      profileDir: path.join(sessionDir, "profile"),
+    });
+    expect(failed?.browser?.cdpPort).toBeUndefined();
+    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
+
+    await expect(destroyBrowserSession(id, registryEnv)).rejects.toThrow(
+      /Failed to fully destroy browser session/,
+    );
+    expect(isPidAlive(failedXvfbPid)).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
+
+    await stopPid(childPid, { timeoutMs: 1000 });
+    await destroyBrowserSession(id, registryEnv);
+    expect(await getSession(id, registryEnv)).toBeUndefined();
+    expect(isPidAlive(failedXvfbPid)).toBe(false);
+    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);
   }, TEST_TIMEOUT_MS);
 
   it("kills the process group and removes the profile when Chrome stalls", async () => {
@@ -343,7 +487,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
       .filter((f) => f.endsWith(".json"));
     expect(sessions).toHaveLength(1);
     const id = sessions[0]!.slice(0, -".json".length);
-    const sessionDir = browserSessionDir(id, registryEnv);
+    const sessionDir = browserSessionLogDir(id, registryEnv);
 
     // The stall fake recorded its pid next to the session; the reaper/cleanup
     // must have killed that whole group.
@@ -405,10 +549,7 @@ describe.skipIf(!hasXvfb)("concurrent browser sessions (fake binaries)", () => {
 // These exercise status/destroy logic against crafted records without spawning
 // anything, so they run everywhere (no Xvfb needed).
 describe("browser record inspection (no live processes)", () => {
-  async function craftBrowserRecord(
-    overrides: Parameters<typeof import("@pickforge/picklab-core").createSession>[0],
-  ) {
-    const { createSession } = await import("@pickforge/picklab-core");
+  function craftBrowserRecord(overrides: CreateSessionInput) {
     return createSession(overrides, registryEnv);
   }
 

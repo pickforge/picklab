@@ -476,13 +476,22 @@ export async function stopProcessGroupVerified(
     await sleep(POLL_INTERVAL_MS);
   }
 
+  const members = listProcessGroupMembers(identity.pid);
   const currentLeader = readProcStat(identity.pid);
+  if (currentLeader === undefined) {
+    return {
+      outcome: members.length === 0 ? "terminated" : "reused",
+      signaled: true,
+    };
+  }
   if (
-    currentLeader !== undefined &&
-    currentLeader.startTicks !== identity.startTicks &&
-    currentLeader.pgrp === identity.pid
+    currentLeader.startTicks !== identity.startTicks ||
+    currentLeader.pgrp !== identity.pid
   ) {
     return { outcome: "reused", signaled: true };
+  }
+  if (currentLeader.state === "Z" && members.length === 0) {
+    return { outcome: "terminated", signaled: true };
   }
   signalGroup(identity.pid, "SIGKILL");
   const killDeadline = Date.now() + 1_000;

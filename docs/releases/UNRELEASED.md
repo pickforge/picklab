@@ -25,6 +25,9 @@ then reset this file.
   (`desktop double-click <x> <y>` / `desktop_double_click` with optional
   button and click interval). All are argv-array xdotool calls with
   validated coordinates, buttons, deltas, and timings — no shell.
+- `picklab session create --type browser` and the MCP `session_create` tool can
+  now create isolated headed Chrome/Chromium sessions. CLI and MCP status,
+  single-session destroy, and destroy-all include browser sessions.
 
 ## Internal/release changes
 
@@ -47,9 +50,9 @@ then reset this file.
   displays from `:200` without contending with desktop sessions from `:90`.
 - Added internal `@pickforge/picklab-browser`, owning Chrome/Chromium detection,
   a private Xvfb, ephemeral profile, dynamic loopback CDP discovery, scrubbed
-  environment, PID-identity process-group teardown, status, cleanup, and
-  concurrent-session safety. The DevTools websocket path/GUID is never persisted.
-  No CLI or MCP browser-creation surface is included in this slice.
+  environment, PID-identity process-group teardown, status, retryable
+  partial-failure cleanup, and concurrent-session safety. The DevTools websocket
+  path/GUID is never persisted.
 - CI installs a supported browser and requires the real headed-Chrome integration
   suite to execute rather than silently skip.
 - SECURITY.md documents the residual same-UID and local-process risks.
@@ -78,15 +81,13 @@ then reset this file.
   `bun run typecheck` pass. Core session regressions verify browser-group-first
   teardown and fail-closed handling for an unconfirmed browser identity.
 - `bun run typecheck`
-- Focused core/browser tests: 140 passed.
-- Full suite: 55 files, 622 passed / 1 skipped.
-- `bun run test:coverage` with all thresholds met.
 - `bun run build` for all packages.
+- Focused browser/core/CLI/MCP/security tests: 122 passed.
 - Fake-Chrome lifecycle tests cover create/status/destroy, concurrent displays,
-  ports and profiles, crash/stall cleanup, GUID exclusion, and environment
-  scrubbing.
-- Real headed Chrome under Xvfb covers loopback CDP, secret-free process
-  environment, process-group teardown, and profile cleanup.
+  ports and profiles, crash/stall/cancellation cleanup, retry after unverifiable
+  startup cleanup, GUID exclusion, and environment scrubbing.
+- Built `picklab` and `picklab-mcp` tests cover browser create, status, individual
+  destroy, destroy-all, profile removal, and environment scrubbing.
 
 ### Not tested yet
 
@@ -94,7 +95,9 @@ then reset this file.
 - Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
-- CLI/MCP `session create --type browser` and `desktop_*` browser wiring.
+- Full-suite and coverage runs after the resumed lifecycle edits.
+- Live real-Chrome integration after the resumed lifecycle edits (CI remains
+  configured to require it on Linux).
 
 ### Release blockers
 

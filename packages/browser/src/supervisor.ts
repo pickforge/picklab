@@ -1,6 +1,6 @@
 const SUPERVISOR_SCRIPT = String.raw`
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
+import * as fs from "node:fs";
+import { spawn } from "node:child_process";
 const [binary, ...args] = process.argv.slice(1);
 if (!binary) process.exit(127);
 
@@ -76,6 +76,12 @@ export function buildSupervisedBrowserCommand(
   }
   return {
     command: nodePath,
-    args: ["-e", SUPERVISOR_SCRIPT, binaryPath, ...browserArgs],
+    args: [
+      "--input-type=module",
+      "-e",
+      SUPERVISOR_SCRIPT,
+      binaryPath,
+      ...browserArgs,
+    ],
   };
 }
