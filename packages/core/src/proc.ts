@@ -445,11 +445,17 @@ export async function stopProcessGroupVerified(
 ): Promise<StopProcessGroupResult> {
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const leader = readProcStat(identity.pid);
-  if (leader !== undefined && leader.startTicks !== identity.startTicks) {
-    return { outcome: "reused", signaled: false };
+  if (leader === undefined) {
+    return {
+      outcome:
+        listProcessGroupMembers(identity.pid).length === 0
+          ? "already-dead"
+          : "reused",
+      signaled: false,
+    };
   }
-  if (leader === undefined && listProcessGroupMembers(identity.pid).length === 0) {
-    return { outcome: "already-dead", signaled: false };
+  if (leader.startTicks !== identity.startTicks) {
+    return { outcome: "reused", signaled: false };
   }
 
   signalGroup(identity.pid, "SIGTERM");
