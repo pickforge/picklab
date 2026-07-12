@@ -27,6 +27,7 @@ import {
   type BrowserSessionHandle,
 } from "../src/index.js";
 import { fakePath, writeFakeChrome } from "./fakes.js";
+import type { FakeChromeMode } from "./fakes.js";
 
 // The browser package owns Chrome; Xvfb is the production display server (a
 // light, concurrency-tested dependency), so these tests fake only Chrome and
@@ -54,7 +55,7 @@ afterEach(() => {
 });
 
 function spawnEnvFor(
-  mode: "ready" | "crash" | "launcher" | "stall",
+  mode: FakeChromeMode,
   extra: EnvLike = {},
 ): EnvLike {
   const binDir = path.join(
@@ -425,7 +426,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const creating = createBrowserSession({
       projectDir,
       registryEnv,
-      env: spawnEnvFor("stall"),
+      env: spawnEnvFor("stubborn-stall"),
       cdpTimeoutMs: 5000,
     });
 
@@ -433,12 +434,12 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const id = recordFile.slice(0, -".json".length);
     const sessionDir = browserSessionLogDir(id, registryEnv);
     await waitForEntry(sessionsPath, (name) => name === id);
-    const pidFile = await waitForEntry(
+    const readyFile = await waitForEntry(
       sessionDir,
-      (name) => name === "chrome.pid",
+      (name) => name === "chrome.ready",
     );
     const childPid = Number(
-      fs.readFileSync(path.join(sessionDir, pidFile), "utf8").trim(),
+      fs.readFileSync(path.join(sessionDir, readyFile), "utf8").trim(),
     );
     const leaderPid = processGroupId(childPid);
     expect(leaderPid).not.toBe(childPid);

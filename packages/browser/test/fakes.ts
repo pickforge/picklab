@@ -6,7 +6,12 @@ export function writeExecutable(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, { mode: 0o755 });
 }
 
-export type FakeChromeMode = "ready" | "crash" | "launcher" | "stall";
+export type FakeChromeMode =
+  | "ready"
+  | "crash"
+  | "launcher"
+  | "stall"
+  | "stubborn-stall";
 
 /**
  * A fake Chrome binary. It is named `google-chrome-stable` — the first entry in
@@ -18,6 +23,8 @@ export type FakeChromeMode = "ready" | "crash" | "launcher" | "stall";
  *   - ready: binds a loopback socket and publishes DevToolsActivePort
  *   - crash: exits non-zero immediately
  *   - stall: stays alive but never publishes a port
+ *   - stubborn-stall: publishes a readiness marker, ignores graceful signals,
+ *     and never publishes a port (for deterministic failed-cleanup tests)
  */
 export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
   const server = path.join(binDir, "fake-chrome.cjs");
@@ -41,6 +48,10 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       "if (profile) {",
       '  safeWrite(path.join(profile, "fake-chrome-env.json"), JSON.stringify(process.env));',
       '  safeWrite(path.join(profile, "fake-chrome-argv.json"), JSON.stringify(process.argv.slice(2)));',
+      "}",
+      'if (MODE === "stubborn-stall") {',
+      '  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => {});',
+      '  if (sessionDir) safeWrite(path.join(sessionDir, "chrome.ready"), String(process.pid));',
       "}",
       'if (MODE === "crash") { process.exit(1); }',
       'if (MODE === "ready") {',
