@@ -64,7 +64,7 @@ then reset this file.
   asserting the pointer position via `xdotool getmouselocation`.
 - Process-group regression tests cover reused PID refusal, stubborn children,
   and zombie-only groups.
-- `bun run test packages/core` (8 files, 106 passed) and
+- `bun run test packages/core` (8 files, 107 passed) and
   `bun run typecheck` pass. Core session regressions verify browser-group-first
   teardown and fail-closed handling for an unconfirmed browser identity.
 

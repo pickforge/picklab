@@ -434,8 +434,9 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 /**
  * Terminate a whole process group, identified by its group-leader identity,
  * with SIGTERM then SIGKILL escalation. Before the first signal, the recorded
- * process must still be live, match its start identity, and lead the recorded
- * group. Before escalation, a reused PID leading that group is rejected so an
+ * process must still exist with its recorded start identity and lead the
+ * recorded group. This remains verifiable while the leader is a zombie.
+ * Before escalation, a reused PID leading that group is rejected so an
  * unrelated group is never killed.
  *
  * The leader must have been spawned as a process-group leader (e.g. `spawn`
@@ -447,7 +448,7 @@ export async function stopProcessGroupVerified(
 ): Promise<StopProcessGroupResult> {
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const leader = readProcStat(identity.pid);
-  if (leader === undefined || leader.state === "Z") {
+  if (leader === undefined) {
     return {
       outcome:
         listProcessGroupMembers(identity.pid).length === 0

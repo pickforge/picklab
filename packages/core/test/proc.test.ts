@@ -270,6 +270,43 @@ describe("process identity and group termination", () => {
     }
   });
 
+  it("terminates a verified group whose matching leader is a zombie", async () => {
+    const pid = 1_234_567;
+    const memberPid = pid + 1;
+    const startTicks = 456;
+    let signaled = false;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((filePath: fs.PathOrFileDescriptor) => {
+        if (signaled) {
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        }
+        return String(filePath).endsWith(`/${pid}/stat`)
+          ? procStat(pid, "Z", pid, startTicks)
+          : procStat(memberPid, "S", pid, startTicks + 1);
+      }) as typeof fs.readFileSync);
+    const entries = vi
+      .spyOn(fs, "readdirSync")
+      .mockReturnValue([String(memberPid)] as never);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      signaled = true;
+      return true;
+    });
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "terminated", signaled: true });
+      expect(kill.mock.calls).toEqual([[-pid, "SIGTERM"]]);
+    } finally {
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
   it("matches a live identity and rejects a start-time mismatch", () => {
     const self = readProcessIdentity(process.pid);
     expect(self).toBeDefined();
