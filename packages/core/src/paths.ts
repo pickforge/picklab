@@ -38,20 +38,58 @@ export async function ensureDir(dir: string): Promise<string> {
 }
 
 /**
- * Confinement guard for a session's ephemeral browser profile. Returns true only
- * when `profileDir` resolves to the session's own `profile` directory (or a path
- * beneath the session directory), so profile cleanup never follows a tampered
- * record out of the sessions tree. Shared by the reaper (core) and the browser
- * destroy path so the rule lives in exactly one place.
+ * Confinement guard for an ephemeral browser profile. In addition to lexical
+ * containment, every existing path from the sessions directory through the
+ * profile is lstat'd and realpath-checked so a planted symlink can never turn
+ * cleanup into an out-of-tree removal. Missing paths are safe: force-removal is
+ * already a no-op once the first missing ancestor is reached.
  */
-export function isProfileConfined(
+export async function isProfileConfined(
   sessionDir: string,
   profileDir: string,
-): boolean {
+): Promise<boolean> {
   const base = path.resolve(sessionDir);
-  const resolved = path.resolve(profileDir);
-  return (
-    resolved === path.join(base, "profile") ||
-    resolved.startsWith(base + path.sep)
-  );
+  const target = path.resolve(profileDir);
+  if (
+    target !== path.join(base, "profile") &&
+    !target.startsWith(base + path.sep)
+  ) {
+    return false;
+  }
+
+  const root = path.dirname(base);
+  const relative = path.relative(root, target);
+  const components = relative.split(path.sep);
+  try {
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.lstat(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      return false;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+    const rootReal = await fs.promises.realpath(root);
+
+    let current = root;
+    for (let index = 0; index < components.length; index += 1) {
+      current = path.join(current, components[index]!);
+      try {
+        stat = await fs.promises.lstat(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+        return false;
+      }
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+      const currentReal = await fs.promises.realpath(current);
+      const expectedReal = path.join(
+        rootReal,
+        ...components.slice(0, index + 1),
+      );
+      if (currentReal !== expectedReal) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

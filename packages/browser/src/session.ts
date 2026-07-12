@@ -98,16 +98,24 @@ export function browserSessionLogDir(
 }
 
 async function makeRuntimeDirs(layout: BrowserRuntimeLayout): Promise<void> {
-  await fs.promises.mkdir(layout.profileDir, { recursive: true });
-  await fs.promises.mkdir(layout.xdgConfigHome, { recursive: true });
-  await fs.promises.mkdir(layout.xdgCacheHome, { recursive: true });
-  await fs.promises.mkdir(layout.xdgDataHome, { recursive: true });
-  await fs.promises.mkdir(layout.xdgStateHome, { recursive: true });
-  await fs.promises.mkdir(layout.tmpDir, { recursive: true });
-  await fs.promises.mkdir(layout.xdgRuntimeDir, { recursive: true });
-  // XDG_RUNTIME_DIR must be private per the spec, and Chrome complains loudly
-  // otherwise.
-  await fs.promises.chmod(layout.xdgRuntimeDir, 0o700).catch(() => {});
+  const dirs = [
+    path.dirname(layout.profileDir),
+    layout.profileDir,
+    layout.homeDir,
+    layout.xdgConfigHome,
+    layout.xdgCacheHome,
+    path.join(layout.homeDir, ".local"),
+    layout.xdgDataHome,
+    layout.xdgStateHome,
+    layout.tmpDir,
+    layout.xdgRuntimeDir,
+  ];
+  for (const dir of dirs) {
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    // mkdir's mode is still filtered by umask and does not change an existing
+    // directory, so enforce private permissions explicitly on every level.
+    await fs.promises.chmod(dir, 0o700);
+  }
 }
 
 async function removeRuntimeData(
@@ -423,7 +431,7 @@ export async function destroyBrowserSession(
   const profileDir = browser?.profileDir ?? layout.profileDir;
   // Confinement guard: never delete a profile path a tampered record points
   // outside the session directory.
-  const confined = isProfileConfined(sessionDir, profileDir);
+  const confined = await isProfileConfined(sessionDir, profileDir);
   if (!confined) {
     failures.push(
       new Error(

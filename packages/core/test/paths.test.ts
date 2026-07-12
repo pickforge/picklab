@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -37,28 +38,52 @@ describe("global subdirs", () => {
 });
 
 describe("isProfileConfined", () => {
-  it("accepts the profile and runtime paths beneath a resolved session", () => {
+  it("accepts the profile and runtime paths beneath a resolved session", async () => {
     const sessionDir = "/tmp/picklab/sessions/../sessions/brow-12345678";
     expect(
-      isProfileConfined(
+      await isProfileConfined(
         sessionDir,
         "/tmp/picklab/sessions/brow-12345678/profile",
       ),
     ).toBe(true);
     expect(
-      isProfileConfined(
+      await isProfileConfined(
         sessionDir,
         "/tmp/picklab/sessions/brow-12345678/home/.cache",
       ),
     ).toBe(true);
   });
 
-  it("rejects sibling paths with a shared prefix", () => {
+  it("rejects sibling paths with a shared prefix", async () => {
     expect(
-      isProfileConfined(
+      await isProfileConfined(
         "/tmp/picklab/sessions/brow-12345678",
         "/tmp/picklab/sessions/brow-123456789/profile",
       ),
     ).toBe(false);
+  });
+
+  it("rejects symlinked session and profile ancestry", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-paths-"));
+    const sessions = path.join(root, "sessions");
+    const outside = path.join(root, "outside");
+    const id = "brow-12345678";
+    const session = path.join(sessions, id);
+    try {
+      fs.mkdirSync(session, { recursive: true });
+      fs.mkdirSync(outside, { recursive: true });
+      fs.symlinkSync(outside, path.join(session, "profile"));
+      expect(
+        await isProfileConfined(session, path.join(session, "profile")),
+      ).toBe(false);
+
+      fs.rmSync(session, { recursive: true, force: true });
+      fs.symlinkSync(outside, session);
+      expect(
+        await isProfileConfined(session, path.join(session, "profile")),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

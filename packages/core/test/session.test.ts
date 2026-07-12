@@ -493,6 +493,70 @@ describe("session registry", () => {
     expect(fs.existsSync(profileDir)).toBe(false);
   });
 
+  it("preserves a retryable error record when reaper profile removal fails", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        browser: {
+          browserPid: 4_194_312,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
+        },
+      },
+      env,
+    );
+    const sessionDir = path.join(home, "sessions", stale.id);
+    const profileDir = path.join(sessionDir, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await fs.promises.writeFile(path.join(profileDir, "Cookies"), "secret");
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          browserPid: 4_194_312,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir,
+        },
+      },
+      env,
+    );
+
+    const realRm = fs.promises.rm.bind(fs.promises);
+    let failRemoval = true;
+    const rm = vi
+      .spyOn(fs.promises, "rm")
+      .mockImplementation(async (target, options) => {
+        if (failRemoval && path.resolve(String(target)) === sessionDir) {
+          const error = new Error("simulated removal failure");
+          Object.assign(error, { code: "EACCES" });
+          throw error;
+        }
+        return realRm(target, options);
+      });
+    try {
+      expect(await reapDeadRunningSessions(env)).toEqual([]);
+      const failed = await getSession(stale.id, env);
+      expect(failed?.status).toBe("error");
+      expect(failed?.meta?.reaperCleanupPending).toBe(true);
+      expect(fs.existsSync(profileDir)).toBe(true);
+
+      failRemoval = false;
+      expect(
+        (await reapDeadRunningSessions(env)).map((record) => record.id),
+      ).toEqual([stale.id]);
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      expect(fs.existsSync(profileDir)).toBe(false);
+    } finally {
+      rm.mockRestore();
+    }
+  });
+
   it("does not delete a profile that escapes the session dir when reaping", async () => {
     const outside = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "picklab-outside-"),

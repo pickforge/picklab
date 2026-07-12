@@ -244,19 +244,43 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
   return alive.some(Boolean);
 }
 
+const REAPER_CLEANUP_PENDING = "reaperCleanupPending";
+
 export async function reapDeadRunningSessions(
   env: EnvLike = process.env,
   isAlive: SessionLivenessCheck = isSessionProcessAlive,
 ): Promise<SessionRecord[]> {
   const reaped: SessionRecord[] = [];
   for (const record of await listSessions(env)) {
-    if (record.status !== "running") continue;
-    if (await isAlive(record)) continue;
+    const retryPending =
+      record.status === "error" &&
+      record.meta?.[REAPER_CLEANUP_PENDING] === true;
+    if (record.status !== "running" && !retryPending) continue;
+    if (!retryPending && (await isAlive(record))) continue;
     if (!(await stopRecordedPids(record, env))) {
-      await updateSession(record.id, { status: "error" }, env).catch(() => {});
+      await updateSession(
+        record.id,
+        {
+          status: "error",
+          meta: { ...record.meta, [REAPER_CLEANUP_PENDING]: true },
+        },
+        env,
+      ).catch(() => {});
       continue;
     }
-    await destroySessionRecord(record.id, env);
+    try {
+      await destroySessionRecord(record.id, env);
+    } catch {
+      await updateSession(
+        record.id,
+        {
+          status: "error",
+          meta: { ...record.meta, [REAPER_CLEANUP_PENDING]: true },
+        },
+        env,
+      ).catch(() => {});
+      continue;
+    }
     reaped.push(record);
   }
   return reaped;
@@ -306,12 +330,14 @@ async function stopRecordedPids(
 
   if (browser?.profileMode === "ephemeral") {
     const sessionDir = path.join(sessionsDir(env), record.id);
-    if (!isProfileConfined(sessionDir, browser.profileDir)) {
+    if (!(await isProfileConfined(sessionDir, browser.profileDir))) {
       return false;
     }
-    await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(
-      () => {},
-    );
+    try {
+      await fs.promises.rm(sessionDir, { recursive: true, force: true });
+    } catch {
+      return false;
+    }
   }
   return true;
 }

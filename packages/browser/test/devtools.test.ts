@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +8,7 @@ import {
   parseDevToolsActivePort,
   readDevToolsActivePort,
   waitForDevToolsPort,
+  probeDevToolsHttp,
 } from "../src/devtools.js";
 
 let tmp: string;
@@ -56,6 +59,7 @@ describe("waitForDevToolsPort", () => {
       profileDir: tmp,
       timeoutMs: 2000,
       isAlive: () => true,
+      isReady: async (port) => port === 5555,
       pollIntervalMs: 10,
     });
     expect(result).toEqual({ ok: true, port: 5555 });
@@ -74,6 +78,35 @@ describe("waitForDevToolsPort", () => {
     expect(result).toEqual({ ok: false, reason: "aborted" });
   });
 
+  it("returns aborted when cancellation happens during the endpoint probe", async () => {
+    const controller = new AbortController();
+    const server = createServer(() => controller.abort());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Probe server did not expose a TCP port");
+    }
+    fs.writeFileSync(
+      path.join(tmp, "DevToolsActivePort"),
+      `${address.port}\n/x\n`,
+    );
+    try {
+      const result = await waitForDevToolsPort({
+        profileDir: tmp,
+        timeoutMs: 2000,
+        isAlive: () => true,
+        signal: controller.signal,
+        pollIntervalMs: 10,
+      });
+      expect(result).toEqual({ ok: false, reason: "aborted" });
+    } finally {
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
+  });
+
   it("fails with 'exited' when the process dies before publishing a port", async () => {
     const result = await waitForDevToolsPort({
       profileDir: tmp,
@@ -84,7 +117,7 @@ describe("waitForDevToolsPort", () => {
     expect(result).toEqual({ ok: false, reason: "exited" });
   });
 
-  it("still reports the port if it was written as the process exited", async () => {
+  it("rejects a published port when the process has already exited", async () => {
     fs.writeFileSync(path.join(tmp, "DevToolsActivePort"), "6006\n/x\n");
     const result = await waitForDevToolsPort({
       profileDir: tmp,
@@ -92,7 +125,7 @@ describe("waitForDevToolsPort", () => {
       isAlive: () => false,
       pollIntervalMs: 10,
     });
-    expect(result).toEqual({ ok: true, port: 6006 });
+    expect(result).toEqual({ ok: false, reason: "exited" });
   });
 
   it("fails with 'timeout' when the port never appears", async () => {
@@ -103,5 +136,46 @@ describe("waitForDevToolsPort", () => {
       pollIntervalMs: 10,
     });
     expect(result).toEqual({ ok: false, reason: "timeout" });
+  });
+});
+
+describe("probeDevToolsHttp", () => {
+  it("does not follow redirects away from the direct loopback endpoint", async () => {
+    let targetHits = 0;
+    const target = createServer((_request, response) => {
+      targetHits += 1;
+      response.writeHead(200).end("{}");
+    });
+    target.listen(0, "127.0.0.1");
+    await once(target, "listening");
+    const targetAddress = target.address();
+    if (targetAddress === null || typeof targetAddress === "string") {
+      throw new Error("Redirect target did not expose a TCP port");
+    }
+
+    const redirect = createServer((_request, response) => {
+      response
+        .writeHead(302, {
+          Location: `http://127.0.0.1:${targetAddress.port}/json/version`,
+        })
+        .end();
+    });
+    redirect.listen(0, "127.0.0.1");
+    await once(redirect, "listening");
+    const redirectAddress = redirect.address();
+    if (redirectAddress === null || typeof redirectAddress === "string") {
+      throw new Error("Redirect server did not expose a TCP port");
+    }
+
+    try {
+      expect(await probeDevToolsHttp(redirectAddress.port)).toBe(false);
+      expect(targetHits).toBe(0);
+    } finally {
+      const redirectClosed = once(redirect, "close");
+      const targetClosed = once(target, "close");
+      redirect.close();
+      target.close();
+      await Promise.all([redirectClosed, targetClosed]);
+    }
   });
 });

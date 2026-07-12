@@ -116,15 +116,21 @@ function processGroupId(pid: number): number {
 describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
   it("brings up both legs, persists the contract, and never persists the GUID", async () => {
     const env = spawnEnvFor("ready", { SECRET_TOKEN: "leak-me-please" });
-    const session = await createBrowserSession({
-      projectDir,
-      registryEnv,
-      env,
-      width: 1024,
-      height: 768,
-      cdpTimeoutMs: 5000,
-      xvfbWaitTimeoutMs: 20_000,
-    });
+    let session: BrowserSessionHandle;
+    const previousUmask = process.umask(0);
+    try {
+      session = await createBrowserSession({
+        projectDir,
+        registryEnv,
+        env,
+        width: 1024,
+        height: 768,
+        cdpTimeoutMs: 5000,
+        xvfbWaitTimeoutMs: 20_000,
+      });
+    } finally {
+      process.umask(previousUmask);
+    }
     try {
       expect(session.id).toMatch(/^brow-[0-9a-f]+$/);
       expect(isPidAlive(session.xvfbPid)).toBe(true);
@@ -156,6 +162,22 @@ describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
         path.join(browserSessionLogDir(session.id, registryEnv), "profile"),
       );
       expect(fs.existsSync(session.profileDir)).toBe(true);
+
+      const layout = browserRuntimeLayout(session.logDir);
+      for (const dir of [
+        session.logDir,
+        layout.profileDir,
+        layout.homeDir,
+        layout.xdgConfigHome,
+        layout.xdgCacheHome,
+        path.join(layout.homeDir, ".local"),
+        layout.xdgDataHome,
+        layout.xdgStateHome,
+        layout.tmpDir,
+        layout.xdgRuntimeDir,
+      ]) {
+        expect(fs.statSync(dir).mode & 0o777, dir).toBe(0o700);
+      }
     } finally {
       await destroyBrowserSession(session.id, registryEnv).catch(() => {});
     }
@@ -393,6 +415,25 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     expect(await getSession(id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
+  it("rejects Chrome that exits after publishing a DevTools port", async () => {
+    const env = spawnEnvFor("crash-after-port");
+    await expect(
+      createBrowserSession({ projectDir, registryEnv, env, cdpTimeoutMs: 3000 }),
+    ).rejects.toThrow(/exited during startup/);
+
+    const recordFile = fs
+      .readdirSync(path.join(home, "sessions"))
+      .find((name) => name.endsWith(".json"));
+    if (recordFile === undefined) {
+      throw new Error("Failed create did not preserve its error record");
+    }
+    const id = recordFile.slice(0, -".json".length);
+    const sessionDir = browserSessionLogDir(id, registryEnv);
+    expect(fs.existsSync(path.join(sessionDir, "cdp-published"))).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);
+    expect((await getSession(id, registryEnv))?.status).toBe("error");
+  }, TEST_TIMEOUT_MS);
+
   it("cancels startup and cleans up the browser group", async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
@@ -619,5 +660,52 @@ describe("browser record inspection (no live processes)", () => {
     );
     // The confinement guard must not have deleted the out-of-tree directory.
     expect(fs.existsSync(outside)).toBe(true);
+  });
+
+  it("refuses a symlinked profile and never removes its outside target", async () => {
+    const outside = path.join(tmp, "outside-profile");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, "Cookies"), "keep");
+    const rec = await craftBrowserRecord({
+      type: "browser",
+      projectDir,
+      status: "error",
+      browser: {
+        browserPid: 4_194_304,
+        browserStartTimeTicks: 1,
+        binaryPath: "/usr/bin/chromium",
+        profileMode: "ephemeral",
+        profileDir: path.join(
+          home,
+          "sessions",
+          "placeholder",
+          "profile",
+        ),
+      },
+    });
+    if (rec.browser === undefined) {
+      throw new Error("Crafted browser record lost its browser leg");
+    }
+    const sessionDir = browserSessionLogDir(rec.id, registryEnv);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const profileDir = path.join(sessionDir, "profile");
+    fs.symlinkSync(outside, profileDir);
+    await updateSession(
+      rec.id,
+      {
+        browser: {
+          ...rec.browser,
+          profileDir,
+        },
+      },
+      registryEnv,
+    );
+
+    await expect(destroyBrowserSession(rec.id, registryEnv)).rejects.toThrow(
+      /Failed to fully destroy browser session/,
+    );
+    expect(fs.readFileSync(path.join(outside, "Cookies"), "utf8")).toBe("keep");
+    expect(fs.lstatSync(profileDir).isSymbolicLink()).toBe(true);
+    expect((await getSession(rec.id, registryEnv))?.status).toBe("error");
   });
 });

@@ -40,40 +40,80 @@ export type DevToolsPortResult =
   | { ok: true; port: number }
   | { ok: false; reason: "aborted" | "exited" | "timeout" };
 
+/** Verify that the loopback DevTools HTTP endpoint is accepting requests. */
+export async function probeDevToolsHttp(
+  port: number,
+  timeoutMs = 500,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const probeSignal =
+      signal === undefined
+        ? timeoutSignal
+        : AbortSignal.any([signal, timeoutSignal]);
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: probeSignal,
+      redirect: "manual",
+    });
+    await response.body?.cancel();
+    return response.status === 200;
+  } catch {
+    return false;
+  }
+}
+
 export interface WaitForDevToolsPortOptions {
   profileDir: string;
   timeoutMs: number;
   /** Liveness probe for the Chrome process; a dead process ends the wait. */
   isAlive: () => boolean;
   signal?: AbortSignal;
+  /** Endpoint readiness probe; injectable for deterministic unit tests. */
+  isReady?: (port: number) => boolean | Promise<boolean>;
+  probeTimeoutMs?: number;
   pollIntervalMs?: number;
 }
 
 /**
- * Poll for the CDP port to appear. Resolves as soon as the port is readable,
- * fails fast if Chrome exits during startup, and fails with `timeout` if the
- * deadline passes while Chrome is still alive but has not published a port.
+ * Poll for a published CDP port, a live recorded browser identity, and a
+ * responding loopback DevTools HTTP endpoint. Fails fast if Chrome exits and
+ * returns `timeout` if the complete readiness contract is not met in time.
  */
 export async function waitForDevToolsPort(
   opts: WaitForDevToolsPortOptions,
 ): Promise<DevToolsPortResult> {
   const poll = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const deadline = Date.now() + opts.timeoutMs;
+  const isReady =
+    opts.isReady ??
+    ((port: number) =>
+      probeDevToolsHttp(
+        port,
+        opts.probeTimeoutMs ?? Math.max(poll, 100),
+        opts.signal,
+      ));
+  // Read through a function so cancellation that occurs during the awaited
+  // probe is observed instead of being hidden by TypeScript's prior narrowing.
+  const creationAborted = (): boolean => opts.signal?.aborted === true;
   for (;;) {
-    if (opts.signal?.aborted === true) {
+    if (creationAborted()) {
       return { ok: false, reason: "aborted" };
     }
     const port = readDevToolsActivePort(opts.profileDir);
     if (port !== undefined) {
-      return { ok: true, port };
-    }
-    if (!opts.isAlive()) {
-      // One last read closes the race where Chrome wrote the port and exited
-      // (or was reaped) between our port read and the liveness probe.
-      const last = readDevToolsActivePort(opts.profileDir);
-      return last !== undefined
-        ? { ok: true, port: last }
-        : { ok: false, reason: "exited" };
+      if (!opts.isAlive()) {
+        return { ok: false, reason: "exited" };
+      }
+      const ready = await isReady(port);
+      if (creationAborted()) {
+        return { ok: false, reason: "aborted" };
+      }
+      if (ready && opts.isAlive()) {
+        return { ok: true, port };
+      }
+    } else if (!opts.isAlive()) {
+      return { ok: false, reason: "exited" };
     }
     if (Date.now() >= deadline) {
       return { ok: false, reason: "timeout" };

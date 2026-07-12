@@ -9,6 +9,7 @@ export function writeExecutable(filePath: string, content: string): void {
 export type FakeChromeMode =
   | "ready"
   | "crash"
+  | "crash-after-port"
   | "launcher"
   | "stall"
   | "stubborn-stall";
@@ -22,6 +23,7 @@ export type FakeChromeMode =
  * survives profile deletion), then:
  *   - ready: binds a loopback socket and publishes DevToolsActivePort
  *   - crash: exits non-zero immediately
+ *   - crash-after-port: publishes a port, closes it, then exits non-zero
  *   - stall: stays alive but never publishes a port
  *   - stubborn-stall: publishes a readiness marker, ignores graceful signals,
  *     and never publishes a port (for deterministic failed-cleanup tests)
@@ -54,12 +56,15 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       '  if (sessionDir) safeWrite(path.join(sessionDir, "chrome.ready"), String(process.pid));',
       "}",
       'if (MODE === "crash") { process.exit(1); }',
-      'if (MODE === "ready") {',
-      "  const server = net.createServer((s) => s.end());",
+      'if (MODE === "ready" || MODE === "crash-after-port") {',
+      '  const response = "HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}";',
+      "  const server = net.createServer((s) => s.end(response));",
       '  server.listen(0, "127.0.0.1", () => {',
       "    const addr = server.address();",
       '    const port = typeof addr === "object" && addr ? addr.port : 0;',
       '    if (profile) safeWrite(path.join(profile, "DevToolsActivePort"), port + "\\n/devtools/browser/fake-guid-deadbeef\\n");',
+      '    if (sessionDir) safeWrite(path.join(sessionDir, "cdp-published"), String(port));',
+      '    if (MODE === "crash-after-port") server.close(() => process.exit(1));',
       "  });",
       "}",
       "setInterval(() => {}, 1000);",

@@ -23,6 +23,7 @@ export {
 
 export {
   parseDevToolsActivePort,
+  probeDevToolsHttp,
   readDevToolsActivePort,
   waitForDevToolsPort,
   type DevToolsPortResult,
