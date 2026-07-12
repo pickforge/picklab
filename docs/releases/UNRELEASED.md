@@ -58,6 +58,8 @@ then reset this file.
   validation tests for out-of-range buttons, deltas, durations, and
   intervals; live Xvfb smoke driving move, scroll, drag, and double-click and
   asserting the pointer position via `xdotool getmouselocation`.
+- Process-group regression tests cover reused PID refusal, stubborn children,
+  and zombie-only groups.
 
 ### Not tested yet
 
