@@ -101,6 +101,64 @@ describe.skipIf(!hasDesktopStack)("desktop flow (real Xvfb)", () => {
       );
       expect(click.ok).toBe(true);
 
+      const moved = parseToolJson(
+        await lab.client.callTool({
+          name: "desktop_move",
+          arguments: { x: 100, y: 120 },
+        }),
+      );
+      expect(moved.ok).toBe(true);
+      expect(moved.x).toBe(100);
+      expect(moved.y).toBe(120);
+
+      const scrolled = parseToolJson(
+        await lab.client.callTool({
+          name: "desktop_scroll",
+          arguments: { deltaX: -1, deltaY: 2, x: 200, y: 150 },
+        }),
+      );
+      expect(scrolled.ok).toBe(true);
+      expect(scrolled.deltaX).toBe(-1);
+      expect(scrolled.deltaY).toBe(2);
+
+      const zeroScroll = await lab.client.callTool({
+        name: "desktop_scroll",
+        arguments: { deltaX: 0, deltaY: 0 },
+      });
+      expect(zeroScroll.isError).toBe(true);
+      expect(parseToolJson(zeroScroll).errors[0]).toContain("non-zero");
+
+      const halfPosition = await lab.client.callTool({
+        name: "desktop_scroll",
+        arguments: { deltaX: 0, deltaY: 1, x: 10 },
+      });
+      expect(halfPosition.isError).toBe(true);
+      expect(parseToolJson(halfPosition).errors[0]).toContain("both x and y");
+
+      const dragged = parseToolJson(
+        await lab.client.callTool({
+          name: "desktop_drag",
+          arguments: {
+            fromX: 50,
+            fromY: 50,
+            toX: 250,
+            toY: 200,
+            durationMs: 200,
+          },
+        }),
+      );
+      expect(dragged.ok).toBe(true);
+      expect(dragged.button).toBe(1);
+
+      const doubleClicked = parseToolJson(
+        await lab.client.callTool({
+          name: "desktop_double_click",
+          arguments: { x: 60, y: 60 },
+        }),
+      );
+      expect(doubleClicked.ok).toBe(true);
+      expect(doubleClicked.button).toBe(1);
+
       const typed = parseToolJson(
         await lab.client.callTool({
           name: "desktop_type",

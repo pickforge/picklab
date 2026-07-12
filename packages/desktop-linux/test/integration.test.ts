@@ -7,6 +7,7 @@ import {
   createRun,
   getSession,
   isPidAlive,
+  runCommand,
   stopPid,
   updateSession,
   type EnvLike,
@@ -18,14 +19,18 @@ import {
   destroyDesktopSession,
   detectScreenshotTool,
   detectVncBinary,
+  doubleClick,
+  drag,
   findOnPath,
   getDesktopSessionStatus,
   isDisplayAlive,
   launchApp,
   listWindows,
+  move,
   parseDisplayNumber,
   pressKey,
   screenshot,
+  scroll,
   startVnc,
   startXvfb,
   typeText,
@@ -58,6 +63,22 @@ afterAll(() => {
 function writeExecutable(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, { mode: 0o755 });
+}
+
+async function pointerLocation(
+  display: string,
+): Promise<{ x: number; y: number }> {
+  const result = await runCommand(
+    "xdotool",
+    ["getmouselocation", "--shell"],
+    { env: { DISPLAY: display }, timeoutMs: 10_000, check: true },
+  );
+  const x = /(?:^|\n)X=(\d+)/.exec(result.stdout);
+  const y = /(?:^|\n)Y=(\d+)/.exec(result.stdout);
+  if (x === null || y === null) {
+    throw new Error(`unexpected getmouselocation output: ${result.stdout}`);
+  }
+  return { x: Number(x[1]), y: Number(y[1]) };
 }
 
 function writeFakeXvfb(binDir: string): void {
@@ -491,6 +512,44 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
         await typeText({ display: session.display, text: "echo picklab" });
         await pressKey({ display: session.display, key: "Return" });
         await pressKey({ display: session.display, key: "ctrl+shift+t" });
+
+        await move({ display: session.display, x: 120, y: 90 });
+        expect(await pointerLocation(session.display)).toEqual({
+          x: 120,
+          y: 90,
+        });
+
+        await scroll({ display: session.display, deltaX: 0, deltaY: 2 });
+        await scroll({
+          display: session.display,
+          deltaX: -1,
+          deltaY: -1,
+          x: 60,
+          y: 60,
+        });
+        expect(await pointerLocation(session.display)).toEqual({
+          x: 60,
+          y: 60,
+        });
+
+        await drag({
+          display: session.display,
+          fromX: 30,
+          fromY: 30,
+          toX: 150,
+          toY: 110,
+          durationMs: 200,
+        });
+        expect(await pointerLocation(session.display)).toEqual({
+          x: 150,
+          y: 110,
+        });
+
+        await doubleClick({ display: session.display, x: 45, y: 45 });
+        expect(await pointerLocation(session.display)).toEqual({
+          x: 45,
+          y: 45,
+        });
 
         expect(isPidAlive(app.pid)).toBe(true);
       } finally {

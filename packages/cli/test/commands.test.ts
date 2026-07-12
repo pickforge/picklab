@@ -442,6 +442,62 @@ describe("picklab desktop", () => {
       expect(click.code).toBe(0);
       expect(parseJson(click).ok).toBe(true);
 
+      const moved = await runCli(
+        ["desktop", "move", "120", "80", "--json"],
+        env,
+        tmpDir,
+      );
+      expect(moved.code).toBe(0);
+      const moveReport = parseJson(moved);
+      expect(moveReport.ok).toBe(true);
+      expect(moveReport.x).toBe(120);
+      expect(moveReport.y).toBe(80);
+
+      const scrolled = await runCli(
+        ["desktop", "scroll", "--at", "100,100", "--json", "--", "-1", "2"],
+        env,
+        tmpDir,
+      );
+      expect(scrolled.code).toBe(0);
+      const scrollReport = parseJson(scrolled);
+      expect(scrollReport.ok).toBe(true);
+      expect(scrollReport.deltaX).toBe(-1);
+      expect(scrollReport.deltaY).toBe(2);
+      expect(scrollReport.x).toBe(100);
+      expect(scrollReport.y).toBe(100);
+
+      const dragged = await runCli(
+        [
+          "desktop",
+          "drag",
+          "30",
+          "30",
+          "160",
+          "120",
+          "--duration",
+          "200",
+          "--json",
+        ],
+        env,
+        tmpDir,
+      );
+      expect(dragged.code).toBe(0);
+      const dragReport = parseJson(dragged);
+      expect(dragReport.ok).toBe(true);
+      expect(dragReport.fromX).toBe(30);
+      expect(dragReport.toY).toBe(120);
+      expect(dragReport.button).toBe(1);
+
+      const doubleClicked = await runCli(
+        ["desktop", "double-click", "40", "40", "--json"],
+        env,
+        tmpDir,
+      );
+      expect(doubleClicked.code).toBe(0);
+      const doubleReport = parseJson(doubleClicked);
+      expect(doubleReport.ok).toBe(true);
+      expect(doubleReport.button).toBe(1);
+
       const typed = await runCli(
         ["desktop", "type", "echo hi", "--json"],
         env,
@@ -472,6 +528,117 @@ describe("picklab desktop", () => {
       expect(parseJson(result).errors.join("\n")).toContain(
         "between 1 and 9",
       );
+    }
+  });
+
+  it("rejects invalid move coordinates", async () => {
+    const env = makeEnv();
+    for (const coords of [["-1", "5"], ["1.5", "5"], ["x", "5"]]) {
+      const result = await runCli(
+        ["desktop", "move", "--json", "--", ...coords],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain(
+        "non-negative integer",
+      );
+    }
+  });
+
+  it("rejects invalid scroll deltas and --at positions", async () => {
+    const env = makeEnv();
+    for (const deltas of [["0.5", "1"], ["1", "abc"]]) {
+      const result = await runCli(
+        ["desktop", "scroll", "--json", "--", ...deltas],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain(
+        "expected an integer",
+      );
+    }
+    for (const delta of [["101", "0"], ["0", "-101"]]) {
+      const result = await runCli(
+        ["desktop", "scroll", "--json", "--", ...delta],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain(
+        "at most 100 wheel steps",
+      );
+    }
+    const zero = await runCli(
+      ["desktop", "scroll", "0", "0", "--json"],
+      env,
+    );
+    expect(zero.code).toBe(1);
+    expect(parseJson(zero).errors.join("\n")).toContain("non-zero");
+
+    const badAt = await runCli(
+      ["desktop", "scroll", "0", "1", "--at", "10;20", "--json"],
+      env,
+    );
+    expect(badAt.code).toBe(1);
+    expect(parseJson(badAt).errors.join("\n")).toContain('--at "10;20"');
+  }, 30_000);
+
+  it("rejects invalid drag buttons and durations", async () => {
+    const env = makeEnv();
+    const badButton = await runCli(
+      ["desktop", "drag", "0", "0", "1", "1", "--button", "10", "--json"],
+      env,
+    );
+    expect(badButton.code).toBe(1);
+    expect(parseJson(badButton).errors.join("\n")).toContain(
+      "between 1 and 9",
+    );
+
+    for (const duration of ["-1", "10001", "1.5"]) {
+      const result = await runCli(
+        [
+          "desktop",
+          "drag",
+          "0",
+          "0",
+          "1",
+          "1",
+          "--json",
+          "--duration",
+          duration,
+        ],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain("--duration");
+    }
+  });
+
+  it("rejects invalid double-click buttons and intervals", async () => {
+    const env = makeEnv();
+    const badButton = await runCli(
+      ["desktop", "double-click", "1", "1", "--button", "0", "--json"],
+      env,
+    );
+    expect(badButton.code).toBe(1);
+    expect(parseJson(badButton).errors.join("\n")).toContain(
+      "between 1 and 9",
+    );
+
+    for (const interval of ["-1", "2001", "0.5"]) {
+      const result = await runCli(
+        [
+          "desktop",
+          "double-click",
+          "1",
+          "1",
+          "--json",
+          "--interval",
+          interval,
+        ],
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(parseJson(result).errors.join("\n")).toContain("--interval");
     }
   });
 

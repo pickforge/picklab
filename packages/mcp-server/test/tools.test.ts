@@ -21,6 +21,10 @@ const EXPECTED_TOOLS = [
   "desktop_launch",
   "desktop_screenshot",
   "desktop_click",
+  "desktop_move",
+  "desktop_scroll",
+  "desktop_drag",
+  "desktop_double_click",
   "desktop_type",
   "desktop_key",
   "android_start",
@@ -80,6 +84,32 @@ describe("tool inventory", () => {
       expect.arrayContaining(["x", "y"]),
     );
   });
+
+  it("declares required arguments for the desktop input tools", async () => {
+    const { tools } = await lab.client.listTools();
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    expect(byName.get("desktop_move")?.inputSchema.required).toEqual(
+      expect.arrayContaining(["x", "y"]),
+    );
+    expect(byName.get("desktop_scroll")?.inputSchema.required).toEqual(
+      expect.arrayContaining(["deltaX", "deltaY"]),
+    );
+    expect(byName.get("desktop_scroll")?.inputSchema.required).not.toEqual(
+      expect.arrayContaining(["x", "y"]),
+    );
+    expect(byName.get("desktop_drag")?.inputSchema.required).toEqual(
+      expect.arrayContaining(["fromX", "fromY", "toX", "toY"]),
+    );
+    expect(byName.get("desktop_drag")?.inputSchema.required).not.toEqual(
+      expect.arrayContaining(["button", "durationMs"]),
+    );
+    expect(byName.get("desktop_double_click")?.inputSchema.required).toEqual(
+      expect.arrayContaining(["x", "y"]),
+    );
+    expect(
+      byName.get("desktop_double_click")?.inputSchema.required,
+    ).not.toEqual(expect.arrayContaining(["button", "intervalMs"]));
+  });
 });
 
 describe("input validation", () => {
@@ -97,6 +127,69 @@ describe("input validation", () => {
       arguments: { x: "10", y: 20 },
     });
     expect(result.isError).toBe(true);
+  });
+
+  it("rejects invalid desktop_move coordinates", async () => {
+    for (const args of [
+      { x: -1, y: 2 },
+      { x: 1.5, y: 2 },
+      { x: 1 },
+    ]) {
+      const result = await lab.client.callTool({
+        name: "desktop_move",
+        arguments: args,
+      });
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it("rejects invalid desktop_scroll deltas and positions", async () => {
+    for (const args of [
+      { deltaX: 0.5, deltaY: 0 },
+      { deltaX: 0, deltaY: 101 },
+      { deltaX: -101, deltaY: 0 },
+      { deltaX: 0 },
+      { deltaX: 0, deltaY: 1, x: -1, y: 2 },
+    ]) {
+      const result = await lab.client.callTool({
+        name: "desktop_scroll",
+        arguments: args,
+      });
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it("rejects invalid desktop_drag buttons and durations", async () => {
+    for (const args of [
+      { fromX: 0, fromY: 0, toX: 1, toY: 1, button: 0 },
+      { fromX: 0, fromY: 0, toX: 1, toY: 1, button: 10 },
+      { fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: -1 },
+      { fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: 10_001 },
+      { fromX: 0, fromY: 0, toX: 1 },
+      { fromX: -1, fromY: 0, toX: 1, toY: 1 },
+    ]) {
+      const result = await lab.client.callTool({
+        name: "desktop_drag",
+        arguments: args,
+      });
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it("rejects invalid desktop_double_click buttons and intervals", async () => {
+    for (const args of [
+      { x: 0, y: 0, button: 0 },
+      { x: 0, y: 0, button: 10 },
+      { x: 0, y: 0, intervalMs: -1 },
+      { x: 0, y: 0, intervalMs: 2_001 },
+      { x: 0, y: 0.5 },
+    ]) {
+      const result = await lab.client.callTool({
+        name: "desktop_double_click",
+        arguments: args,
+      });
+      expect(result.isError).toBe(true);
+    }
   });
 
   it("rejects negative tap coordinates", async () => {

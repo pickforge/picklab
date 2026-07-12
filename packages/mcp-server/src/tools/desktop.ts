@@ -4,9 +4,16 @@ import { z } from "zod";
 import {
   click,
   desktopSessionLogDir,
+  doubleClick,
+  drag,
   launchApp,
+  MAX_DOUBLE_CLICK_INTERVAL_MS,
+  MAX_DRAG_DURATION_MS,
+  MAX_SCROLL_STEPS,
+  move,
   pressKey,
   screenshot,
+  scroll,
   typeText,
   waitForWindow,
 } from "@pickforge/picklab-desktop-linux";
@@ -27,6 +34,20 @@ const sessionArg = {
     .optional()
     .describe("Desktop session id (default: the single running session)"),
 };
+
+const buttonArg = z
+  .number()
+  .int()
+  .min(1)
+  .max(9)
+  .optional()
+  .describe("Mouse button (1-9, default 1)");
+
+const scrollDelta = z
+  .number()
+  .int()
+  .min(-MAX_SCROLL_STEPS)
+  .max(MAX_SCROLL_STEPS);
 
 async function resolveDesktop(
   ctx: ServerContext,
@@ -147,19 +168,180 @@ export function registerDesktopTools(
         ...sessionArg,
         x: z.number().int().nonnegative().describe("X coordinate"),
         y: z.number().int().nonnegative().describe("Y coordinate"),
-        button: z
-          .number()
-          .int()
-          .min(1)
-          .max(9)
-          .optional()
-          .describe("Mouse button (1-9, default 1)"),
+        button: buttonArg,
       },
     },
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
         await click({ display, x: args.x, y: args.y, button: args.button });
+        return {
+          data: {
+            sessionId: id,
+            display,
+            x: args.x,
+            y: args.y,
+            button: args.button ?? 1,
+          },
+        };
+      }),
+  );
+
+  server.registerTool(
+    "desktop_move",
+    {
+      title: "Desktop mouse move",
+      description:
+        "Move the pointer to the given desktop coordinates without " +
+        "clicking (hover).",
+      inputSchema: {
+        ...sessionArg,
+        x: z.number().int().nonnegative().describe("X coordinate"),
+        y: z.number().int().nonnegative().describe("Y coordinate"),
+      },
+    },
+    (args) =>
+      runTool(async () => {
+        const { id, display } = await resolveDesktop(ctx, args.session);
+        await move({ display, x: args.x, y: args.y });
+        return {
+          data: { sessionId: id, display, x: args.x, y: args.y },
+        };
+      }),
+  );
+
+  server.registerTool(
+    "desktop_scroll",
+    {
+      title: "Desktop scroll",
+      description:
+        "Scroll the mouse wheel by integer steps. Positive deltaY scrolls " +
+        "down, negative up; positive deltaX scrolls right, negative left. " +
+        "Optionally move the pointer to (x, y) first.",
+      inputSchema: {
+        ...sessionArg,
+        deltaX: scrollDelta.describe(
+          "Horizontal wheel steps (positive: right, negative: left)",
+        ),
+        deltaY: scrollDelta.describe(
+          "Vertical wheel steps (positive: down, negative: up)",
+        ),
+        x: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("X coordinate to move the pointer to before scrolling"),
+        y: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Y coordinate to move the pointer to before scrolling"),
+      },
+    },
+    (args) =>
+      runTool(async () => {
+        const { id, display } = await resolveDesktop(ctx, args.session);
+        await scroll({
+          display,
+          deltaX: args.deltaX,
+          deltaY: args.deltaY,
+          x: args.x,
+          y: args.y,
+        });
+        const data: Record<string, unknown> = {
+          sessionId: id,
+          display,
+          deltaX: args.deltaX,
+          deltaY: args.deltaY,
+        };
+        if (args.x !== undefined && args.y !== undefined) {
+          data.x = args.x;
+          data.y = args.y;
+        }
+        return { data };
+      }),
+  );
+
+  server.registerTool(
+    "desktop_drag",
+    {
+      title: "Desktop drag",
+      description:
+        "Press the mouse button at (fromX, fromY), move to (toX, toY), " +
+        "and release.",
+      inputSchema: {
+        ...sessionArg,
+        fromX: z.number().int().nonnegative().describe("Start X coordinate"),
+        fromY: z.number().int().nonnegative().describe("Start Y coordinate"),
+        toX: z.number().int().nonnegative().describe("End X coordinate"),
+        toY: z.number().int().nonnegative().describe("End Y coordinate"),
+        button: buttonArg,
+        durationMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_DRAG_DURATION_MS)
+          .optional()
+          .describe("Total drag duration in ms (default 300)"),
+      },
+    },
+    (args) =>
+      runTool(async () => {
+        const { id, display } = await resolveDesktop(ctx, args.session);
+        await drag({
+          display,
+          fromX: args.fromX,
+          fromY: args.fromY,
+          toX: args.toX,
+          toY: args.toY,
+          button: args.button,
+          durationMs: args.durationMs,
+        });
+        return {
+          data: {
+            sessionId: id,
+            display,
+            fromX: args.fromX,
+            fromY: args.fromY,
+            toX: args.toX,
+            toY: args.toY,
+            button: args.button ?? 1,
+          },
+        };
+      }),
+  );
+
+  server.registerTool(
+    "desktop_double_click",
+    {
+      title: "Desktop double click",
+      description: "Double-click at the given desktop coordinates.",
+      inputSchema: {
+        ...sessionArg,
+        x: z.number().int().nonnegative().describe("X coordinate"),
+        y: z.number().int().nonnegative().describe("Y coordinate"),
+        button: buttonArg,
+        intervalMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_DOUBLE_CLICK_INTERVAL_MS)
+          .optional()
+          .describe("Delay between the two clicks in ms (default 100)"),
+      },
+    },
+    (args) =>
+      runTool(async () => {
+        const { id, display } = await resolveDesktop(ctx, args.session);
+        await doubleClick({
+          display,
+          x: args.x,
+          y: args.y,
+          button: args.button,
+          intervalMs: args.intervalMs,
+        });
         return {
           data: {
             sessionId: id,

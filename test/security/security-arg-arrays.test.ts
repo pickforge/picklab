@@ -22,7 +22,11 @@ import {
 import { runCommand } from "../../packages/core/src/index.js";
 import {
   buildClickArgs,
+  buildDoubleClickArgs,
+  buildDragArgs,
   buildKeyArgs,
+  buildMoveArgs,
+  buildScrollArgs,
   buildTypeArgs,
 } from "../../packages/desktop-linux/src/index.js";
 import { ensureCliBuilt } from "../../packages/cli/test/build-once.js";
@@ -157,6 +161,58 @@ describe("behavioral: desktop input builders (pure argv)", () => {
       "1",
     ]);
     expect(() => buildClickArgs({ x: 1.5, y: 2 })).toThrow(/Invalid x/);
+  });
+
+  it("builds move, scroll, drag, and double-click argv from validated numbers only", () => {
+    expect(buildMoveArgs({ x: 3, y: 4 })).toEqual([
+      "mousemove",
+      "--sync",
+      "3",
+      "4",
+    ]);
+    expect(buildScrollArgs({ deltaX: 0, deltaY: -1 })).toEqual(["click", "4"]);
+    expect(
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: 100 }),
+    ).toEqual([
+      "mousemove",
+      "--sync",
+      "0",
+      "0",
+      "mousedown",
+      "1",
+      "sleep",
+      "0.05",
+      "mousemove",
+      "--sync",
+      "1",
+      "1",
+      "sleep",
+      "0.05",
+      "mouseup",
+      "1",
+    ]);
+    expect(buildDoubleClickArgs({ x: 2, y: 2, intervalMs: 50 })).toEqual([
+      "mousemove",
+      "--sync",
+      "2",
+      "2",
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "50",
+      "1",
+    ]);
+    expect(() => buildMoveArgs({ x: Number.NaN, y: 2 })).toThrow(/Invalid x/);
+    expect(() => buildScrollArgs({ deltaX: 0.5, deltaY: 0 })).toThrow(
+      /Invalid deltaX/,
+    );
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: 1.5 }),
+    ).toThrow(/Invalid durationMs/);
+    expect(() =>
+      buildDoubleClickArgs({ x: 0, y: 0, intervalMs: Number.NaN }),
+    ).toThrow(/Invalid intervalMs/);
   });
 });
 
