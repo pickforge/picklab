@@ -56,7 +56,7 @@ describe("parseDisplayNumber", () => {
 });
 
 describe("buildVncArgs", () => {
-  it("builds x11vnc args bound to loopback by default", () => {
+  it("builds x11vnc args bound to loopback, view-only, by default", () => {
     const args = buildVncArgs({ display: ":92", port: 5992 });
     expect(args).toEqual([
       "-display",
@@ -67,9 +67,21 @@ describe("buildVncArgs", () => {
       "-forever",
       "-shared",
       "-nopw",
+      "-viewonly",
       "-quiet",
     ]);
     expect(args).toContain("-localhost");
+    expect(args).toContain("-viewonly");
+  });
+
+  it("omits view-only mode for an explicit writable control session", () => {
+    const args = buildVncArgs({
+      display: ":92",
+      port: 5992,
+      viewOnly: false,
+    });
+    expect(args).toContain("-localhost");
+    expect(args).not.toContain("-viewonly");
   });
 
   it("rejects invalid ports", () => {

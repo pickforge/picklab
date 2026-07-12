@@ -10,10 +10,18 @@ then reset this file.
   strips `WAYLAND_SOCKET`), so GTK/Qt/Electron/Flutter apps always fall back
   to X11 and render inside the isolated lab display instead of opening on the
   user's real Wayland desktop (where driving them moved the real cursor).
+- Normal `--vnc` sessions now launch x11vnc with `-viewonly`, so observation is
+  server-enforced read-only. `--vnc-control` provides an explicit writable path
+  when a human must enter a password, API key, or OTP directly into the lab app;
+  it does not yet coordinate with agent input. Loopback binding (`-localhost`),
+  `-shared`, `-forever`, and no-password (`-nopw`) behavior is unchanged.
 
 ## Internal/release changes
 
-- None yet.
+- Hosted CI now installs `x11vnc` alongside the other desktop test
+  dependencies, and the desktop-linux integration suite asserts `x11vnc` is
+  present when `CI=true` so VNC tests fail loudly instead of silently
+  skipping on a misconfigured runner.
 
 ## Validation
 
@@ -22,12 +30,19 @@ then reset this file.
 - Regression test asserting launched apps get `DISPLAY=<lab display>` with
   Wayland variables unset; full desktop-linux integration suite (Xvfb +
   xdotool + xterm) passes.
+- `buildVncArgs` exact-argv test updated to require `-viewonly`; hosted-CI
+  prerequisite assertion verified to fail loudly (not skip) when `CI=true`
+  and `x11vnc` is absent, and to pass once `x11vnc` is on `PATH`.
+- `bun run typecheck`, `bun run test` (49 files, 564 passed / 2 skipped
+  locally without real `x11vnc` installed), `bun run test:coverage` (all
+  thresholds met), and `bun run build` all pass.
 
 ### Not tested yet
 
-- App build.
 - Installer or updater flow.
 - Platform smoke checks.
+- Live hosted CI run with `x11vnc` actually installed (validated locally via
+  fake binaries and a `CI=true` dry run only).
 
 ### Release blockers
 

@@ -223,6 +223,15 @@ describe.skipIf(!hasXdotool)("window listing failures", () => {
   });
 });
 
+describe("hosted CI prerequisites", () => {
+  it.skipIf(process.env.CI !== "true")(
+    "has x11vnc installed so VNC tests cannot silently skip",
+    () => {
+      expect(hasVnc).toBe(true);
+    },
+  );
+});
+
 describe("startVnc startup supervision", () => {
   const dyingBin = path.join(tmpRoot, "fake-vnc-dying");
   const listeningBin = path.join(tmpRoot, "fake-vnc-listening");
@@ -285,6 +294,28 @@ describe("startVnc startup supervision", () => {
   });
 
   it.skipIf(!hasXvfb)(
+    "creates an explicitly writable VNC control session",
+    async () => {
+      const session = await createDesktopSession({
+        projectDir,
+        registryEnv: env,
+        vncControl: true,
+        env: {
+          PATH: `${listeningBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+      try {
+        expect(session.vncViewOnly).toBe(false);
+        const record = await getSession(session.id, env);
+        expect(record?.desktop?.vncViewOnly).toBe(false);
+      } finally {
+        await destroyDesktopSession(session.id, env);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasXvfb)(
     "threads the spawn env from createDesktopSession through to vnc",
     async () => {
       const session = await createDesktopSession({
@@ -300,6 +331,9 @@ describe("startVnc startup supervision", () => {
         expect(session.vncPort).toBe(
           5900 + parseDisplayNumber(session.display),
         );
+        expect(session.vncViewOnly).toBe(true);
+        const record = await getSession(session.id, env);
+        expect(record?.desktop?.vncViewOnly).toBe(true);
         expect(isPidAlive(session.vncPid as number)).toBe(true);
       } finally {
         await destroyDesktopSession(session.id, env);

@@ -26,6 +26,7 @@ export interface SessionCreateOptions extends BaseCliOptions {
   width?: string;
   height?: string;
   vnc?: boolean;
+  vncControl?: boolean;
   avdName?: string;
 }
 
@@ -46,6 +47,7 @@ async function createDesktopLeg(
         ? undefined
         : parseIntArg(opts.height, "--height"),
     vnc: opts.vnc,
+    vncControl: opts.vncControl,
   });
   const summary: SessionSummary = {
     id: handle.id,
@@ -55,6 +57,7 @@ async function createDesktopLeg(
   };
   if (handle.vncPort !== undefined) {
     summary.vncPort = handle.vncPort;
+    summary.vncViewOnly = handle.vncViewOnly;
   }
   return summary;
 }

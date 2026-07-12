@@ -161,7 +161,11 @@ export function buildProgram(): Command {
         )
         .option("--width <pixels>", "desktop display width")
         .option("--height <pixels>", "desktop display height")
-        .option("--vnc", "expose the desktop display over VNC")
+        .option("--vnc", "expose the desktop display over read-only VNC")
+        .option(
+          "--vnc-control",
+          "expose writable VNC for explicit manual secret entry (not coordinated)",
+        )
         .option("--avd-name <name>", "Android AVD name"),
     ),
   ).action(async (opts) => {

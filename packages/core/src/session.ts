@@ -12,6 +12,7 @@ export interface DesktopSessionInfo {
   xvfbPid?: number;
   vncPid?: number;
   vncPort?: number;
+  vncViewOnly?: boolean;
 }
 
 export interface AndroidSessionInfo {
