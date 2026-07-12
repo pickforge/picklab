@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -273,6 +273,68 @@ describe("session registry", () => {
         await stopPid(vncPid, { timeoutMs: 1000 });
         await waitForExit(helper);
       }
+    }
+  });
+
+  it("keeps an errored record when stopping a helper throws", async () => {
+    const helperPid = 4_194_304;
+    const stale = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":90", xvfbPid: helperPid },
+      },
+      env,
+    );
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation(((_pid: number, signal?: string | number) => {
+        if (signal === 0) return true;
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      }) as typeof process.kill);
+    try {
+      const reaped = await reapDeadRunningSessions(env, () => false);
+
+      expect(reaped).toEqual([]);
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("keeps an errored record when a helper refuses to stop", async () => {
+    const helperPid = 4_194_304;
+    const stale = await createSession(
+      {
+        type: "desktop",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":90", xvfbPid: helperPid },
+      },
+      env,
+    );
+    let resolveTerm!: () => void;
+    const termSignaled = new Promise<void>((resolve) => {
+      resolveTerm = resolve;
+    });
+    const kill = vi.spyOn(process, "kill").mockImplementation((() => {
+      resolveTerm();
+      return true;
+    }) as typeof process.kill);
+    vi.useFakeTimers();
+    try {
+      const pending = reapDeadRunningSessions(env, () => false);
+      await termSignaled;
+      await vi.advanceTimersByTimeAsync(6_100);
+      const reaped = await pending;
+
+      expect(reaped).toEqual([]);
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+      expect(kill).toHaveBeenCalledWith(helperPid, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+      kill.mockRestore();
     }
   });
 

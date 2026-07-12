@@ -283,17 +283,20 @@ async function stopRecordedPids(record: SessionRecord): Promise<boolean> {
       record.android?.emulatorPid,
     ].filter((pid): pid is number => pid !== undefined),
   );
+  let stopped = true;
   for (const pid of pids) {
     if (!isPidAlive(pid)) {
       continue;
     }
     try {
-      await stopPid(pid);
+      if (!(await stopPid(pid))) {
+        stopped = false;
+      }
     } catch {
-      continue;
+      stopped = false;
     }
   }
-  return true;
+  return stopped;
 }
 
 export async function updateSession(

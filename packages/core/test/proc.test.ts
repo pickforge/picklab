@@ -213,6 +213,19 @@ describe("daemon supervision", () => {
 });
 
 describe("process identity and group termination", () => {
+  function procStat(
+    pid: number,
+    state: string,
+    pgrp: number,
+    startTicks: number,
+  ): string {
+    const fields = Array.from({ length: 20 }, () => "0");
+    fields[0] = state;
+    fields[2] = String(pgrp);
+    fields[19] = String(startTicks);
+    return `${pid} (browser) ${fields.join(" ")}`;
+  }
+
   it("reads a live identity and returns undefined for a dead pid", async () => {
     const self = readProcessIdentity(process.pid);
     expect(self?.pid).toBe(process.pid);
@@ -279,6 +292,83 @@ describe("process identity and group termination", () => {
     );
     expect(result).toEqual({ outcome: "reused", signaled: false });
     expect(isPidAlive(process.pid)).toBe(true);
+  });
+
+  it("refuses to signal a matching pid that is not the group leader", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(procStat(pid, "S", pid + 1, startTicks));
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: false });
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("does not report termination while the recorded identity is still live", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(procStat(pid, "S", pid, startTicks));
+    const entries = vi.spyOn(fs, "readdirSync").mockReturnValue([]);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    vi.useFakeTimers();
+    try {
+      const pending = stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 100 },
+      );
+      await vi.advanceTimersByTimeAsync(1_200);
+
+      await expect(pending).resolves.toEqual({
+        outcome: "survived",
+        signaled: true,
+      });
+      expect(kill.mock.calls).toEqual([
+        [-pid, "SIGTERM"],
+        [-pid, "SIGKILL"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("refuses SIGKILL when the leader pid is reused after SIGTERM", async () => {
+    const pid = 1_234_567;
+    const startTicks = 456;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValueOnce(procStat(pid, "S", pid, startTicks))
+      .mockReturnValue(procStat(pid, "S", pid, startTicks + 1));
+    const entries = vi.spyOn(fs, "readdirSync").mockReturnValue([]);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 0 },
+      );
+
+      expect(result).toEqual({ outcome: "reused", signaled: true });
+      expect(kill.mock.calls).toEqual([[-pid, "SIGTERM"]]);
+    } finally {
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
   });
 
   it("reports an already-dead leader without signaling", async () => {

@@ -433,12 +433,13 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 
 /**
  * Terminate a whole process group, identified by its group-leader identity,
- * with SIGTERM then SIGKILL escalation. The leader identity is re-verified
- * immediately before every signal, so a reused PID is never killed: if the
- * PID no longer matches, the group is treated as gone rather than signaled.
+ * with SIGTERM then SIGKILL escalation. Before the first signal, the recorded
+ * process must still be live, match its start identity, and lead the recorded
+ * group. Before escalation, a reused PID leading that group is rejected so an
+ * unrelated group is never killed.
  *
- * Assumes the leader was spawned as a process-group leader (e.g. `spawn` with
- * `detached: true`), so its PID doubles as the group id.
+ * The leader must have been spawned as a process-group leader (e.g. `spawn`
+ * with `detached: true`), so its PID doubles as the group id.
  */
 export async function stopProcessGroupVerified(
   identity: ProcessIdentity,
@@ -446,7 +447,7 @@ export async function stopProcessGroupVerified(
 ): Promise<StopProcessGroupResult> {
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const leader = readProcStat(identity.pid);
-  if (leader === undefined) {
+  if (leader === undefined || leader.state === "Z") {
     return {
       outcome:
         listProcessGroupMembers(identity.pid).length === 0
@@ -455,14 +456,20 @@ export async function stopProcessGroupVerified(
       signaled: false,
     };
   }
-  if (leader.startTicks !== identity.startTicks) {
+  if (
+    leader.startTicks !== identity.startTicks ||
+    leader.pgrp !== identity.pid
+  ) {
     return { outcome: "reused", signaled: false };
   }
 
   signalGroup(identity.pid, "SIGTERM");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (listProcessGroupMembers(identity.pid).length === 0) {
+    if (
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
+    ) {
       return { outcome: "terminated", signaled: true };
     }
     await sleep(POLL_INTERVAL_MS);
@@ -479,14 +486,18 @@ export async function stopProcessGroupVerified(
   signalGroup(identity.pid, "SIGKILL");
   const killDeadline = Date.now() + 1_000;
   while (Date.now() < killDeadline) {
-    if (listProcessGroupMembers(identity.pid).length === 0) {
+    if (
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
+    ) {
       return { outcome: "terminated", signaled: true };
     }
     await sleep(POLL_INTERVAL_MS);
   }
   return {
     outcome:
-      listProcessGroupMembers(identity.pid).length === 0
+      listProcessGroupMembers(identity.pid).length === 0 &&
+      !processIdentityMatches(identity)
         ? "terminated"
         : "survived",
     signaled: true,
