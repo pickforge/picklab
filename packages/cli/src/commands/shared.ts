@@ -39,6 +39,13 @@ export function parseIntArg(value: string, label: string): number {
   return Number(value);
 }
 
+export function parseSignedIntArg(value: string, label: string): number {
+  if (!/^-?\d+$/.test(value)) {
+    throw new Error(`Invalid ${label} "${value}": expected an integer`);
+  }
+  return Number(value);
+}
+
 export async function runReported(
   opts: { json?: boolean },
   fn: () => Promise<CommandResult>,

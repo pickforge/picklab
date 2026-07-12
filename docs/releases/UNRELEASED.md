@@ -15,6 +15,16 @@ then reset this file.
   when a human must enter a password, API key, or OTP directly into the lab app;
   it does not yet coordinate with agent input. Loopback binding (`-localhost`),
   `-shared`, `-forever`, and no-password (`-nopw`) behavior is unchanged.
+- New desktop input primitives on both the CLI and the MCP server
+  (pickforge/picklab#22): mouse move/hover (`desktop move <x> <y>` /
+  `desktop_move`), wheel scroll (`desktop scroll <deltaX> <deltaY>` /
+  `desktop_scroll`, integer wheel steps, positive Y down / negative Y up,
+  positive X right / negative X left, optional pointer position first),
+  drag (`desktop drag <fromX> <fromY> <toX> <toY>` / `desktop_drag` with
+  optional button and duration), and double click
+  (`desktop double-click <x> <y>` / `desktop_double_click` with optional
+  button and click interval). All are argv-array xdotool calls with
+  validated coordinates, buttons, deltas, and timings — no shell.
 
 ## Internal/release changes
 
@@ -36,6 +46,11 @@ then reset this file.
 - `bun run typecheck`, `bun run test` (49 files, 564 passed / 2 skipped
   locally without real `x11vnc` installed), `bun run test:coverage` (all
   thresholds met), and `bun run build` all pass.
+- Exact xdotool argv unit tests for move, scroll (direction/ordering/repeat),
+  drag (button/duration), and double click (button/interval); CLI and MCP
+  validation tests for out-of-range buttons, deltas, durations, and
+  intervals; live Xvfb smoke driving move, scroll, drag, and double-click and
+  asserting the pointer position via `xdotool getmouselocation`.
 
 ### Not tested yet
 

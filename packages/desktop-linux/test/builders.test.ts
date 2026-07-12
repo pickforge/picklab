@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { buildXvfbArgs, parseDisplayNumber } from "../src/display.js";
 import { buildVncArgs } from "../src/vnc.js";
 import { buildScreenshotCommand } from "../src/screenshot.js";
-import { buildClickArgs, buildKeyArgs, buildTypeArgs } from "../src/input.js";
+import {
+  buildClickArgs,
+  buildDoubleClickArgs,
+  buildDragArgs,
+  buildKeyArgs,
+  buildMoveArgs,
+  buildScrollArgs,
+  buildTypeArgs,
+} from "../src/input.js";
 
 const INJECTION_STRINGS = ["; rm -rf /", "$(reboot)", "`reboot`", "a && b | c"];
 
@@ -185,6 +193,277 @@ describe("buildClickArgs", () => {
     expect(() => buildClickArgs({ x: 0, y: 0, button: 10 })).toThrow(
       /button/i,
     );
+  });
+});
+
+describe("buildMoveArgs", () => {
+  it("builds a synced mousemove", () => {
+    expect(buildMoveArgs({ x: 15, y: 25 })).toEqual([
+      "mousemove",
+      "--sync",
+      "15",
+      "25",
+    ]);
+    expect(buildMoveArgs({ x: 0, y: 0 })).toEqual([
+      "mousemove",
+      "--sync",
+      "0",
+      "0",
+    ]);
+  });
+
+  it("rejects invalid coordinates", () => {
+    expect(() => buildMoveArgs({ x: -1, y: 0 })).toThrow(/x/i);
+    expect(() => buildMoveArgs({ x: 0, y: 1.5 })).toThrow(/y/i);
+    expect(() => buildMoveArgs({ x: Number.NaN, y: 0 })).toThrow(/x/i);
+  });
+});
+
+describe("buildScrollArgs", () => {
+  it("scrolls down with button 5, one step per delta", () => {
+    expect(buildScrollArgs({ deltaX: 0, deltaY: 1 })).toEqual(["click", "5"]);
+    expect(buildScrollArgs({ deltaX: 0, deltaY: 3 })).toEqual([
+      "click",
+      "--repeat",
+      "3",
+      "--delay",
+      "25",
+      "5",
+    ]);
+  });
+
+  it("scrolls up with button 4", () => {
+    expect(buildScrollArgs({ deltaX: 0, deltaY: -1 })).toEqual(["click", "4"]);
+    expect(buildScrollArgs({ deltaX: 0, deltaY: -2 })).toEqual([
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "25",
+      "4",
+    ]);
+  });
+
+  it("scrolls right with button 7 and left with button 6", () => {
+    expect(buildScrollArgs({ deltaX: 1, deltaY: 0 })).toEqual(["click", "7"]);
+    expect(buildScrollArgs({ deltaX: -1, deltaY: 0 })).toEqual(["click", "6"]);
+  });
+
+  it("orders horizontal before vertical when both are set", () => {
+    expect(buildScrollArgs({ deltaX: 2, deltaY: -3 })).toEqual([
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "25",
+      "7",
+      "click",
+      "--repeat",
+      "3",
+      "--delay",
+      "25",
+      "4",
+    ]);
+  });
+
+  it("moves to the position first when x and y are given", () => {
+    expect(buildScrollArgs({ deltaX: 0, deltaY: 1, x: 40, y: 50 })).toEqual([
+      "mousemove",
+      "--sync",
+      "40",
+      "50",
+      "click",
+      "5",
+    ]);
+  });
+
+  it("rejects zero deltas, half positions, and out-of-range steps", () => {
+    expect(() => buildScrollArgs({ deltaX: 0, deltaY: 0 })).toThrow(
+      /non-zero/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: 0, deltaY: 1, x: 10 })).toThrow(
+      /both x and y/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: 0, deltaY: 1, y: 10 })).toThrow(
+      /both x and y/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: 0, deltaY: 1.5 })).toThrow(
+      /deltaY/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: 0.5, deltaY: 0 })).toThrow(
+      /deltaX/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: 0, deltaY: 101 })).toThrow(
+      /deltaY/i,
+    );
+    expect(() => buildScrollArgs({ deltaX: -101, deltaY: 0 })).toThrow(
+      /deltaX/i,
+    );
+    expect(() =>
+      buildScrollArgs({ deltaX: 0, deltaY: 1, x: -1, y: 0 }),
+    ).toThrow(/x/i);
+  });
+});
+
+describe("buildDragArgs", () => {
+  it("builds press, timed move, and release with defaults", () => {
+    expect(
+      buildDragArgs({ fromX: 10, fromY: 20, toX: 110, toY: 120 }),
+    ).toEqual([
+      "mousemove",
+      "--sync",
+      "10",
+      "20",
+      "mousedown",
+      "1",
+      "sleep",
+      "0.15",
+      "mousemove",
+      "--sync",
+      "110",
+      "120",
+      "sleep",
+      "0.15",
+      "mouseup",
+      "1",
+    ]);
+  });
+
+  it("threads button and duration through", () => {
+    expect(
+      buildDragArgs({
+        fromX: 0,
+        fromY: 0,
+        toX: 5,
+        toY: 5,
+        button: 3,
+        durationMs: 1000,
+      }),
+    ).toEqual([
+      "mousemove",
+      "--sync",
+      "0",
+      "0",
+      "mousedown",
+      "3",
+      "sleep",
+      "0.5",
+      "mousemove",
+      "--sync",
+      "5",
+      "5",
+      "sleep",
+      "0.5",
+      "mouseup",
+      "3",
+    ]);
+  });
+
+  it("supports an instant drag with durationMs 0", () => {
+    expect(
+      buildDragArgs({ fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 0 }),
+    ).toEqual([
+      "mousemove",
+      "--sync",
+      "1",
+      "2",
+      "mousedown",
+      "1",
+      "sleep",
+      "0",
+      "mousemove",
+      "--sync",
+      "3",
+      "4",
+      "sleep",
+      "0",
+      "mouseup",
+      "1",
+    ]);
+  });
+
+  it("rejects invalid coordinates, buttons, and durations", () => {
+    expect(() =>
+      buildDragArgs({ fromX: -1, fromY: 0, toX: 1, toY: 1 }),
+    ).toThrow(/fromX/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 1.5, toX: 1, toY: 1 }),
+    ).toThrow(/fromY/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: -2, toY: 1 }),
+    ).toThrow(/toX/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: Number.NaN }),
+    ).toThrow(/toY/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, button: 0 }),
+    ).toThrow(/button/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, button: 10 }),
+    ).toThrow(/button/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: -1 }),
+    ).toThrow(/durationMs/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: 10_001 }),
+    ).toThrow(/durationMs/i);
+    expect(() =>
+      buildDragArgs({ fromX: 0, fromY: 0, toX: 1, toY: 1, durationMs: 50.5 }),
+    ).toThrow(/durationMs/i);
+  });
+});
+
+describe("buildDoubleClickArgs", () => {
+  it("builds a repeated click with the default interval", () => {
+    expect(buildDoubleClickArgs({ x: 30, y: 40 })).toEqual([
+      "mousemove",
+      "--sync",
+      "30",
+      "40",
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "100",
+      "1",
+    ]);
+  });
+
+  it("threads button and interval through", () => {
+    expect(
+      buildDoubleClickArgs({ x: 0, y: 0, button: 2, intervalMs: 250 }),
+    ).toEqual([
+      "mousemove",
+      "--sync",
+      "0",
+      "0",
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "250",
+      "2",
+    ]);
+  });
+
+  it("rejects invalid coordinates, buttons, and intervals", () => {
+    expect(() => buildDoubleClickArgs({ x: -1, y: 0 })).toThrow(/x/i);
+    expect(() => buildDoubleClickArgs({ x: 0, y: 2.5 })).toThrow(/y/i);
+    expect(() => buildDoubleClickArgs({ x: 0, y: 0, button: 0 })).toThrow(
+      /button/i,
+    );
+    expect(() => buildDoubleClickArgs({ x: 0, y: 0, button: 10 })).toThrow(
+      /button/i,
+    );
+    expect(() =>
+      buildDoubleClickArgs({ x: 0, y: 0, intervalMs: -1 }),
+    ).toThrow(/intervalMs/i);
+    expect(() =>
+      buildDoubleClickArgs({ x: 0, y: 0, intervalMs: 2_001 }),
+    ).toThrow(/intervalMs/i);
+    expect(() =>
+      buildDoubleClickArgs({ x: 0, y: 0, intervalMs: 10.5 }),
+    ).toThrow(/intervalMs/i);
   });
 });
 

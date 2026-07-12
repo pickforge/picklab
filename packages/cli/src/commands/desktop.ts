@@ -1,15 +1,23 @@
 import {
   click,
   desktopSessionLogDir,
+  doubleClick,
+  drag,
   launchApp,
+  MAX_DOUBLE_CLICK_INTERVAL_MS,
+  MAX_DRAG_DURATION_MS,
+  MAX_SCROLL_STEPS,
+  move,
   pressKey,
   screenshot,
+  scroll,
   typeText,
   waitForWindow,
 } from "@pickforge/picklab-desktop-linux";
 import {
   captureToTarget,
   parseIntArg,
+  parseSignedIntArg,
   requireDisplay,
   resolveScreenshotTarget,
   resolveSessionRecord,
@@ -93,6 +101,46 @@ export async function runDesktopScreenshot(
   });
 }
 
+function parseButtonOption(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const button = parseIntArg(value, "--button");
+  if (button < 1 || button > 9) {
+    throw new Error(
+      `Invalid --button "${value}": expected an integer between 1 and 9`,
+    );
+  }
+  return button;
+}
+
+function parseBoundedMsOption(
+  value: string | undefined,
+  label: string,
+  max: number,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const ms = parseIntArg(value, label);
+  if (ms > max) {
+    throw new Error(
+      `Invalid ${label} "${value}": expected an integer between 0 and ${max}`,
+    );
+  }
+  return ms;
+}
+
+function parseDeltaArg(value: string, label: string): number {
+  const delta = parseSignedIntArg(value, label);
+  if (Math.abs(delta) > MAX_SCROLL_STEPS) {
+    throw new Error(
+      `Invalid ${label} "${value}": expected at most ${MAX_SCROLL_STEPS} wheel steps per call`,
+    );
+  }
+  return delta;
+}
+
 export interface DesktopClickOptions extends DesktopCommandOptions {
   button?: string;
 }
@@ -105,20 +153,170 @@ export async function runDesktopClick(
   return runReported(opts, async () => {
     const parsedX = parseIntArg(x, "x");
     const parsedY = parseIntArg(y, "y");
-    const button =
-      opts.button === undefined
-        ? undefined
-        : parseIntArg(opts.button, "--button");
-    if (button !== undefined && (button < 1 || button > 9)) {
-      throw new Error(
-        `Invalid --button "${opts.button}": expected an integer between 1 and 9`,
-      );
-    }
+    const button = parseButtonOption(opts.button);
     const { id, display } = await resolveDesktop(opts);
     await click({ display, x: parsedX, y: parsedY, button });
     return {
       data: { sessionId: id, display, x: parsedX, y: parsedY, button: button ?? 1 },
       lines: [`clicked (${parsedX}, ${parsedY}) on ${display}`],
+    };
+  });
+}
+
+export async function runDesktopMove(
+  x: string,
+  y: string,
+  opts: DesktopCommandOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const parsedX = parseIntArg(x, "x");
+    const parsedY = parseIntArg(y, "y");
+    const { id, display } = await resolveDesktop(opts);
+    await move({ display, x: parsedX, y: parsedY });
+    return {
+      data: { sessionId: id, display, x: parsedX, y: parsedY },
+      lines: [`moved pointer to (${parsedX}, ${parsedY}) on ${display}`],
+    };
+  });
+}
+
+export interface DesktopScrollOptions extends DesktopCommandOptions {
+  at?: string;
+}
+
+export async function runDesktopScroll(
+  deltaX: string,
+  deltaY: string,
+  opts: DesktopScrollOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const parsedDeltaX = parseDeltaArg(deltaX, "deltaX");
+    const parsedDeltaY = parseDeltaArg(deltaY, "deltaY");
+    if (parsedDeltaX === 0 && parsedDeltaY === 0) {
+      throw new Error(
+        "Invalid scroll deltas: expected a non-zero deltaX and/or deltaY",
+      );
+    }
+    let x: number | undefined;
+    let y: number | undefined;
+    if (opts.at !== undefined) {
+      const match = /^(\d+),(\d+)$/.exec(opts.at);
+      if (match === null) {
+        throw new Error(
+          `Invalid --at "${opts.at}": expected "<x>,<y>" with non-negative integers`,
+        );
+      }
+      x = Number(match[1]);
+      y = Number(match[2]);
+    }
+    const { id, display } = await resolveDesktop(opts);
+    await scroll({ display, deltaX: parsedDeltaX, deltaY: parsedDeltaY, x, y });
+    const data: Record<string, unknown> = {
+      sessionId: id,
+      display,
+      deltaX: parsedDeltaX,
+      deltaY: parsedDeltaY,
+    };
+    if (x !== undefined && y !== undefined) {
+      data.x = x;
+      data.y = y;
+    }
+    return {
+      data,
+      lines: [
+        `scrolled (deltaX ${parsedDeltaX}, deltaY ${parsedDeltaY}) on ${display}`,
+      ],
+    };
+  });
+}
+
+export interface DesktopDragOptions extends DesktopCommandOptions {
+  button?: string;
+  duration?: string;
+}
+
+export async function runDesktopDrag(
+  fromX: string,
+  fromY: string,
+  toX: string,
+  toY: string,
+  opts: DesktopDragOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const parsedFromX = parseIntArg(fromX, "fromX");
+    const parsedFromY = parseIntArg(fromY, "fromY");
+    const parsedToX = parseIntArg(toX, "toX");
+    const parsedToY = parseIntArg(toY, "toY");
+    const button = parseButtonOption(opts.button);
+    const durationMs = parseBoundedMsOption(
+      opts.duration,
+      "--duration",
+      MAX_DRAG_DURATION_MS,
+    );
+    const { id, display } = await resolveDesktop(opts);
+    await drag({
+      display,
+      fromX: parsedFromX,
+      fromY: parsedFromY,
+      toX: parsedToX,
+      toY: parsedToY,
+      button,
+      durationMs,
+    });
+    return {
+      data: {
+        sessionId: id,
+        display,
+        fromX: parsedFromX,
+        fromY: parsedFromY,
+        toX: parsedToX,
+        toY: parsedToY,
+        button: button ?? 1,
+      },
+      lines: [
+        `dragged (${parsedFromX}, ${parsedFromY}) -> ` +
+          `(${parsedToX}, ${parsedToY}) on ${display}`,
+      ],
+    };
+  });
+}
+
+export interface DesktopDoubleClickOptions extends DesktopCommandOptions {
+  button?: string;
+  interval?: string;
+}
+
+export async function runDesktopDoubleClick(
+  x: string,
+  y: string,
+  opts: DesktopDoubleClickOptions,
+): Promise<number> {
+  return runReported(opts, async () => {
+    const parsedX = parseIntArg(x, "x");
+    const parsedY = parseIntArg(y, "y");
+    const button = parseButtonOption(opts.button);
+    const intervalMs = parseBoundedMsOption(
+      opts.interval,
+      "--interval",
+      MAX_DOUBLE_CLICK_INTERVAL_MS,
+    );
+    const { id, display } = await resolveDesktop(opts);
+    await doubleClick({
+      display,
+      x: parsedX,
+      y: parsedY,
+      button,
+      intervalMs,
+    });
+    return {
+      data: {
+        sessionId: id,
+        display,
+        x: parsedX,
+        y: parsedY,
+        button: button ?? 1,
+      },
+      lines: [`double-clicked (${parsedX}, ${parsedY}) on ${display}`],
     };
   });
 }

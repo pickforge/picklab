@@ -105,7 +105,7 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 | --- | --- |
 | Setup | `doctor`, `init`, `setup lab-user`, `setup android` |
 | Sessions | `session create`, `session status [id]`, `session destroy <id\|--all>` |
-| Desktop | `desktop launch <cmd>`, `desktop screenshot`, `desktop click <x> <y>`, `desktop type <text>`, `desktop key <keys>` |
+| Desktop | `desktop launch <cmd>`, `desktop screenshot`, `desktop click <x> <y>`, `desktop move <x> <y>`, `desktop scroll <deltaX> <deltaY>`, `desktop drag <fromX> <fromY> <toX> <toY>`, `desktop double-click <x> <y>`, `desktop type <text>`, `desktop key <keys>` |
 | Android | `android start`, `android install-apk <apk>`, `android launch-app <pkg>`, `android screenshot`, `android tap <x> <y>`, `android type <text>`, `android back`, `android home`, `android ui-tree`, `android logcat`, `android adb [args...]` |
 | Artifacts | `artifacts list`, `artifacts open <runId>`, `artifacts report [runId]` |
 | Agents | `agents list`, `agents install <agent>`, `agents link <agent>`, `agents unlink <agent>`, `agents doctor`, `agents add` |
@@ -115,12 +115,14 @@ Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedica
 
 `session create --vnc` is read-only. When a human must enter a password, API key, or OTP directly into the lab app, `--vnc-control` creates an explicitly writable VNC session instead. Pause agent input while using it; coordinated human takeover is tracked separately.
 
+Scroll deltas are integer wheel steps: positive `deltaY` scrolls down, negative up; positive `deltaX` scrolls right, negative left (put negative values after `--`, e.g. `picklab desktop scroll -- 0 -3`). `desktop scroll` accepts `--at <x,y>` to position the pointer first; `desktop drag` accepts `--button` and `--duration <ms>`; `desktop double-click` accepts `--button` and `--interval <ms>`.
+
 ## MCP surface
 
-`picklab mcp serve` exposes 22 tools over stdio:
+`picklab mcp serve` exposes 26 tools over stdio:
 
 - Sessions: `session_create`, `session_status`, `session_destroy`
-- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_type`, `desktop_key`
+- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_move`, `desktop_scroll`, `desktop_drag`, `desktop_double_click`, `desktop_type`, `desktop_key`
 - Android: `android_start`, `android_install_apk`, `android_launch_app`, `android_screenshot`, `android_tap`, `android_type`, `android_back`, `android_home`, `android_get_ui_tree`, `android_logcat`, `android_run_adb`
 - Artifacts: `artifact_list`, `artifact_report`
 - User: `request_user_input` — ask the human a question (via MCP elicitation when the client supports it) and wait for the answer; never used for secrets

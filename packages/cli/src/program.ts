@@ -27,9 +27,13 @@ import {
 } from "./commands/agents.js";
 import {
   runDesktopClick,
+  runDesktopDoubleClick,
+  runDesktopDrag,
   runDesktopKey,
   runDesktopLaunch,
+  runDesktopMove,
   runDesktopScreenshot,
+  runDesktopScroll,
   runDesktopType,
 } from "./commands/desktop.js";
 import { runDoctor } from "./commands/doctor.js";
@@ -235,6 +239,64 @@ export function buildProgram(): Command {
     ),
   ).action(async (x, y, opts) => {
     process.exitCode = await runDesktopClick(x, y, opts);
+  });
+
+  withJson(
+    withDesktopSession(
+      desktop
+        .command("move")
+        .description("Move the pointer to the given coordinates (hover)")
+        .argument("<x>", "x coordinate")
+        .argument("<y>", "y coordinate"),
+    ),
+  ).action(async (x, y, opts) => {
+    process.exitCode = await runDesktopMove(x, y, opts);
+  });
+
+  withJson(
+    withDesktopSession(
+      desktop
+        .command("scroll")
+        .description(
+          "Scroll by wheel steps (positive deltaY: down, negative: up; " +
+            "positive deltaX: right; use -- before negative values)",
+        )
+        .argument("<deltaX>", "horizontal wheel steps (positive: right)")
+        .argument("<deltaY>", "vertical wheel steps (positive: down)")
+        .option("--at <x,y>", "move the pointer there before scrolling"),
+    ),
+  ).action(async (deltaX, deltaY, opts) => {
+    process.exitCode = await runDesktopScroll(deltaX, deltaY, opts);
+  });
+
+  withJson(
+    withDesktopSession(
+      desktop
+        .command("drag")
+        .description("Press, move, and release the mouse between two points")
+        .argument("<fromX>", "start x coordinate")
+        .argument("<fromY>", "start y coordinate")
+        .argument("<toX>", "end x coordinate")
+        .argument("<toY>", "end y coordinate")
+        .option("--button <n>", "mouse button (1-9, default 1)")
+        .option("--duration <ms>", "total drag duration in ms (default 300)"),
+    ),
+  ).action(async (fromX, fromY, toX, toY, opts) => {
+    process.exitCode = await runDesktopDrag(fromX, fromY, toX, toY, opts);
+  });
+
+  withJson(
+    withDesktopSession(
+      desktop
+        .command("double-click")
+        .description("Double-click at the given coordinates")
+        .argument("<x>", "x coordinate")
+        .argument("<y>", "y coordinate")
+        .option("--button <n>", "mouse button (1-9, default 1)")
+        .option("--interval <ms>", "delay between the clicks in ms (default 100)"),
+    ),
+  ).action(async (x, y, opts) => {
+    process.exitCode = await runDesktopDoubleClick(x, y, opts);
   });
 
   withJson(

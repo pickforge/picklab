@@ -55,7 +55,7 @@ export function registerPrompts(server: McpServer): void {
               : ` Use waitWindow \`${windowTitle}\` so the launch blocks until the UI is up.`
           }`,
           "4. Capture the screen with `desktop_screenshot` and inspect the returned image. Check that the UI matches what the code should render: layout, labels, colors, missing assets.",
-          "5. Drive the app like a user: `desktop_click` at widget coordinates, `desktop_type` to fill fields, and `desktop_key` for keys/chords (Return, Tab, ctrl+s). Take a screenshot after each meaningful interaction to confirm the result.",
+          "5. Drive the app like a user: `desktop_click`/`desktop_double_click` at widget coordinates, `desktop_move` to hover, `desktop_scroll` for wheel scrolling (positive deltaY scrolls down), `desktop_drag` to drag between points, `desktop_type` to fill fields, and `desktop_key` for keys/chords (Return, Tab, ctrl+s). Take a screenshot after each meaningful interaction to confirm the result.",
           "6. If something looks wrong, fix the code, rebuild, relaunch inside the same session, and re-verify with new screenshots.",
           "7. When finished, destroy the session with `session_destroy` and summarize what you verified. Use `artifact_report` to reference the captured screenshots.",
           "",
@@ -132,7 +132,7 @@ export function registerPrompts(server: McpServer): void {
           `3. Launch the app with \`desktop_launch\`${
             appCommand === undefined ? "" : ` using command \`${appCommand}\``
           } and wait for its window.`,
-          "4. For each baseline screen: navigate to the same state (`desktop_click`, `desktop_type`, `desktop_key`), then capture it with `desktop_screenshot` using a runSlug matching the baseline name.",
+          "4. For each baseline screen: navigate to the same state (`desktop_click`, `desktop_scroll`, `desktop_type`, `desktop_key`), then capture it with `desktop_screenshot` using a runSlug matching the baseline name.",
           "5. Compare each captured screenshot with its baseline. Prefer a pixel diff (e.g. ImageMagick `compare -metric AE`) when available; otherwise inspect both images and describe differences in layout, text, color, and spacing.",
           "6. Collect the verdict per screen: unchanged, intentionally changed, or regression. For regressions, include the run id and the differing region.",
           "7. Destroy the session with `session_destroy`, then report results with `artifact_report` so every captured screenshot is referenced.",
