@@ -46,20 +46,31 @@ export async function probeDevToolsHttp(
   timeoutMs = 500,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const controller = new AbortController();
+  const abortFromCaller = (): void => controller.abort(signal?.reason);
+  let listeningForCaller = false;
+  if (signal?.aborted === true) {
+    abortFromCaller();
+  } else if (signal !== undefined) {
+    signal.addEventListener("abort", abortFromCaller, { once: true });
+    listeningForCaller = true;
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref();
   try {
-    const timeoutSignal = AbortSignal.timeout(timeoutMs);
-    const probeSignal =
-      signal === undefined
-        ? timeoutSignal
-        : AbortSignal.any([signal, timeoutSignal]);
     const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
-      signal: probeSignal,
+      signal: controller.signal,
       redirect: "manual",
     });
     await response.body?.cancel();
     return response.status === 200;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
+    if (listeningForCaller) {
+      signal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 }
 
