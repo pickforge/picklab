@@ -43,6 +43,16 @@ then reset this file.
   before stopping VNC/Xvfb helpers or deleting the session record. Reused or
   otherwise unconfirmed groups leave dependent helpers and profile data intact
   and mark the record as errored for inspection.
+- `startXvfb` gained an additive `displayStart` option so browser sessions use
+  displays from `:200` without contending with desktop sessions from `:90`.
+- Added internal `@pickforge/picklab-browser`, owning Chrome/Chromium detection,
+  a private Xvfb, ephemeral profile, dynamic loopback CDP discovery, scrubbed
+  environment, PID-identity process-group teardown, status, cleanup, and
+  concurrent-session safety. The DevTools websocket path/GUID is never persisted.
+  No CLI or MCP browser-creation surface is included in this slice.
+- CI installs a supported browser and requires the real headed-Chrome integration
+  suite to execute rather than silently skip.
+- SECURITY.md documents the residual same-UID and local-process risks.
 
 ## Validation
 
@@ -67,14 +77,25 @@ then reset this file.
 - `bun run test packages/core` (8 files, 107 passed) and
   `bun run typecheck` pass. Core session regressions verify browser-group-first
   teardown and fail-closed handling for an unconfirmed browser identity.
+- `bun run typecheck`
+- Focused core/browser tests: 140 passed.
+- Full suite: 55 files, 622 passed / 1 skipped.
+- `bun run test:coverage` with all thresholds met.
+- `bun run build` for all packages.
+- Fake-Chrome lifecycle tests cover create/status/destroy, concurrent displays,
+  ports and profiles, crash/stall cleanup, GUID exclusion, and environment
+  scrubbing.
+- Real headed Chrome under Xvfb covers loopback CDP, secret-free process
+  environment, process-group teardown, and profile cleanup.
 
 ### Not tested yet
 
 - Installer or updater flow.
-- Platform smoke checks.
+- Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
+- CLI/MCP `session create --type browser` and `desktop_*` browser wiring.
 
 ### Release blockers
 
-- None known.
+- None known for this internal lifecycle slice.

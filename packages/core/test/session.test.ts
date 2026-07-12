@@ -437,6 +437,83 @@ describe("session registry", () => {
     }
   });
 
+  it("deletes the ephemeral profile under the session dir when reaping", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":122", xvfbPid: 4_194_308 },
+        browser: {
+          browserPid: 4_194_309,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
+          cdpPort: 1,
+        },
+      },
+      env,
+    );
+    // Point the profile at the real per-session directory and plant data in it.
+    const profileDir = path.join(home, "sessions", stale.id, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await fs.promises.writeFile(path.join(profileDir, "Cookies"), "secret");
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          browserPid: 4_194_309,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir,
+          cdpPort: 1,
+        },
+      },
+      env,
+    );
+
+    const reaped = await reapDeadRunningSessions(env);
+
+    expect(reaped.map((record) => record.id)).toEqual([stale.id]);
+    expect(await getSession(stale.id, env)).toBeUndefined();
+    expect(fs.existsSync(profileDir)).toBe(false);
+  });
+
+  it("does not delete a profile that escapes the session dir when reaping", async () => {
+    const outside = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-outside-"),
+    );
+    try {
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          desktop: { display: ":123", xvfbPid: 4_194_310 },
+          browser: {
+            browserPid: 4_194_311,
+            browserStartTimeTicks: 1,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir: outside,
+            cdpPort: 1,
+          },
+        },
+        env,
+      );
+
+      await reapDeadRunningSessions(env);
+
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      // The confinement guard must leave an out-of-tree path untouched.
+      expect(fs.existsSync(outside)).toBe(true);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("stops the browser group before VNC and Xvfb when reaping", async () => {
     const orderFile = path.join(home, "stop-order.txt");
     const stopLogger = (label: string) =>

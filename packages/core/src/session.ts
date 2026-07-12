@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, sessionsDir, type EnvLike } from "./paths.js";
+import {
+  ensureDir,
+  isProfileConfined,
+  sessionsDir,
+  type EnvLike,
+} from "./paths.js";
 import {
   isPidAlive,
   processIdentityMatches,
@@ -247,7 +252,7 @@ export async function reapDeadRunningSessions(
   for (const record of await listSessions(env)) {
     if (record.status !== "running") continue;
     if (await isAlive(record)) continue;
-    if (!(await stopRecordedPids(record))) {
+    if (!(await stopRecordedPids(record, env))) {
       await updateSession(record.id, { status: "error" }, env).catch(() => {});
       continue;
     }
@@ -257,21 +262,24 @@ export async function reapDeadRunningSessions(
   return reaped;
 }
 
-async function stopRecordedPids(record: SessionRecord): Promise<boolean> {
+async function stopRecordedPids(
+  record: SessionRecord,
+  env: EnvLike,
+): Promise<boolean> {
   const browser = record.browser;
+  let browserGroupGone = browser === undefined;
   if (browser !== undefined) {
     try {
       const result = await stopProcessGroupVerified({
         pid: browser.browserPid,
         startTicks: browser.browserStartTimeTicks,
       });
-      if (
-        result.outcome !== "terminated" &&
-        result.outcome !== "already-dead"
-      ) {
-        return false;
-      }
+      browserGroupGone =
+        result.outcome === "terminated" || result.outcome === "already-dead";
     } catch {
+      browserGroupGone = false;
+    }
+    if (!browserGroupGone) {
       return false;
     }
   }
@@ -283,20 +291,29 @@ async function stopRecordedPids(record: SessionRecord): Promise<boolean> {
       record.android?.emulatorPid,
     ].filter((pid): pid is number => pid !== undefined),
   );
-  let stopped = true;
   for (const pid of pids) {
     if (!isPidAlive(pid)) {
       continue;
     }
     try {
       if (!(await stopPid(pid))) {
-        stopped = false;
+        return false;
       }
     } catch {
-      stopped = false;
+      return false;
     }
   }
-  return stopped;
+
+  if (browser?.profileMode === "ephemeral") {
+    const sessionDir = path.join(sessionsDir(env), record.id);
+    if (!isProfileConfined(sessionDir, browser.profileDir)) {
+      return false;
+    }
+    await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(
+      () => {},
+    );
+  }
+  return true;
 }
 
 export async function updateSession(

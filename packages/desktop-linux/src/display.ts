@@ -28,6 +28,12 @@ export interface StartXvfbOptions extends Partial<XvfbArgsOptions> {
   logDir: string;
   waitTimeoutMs?: number;
   env?: EnvLike;
+  /**
+   * First display number to try when no explicit `display` is given. Lets
+   * different session kinds carve out separate display ranges so they never
+   * contend for the same numbers (e.g. browser sessions vs. desktop sessions).
+   */
+  displayStart?: number;
 }
 
 export interface XvfbHandle {
@@ -203,7 +209,7 @@ export async function startXvfb(opts: StartXvfbOptions): Promise<XvfbHandle> {
     throw new Error(describeXvfbFailure(attempt, opts.display, timeoutMs));
   }
 
-  let searchFrom = DEFAULT_START_DISPLAY;
+  let searchFrom = opts.displayStart ?? DEFAULT_START_DISPLAY;
   let lastFailureMessage = "";
   for (let retry = 0; retry < ALLOCATION_RETRY_LIMIT; retry += 1) {
     const display = allocateDisplay({ start: searchFrom });

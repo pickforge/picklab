@@ -33,9 +33,36 @@ jobs:
             xterm \
             xvfb
 
+      - name: Ensure a headed browser is available
+        run: |
+          if command -v google-chrome-stable >/dev/null \
+            || command -v chromium >/dev/null \
+            || command -v chromium-browser >/dev/null; then
+            echo "browser already present"
+          else
+            wget -q -O /tmp/google-chrome.deb \
+              https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y --no-install-recommends /tmp/google-chrome.deb
+          fi
+          # Fail loudly if no browser resolved — the browser integration test
+          # must run, not silently skip.
+          command -v google-chrome-stable \
+            || command -v chromium \
+            || command -v chromium-browser
+
+      # PICKLAB_REQUIRE_BROWSER makes the browser integration test fail rather
+      # than skip if prerequisites are missing. PICKLAB_CHROME_NO_SANDBOX keeps
+      # headed Chrome reliable on the runner without changing the product
+      # default (Chrome's sandbox stays on outside CI).
       - run: bun run test
+        env:
+          PICKLAB_REQUIRE_BROWSER: "1"
+          PICKLAB_CHROME_NO_SANDBOX: "1"
 
       - run: bun run test:coverage
+        env:
+          PICKLAB_REQUIRE_BROWSER: "1"
+          PICKLAB_CHROME_NO_SANDBOX: "1"
 
       - name: Summarize coverage
         if: ${{ !cancelled() }}

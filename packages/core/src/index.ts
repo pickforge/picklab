@@ -4,6 +4,7 @@ export {
   agentsDir,
   ensureDir,
   globalConfigPath,
+  isProfileConfined,
   picklabHome,
   projectConfigPath,
   runsDir,

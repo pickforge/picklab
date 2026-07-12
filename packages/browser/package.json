@@ -1,0 +1,23 @@
+{
+  "name": "@pickforge/picklab-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated headed Chrome/Chromium browser sessions for PickLab",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean"
+  },
+  "dependencies": {
+    "@pickforge/picklab-core": "*",
+    "@pickforge/picklab-desktop-linux": "*"
+  }
+}
