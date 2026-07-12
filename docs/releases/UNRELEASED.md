@@ -13,7 +13,13 @@ then reset this file.
 
 ## Internal/release changes
 
-- None yet.
+- Added internal browser session contracts to `@pickforge/picklab-core`
+  (private, unpublished): a `browser` session type with `BrowserSessionInfo`,
+  capability-based session resolution (`SessionCapability`,
+  `sessionHasCapability`), and verified process-group stop primitives
+  (`stopProcessGroupVerified`, `processIdentityMatches`, and friends) now
+  wired into the session reaper. No CLI/MCP-visible behavior yet; the browser
+  lifecycle wiring lands in a later PR.
 
 ## Validation
 

@@ -398,6 +398,8 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
         const status = await getDesktopSessionStatus(session.id, env);
         expect(status.record.status).toBe("running");
         expect(status.record.desktop?.display).toBe(session.display);
+        expect(status.record.desktop?.width).toBe(800);
+        expect(status.record.desktop?.height).toBe(600);
         expect(status.xvfbAlive).toBe(true);
         expect(status.displayAlive).toBe(true);
 

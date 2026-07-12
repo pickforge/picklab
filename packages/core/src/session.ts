@@ -2,9 +2,14 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, sessionsDir, type EnvLike } from "./paths.js";
-import { isPidAlive, stopPid } from "./proc.js";
+import {
+  isPidAlive,
+  processIdentityMatches,
+  stopPid,
+  stopProcessGroupVerified,
+} from "./proc.js";
 
-export type SessionType = "desktop" | "android" | "desktop+android";
+export type SessionType = "desktop" | "android" | "desktop+android" | "browser";
 export type SessionStatus = "starting" | "running" | "stopped" | "error";
 
 export interface DesktopSessionInfo {
@@ -12,6 +17,8 @@ export interface DesktopSessionInfo {
   xvfbPid?: number;
   vncPid?: number;
   vncPort?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface AndroidSessionInfo {
@@ -19,6 +26,15 @@ export interface AndroidSessionInfo {
   serial?: string;
   emulatorPid?: number;
   consolePort?: number;
+}
+
+export interface BrowserSessionInfo {
+  browserPid: number;
+  browserStartTimeTicks: number;
+  binaryPath: string;
+  profileMode: "ephemeral";
+  profileDir: string;
+  cdpPort: number;
 }
 
 export interface SessionRecord {
@@ -29,6 +45,7 @@ export interface SessionRecord {
   projectDir: string;
   desktop?: DesktopSessionInfo;
   android?: AndroidSessionInfo;
+  browser?: BrowserSessionInfo;
   meta?: Record<string, unknown>;
 }
 
@@ -38,6 +55,7 @@ export interface CreateSessionInput {
   status?: SessionStatus;
   desktop?: DesktopSessionInfo;
   android?: AndroidSessionInfo;
+  browser?: BrowserSessionInfo;
   meta?: Record<string, unknown>;
 }
 
@@ -49,9 +67,10 @@ const ID_PREFIXES: Record<SessionType, string> = {
   desktop: "desk",
   android: "andr",
   "desktop+android": "duo",
+  browser: "brow",
 };
 
-const SESSION_ID_PATTERN = /^(desk|andr|duo)-[0-9a-f]{6,}$/;
+const SESSION_ID_PATTERN = /^(desk|andr|duo|brow)-[0-9a-f]{6,}$/;
 const MAX_ID_ATTEMPTS = 5;
 
 let tmpCounter = 0;
@@ -108,6 +127,7 @@ export async function createSession(
     };
     if (input.desktop !== undefined) record.desktop = input.desktop;
     if (input.android !== undefined) record.android = input.android;
+    if (input.browser !== undefined) record.browser = input.browser;
     if (input.meta !== undefined) record.meta = input.meta;
     try {
       await fs.promises.writeFile(sessionPath(record.id, env), serialize(record), {
@@ -194,6 +214,18 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
       isPidAlive(record.android.emulatorPid)
     );
   }
+  if (record.type === "browser") {
+    const browser = record.browser;
+    const xvfbPid = record.desktop?.xvfbPid;
+    if (browser?.browserPid === undefined || xvfbPid === undefined) return false;
+    return (
+      isPidAlive(xvfbPid) &&
+      processIdentityMatches({
+        pid: browser.browserPid,
+        startTicks: browser.browserStartTimeTicks,
+      })
+    );
+  }
 
   const alive = [
     record.desktop?.xvfbPid === undefined
@@ -237,6 +269,17 @@ async function stopRecordedPids(record: SessionRecord): Promise<void> {
       await stopPid(pid);
     } catch {
       continue;
+    }
+  }
+  const browser = record.browser;
+  if (browser?.browserPid !== undefined) {
+    try {
+      await stopProcessGroupVerified({
+        pid: browser.browserPid,
+        startTicks: browser.browserStartTimeTicks,
+      });
+    } catch {
+      // Best-effort cleanup: never let a stubborn browser leg block reaping.
     }
   }
 }

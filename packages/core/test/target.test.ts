@@ -27,6 +27,27 @@ async function createRunningDesktop(projectDir: string): Promise<string> {
   return record.id;
 }
 
+async function createRunningBrowser(projectDir: string): Promise<string> {
+  const record = await createSession({ type: "browser", projectDir }, env);
+  await updateSession(
+    record.id,
+    {
+      status: "running",
+      desktop: { display: ":120", xvfbPid: 4242, width: 1280, height: 800 },
+      browser: {
+        browserPid: 4243,
+        browserStartTimeTicks: 5,
+        binaryPath: "/usr/bin/chromium",
+        profileMode: "ephemeral",
+        profileDir: "/tmp/picklab-profile",
+        cdpPort: 1,
+      },
+    },
+    env,
+  );
+  return record.id;
+}
+
 beforeEach(async () => {
   home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-target-"));
   env = { PICKLAB_HOME: home };
@@ -108,6 +129,77 @@ describe("resolveRunnableSession project scoping", () => {
     });
     expect(record.id).toBe(idB);
     expect(record.projectDir).toBe("/proj-b");
+  });
+});
+
+describe("resolveRunnableSession capability model", () => {
+  it("resolves a browser session for a desktop consumer via its shared desktop leg", async () => {
+    const id = await createRunningBrowser("/proj-a");
+    const record = await resolveRunnableSession("desktop", undefined, {
+      env,
+      projectDir: "/proj-a",
+      ...HINTS,
+    });
+    expect(record.id).toBe(id);
+    expect(record.type).toBe("browser");
+  });
+
+  it("resolves a browser session for a browser consumer", async () => {
+    const id = await createRunningBrowser("/proj-a");
+    const record = await resolveRunnableSession("browser", undefined, {
+      env,
+      projectDir: "/proj-a",
+      ...HINTS,
+    });
+    expect(record.id).toBe(id);
+  });
+
+  it("fails closed when only a desktop-only session exists for a browser consumer", async () => {
+    await createRunningDesktop("/proj-a");
+    await expect(
+      resolveRunnableSession("browser", undefined, {
+        env,
+        projectDir: "/proj-a",
+        ...HINTS,
+      }),
+    ).rejects.toThrow(/No running browser session for this project/);
+  });
+
+  it("does not treat a browser session as an android capability", async () => {
+    await createRunningBrowser("/proj-a");
+    await expect(
+      resolveRunnableSession("android", undefined, {
+        env,
+        projectDir: "/proj-a",
+        ...HINTS,
+      }),
+    ).rejects.toThrow(/No running android session for this project/);
+  });
+
+  it("rejects an explicit id that lacks the requested capability", async () => {
+    const id = await createRunningDesktop("/proj-a");
+    await expect(
+      resolveRunnableSession("browser", id, { env, ...HINTS }),
+    ).rejects.toThrow(/is of type "desktop" and has no browser capability/);
+  });
+
+  it("counts a browser session alongside a plain desktop session as desktop ambiguity", async () => {
+    const desk = await createRunningDesktop("/proj-a");
+    const brow = await createRunningBrowser("/proj-a");
+
+    const error = await resolveRunnableSession("desktop", undefined, {
+      env,
+      projectDir: "/proj-a",
+      ...HINTS,
+    }).then(
+      () => undefined,
+      (reason: unknown) => reason as Error,
+    );
+    expect(error?.message).toContain(
+      "Multiple running desktop sessions for this project",
+    );
+    expect(error?.message).toContain(desk);
+    expect(error?.message).toContain(brow);
   });
 });
 

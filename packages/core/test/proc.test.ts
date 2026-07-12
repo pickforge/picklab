@@ -1,10 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isPidAlive, runCommand, startDaemon, stopPid } from "../src/proc.js";
+import {
+  isPidAlive,
+  listProcessGroupMembers,
+  processIdentityMatches,
+  readProcessIdentity,
+  readProcessStartTicks,
+  runCommand,
+  startDaemon,
+  stopPid,
+  stopProcessGroupVerified,
+  type ProcessIdentity,
+} from "../src/proc.js";
 
 const node = process.execPath;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 describe("runCommand", () => {
   it("passes arguments verbatim without shell interpretation", async () => {
@@ -192,5 +208,168 @@ describe("daemon supervision", () => {
     const result = await runCommand(node, ["-e", "console.log(process.pid)"]);
     const deadPid = Number(result.stdout.trim());
     expect(await stopPid(deadPid, { timeoutMs: 500 })).toBe(true);
+  });
+});
+
+describe("process identity and group termination", () => {
+  it("reads a live identity and returns undefined for a dead pid", async () => {
+    const self = readProcessIdentity(process.pid);
+    expect(self?.pid).toBe(process.pid);
+    expect(typeof self?.startTicks).toBe("number");
+    expect(self?.startTicks).toBeGreaterThan(0);
+
+    const { stdout } = await runCommand(node, [
+      "-e",
+      "console.log(process.pid)",
+    ]);
+    const deadPid = Number(stdout.trim());
+    expect(readProcessStartTicks(deadPid)).toBeUndefined();
+    expect(readProcessIdentity(deadPid)).toBeUndefined();
+  });
+
+  it("matches a live identity and rejects a start-time mismatch", () => {
+    const self = readProcessIdentity(process.pid);
+    expect(self).toBeDefined();
+    const identity = self as ProcessIdentity;
+    expect(processIdentityMatches(identity)).toBe(true);
+    // Same live pid, different start ticks => a reused pid, not our process.
+    expect(
+      processIdentityMatches({
+        pid: identity.pid,
+        startTicks: identity.startTicks + 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses to signal a live pid whose start identity no longer matches", async () => {
+    const startTicks = readProcessStartTicks(process.pid) ?? 0;
+    const result = await stopProcessGroupVerified(
+      { pid: process.pid, startTicks: startTicks + 1 },
+      { timeoutMs: 200 },
+    );
+    expect(result).toEqual({ outcome: "reused", signaled: false });
+    expect(isPidAlive(process.pid)).toBe(true);
+  });
+
+  it("reports an already-dead leader without signaling", async () => {
+    const { stdout } = await runCommand(node, [
+      "-e",
+      "console.log(process.pid)",
+    ]);
+    const deadPid = Number(stdout.trim());
+    const result = await stopProcessGroupVerified(
+      { pid: deadPid, startTicks: 1 },
+      { timeoutMs: 200 },
+    );
+    expect(result).toEqual({ outcome: "already-dead", signaled: false });
+  });
+
+  it("terminates the whole verified process group and confirms it is gone", async () => {
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    let members: number[] = [];
+    try {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        members = listProcessGroupMembers(pid);
+        if (members.length >= 2) break;
+        await delay(50);
+      }
+      expect(members).toContain(pid);
+      expect(members.length).toBeGreaterThanOrEqual(2);
+
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 3000 },
+      );
+      expect(result.outcome).toBe("terminated");
+      expect(result.signaled).toBe(true);
+      expect(processIdentityMatches(identity as ProcessIdentity)).toBe(false);
+      expect(listProcessGroupMembers(pid)).toEqual([]);
+      for (const member of members) {
+        expect(isPidAlive(member)).toBe(false);
+      }
+    } finally {
+      if (isPidAlive(pid)) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // group already gone
+        }
+      }
+      for (const member of members) {
+        if (isPidAlive(member)) {
+          try {
+            process.kill(member, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+      }
+    }
+  });
+
+  it("kills surviving group members after the leader exits", async () => {
+    const stubbornChild = [
+      'process.on("SIGTERM", () => {});',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      `spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], { stdio: "ignore" });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parent = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = parent.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    let members: number[] = [];
+    try {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        members = listProcessGroupMembers(pid);
+        if (members.length >= 2) break;
+        await delay(50);
+      }
+      expect(members.length).toBeGreaterThanOrEqual(2);
+      await delay(100);
+
+      const identity = readProcessIdentity(pid);
+      expect(identity).toBeDefined();
+      const result = await stopProcessGroupVerified(
+        identity as ProcessIdentity,
+        { timeoutMs: 200 },
+      );
+
+      expect(result).toEqual({ outcome: "terminated", signaled: true });
+      expect(listProcessGroupMembers(pid)).toEqual([]);
+      for (const member of members) {
+        expect(isPidAlive(member)).toBe(false);
+      }
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+    }
   });
 });

@@ -34,6 +34,8 @@ export interface XvfbHandle {
   display: string;
   pid: number;
   logPath: string;
+  width: number;
+  height: number;
 }
 
 export function parseDisplayNumber(display: string): number {
@@ -122,6 +124,8 @@ async function attemptStartXvfb(
   opts: StartXvfbOptions,
 ): Promise<XvfbAttempt> {
   const displayNumber = parseDisplayNumber(display);
+  const width = opts.width ?? DEFAULT_WIDTH;
+  const height = opts.height ?? DEFAULT_HEIGHT;
   const args = buildXvfbArgs({
     display,
     width: opts.width,
@@ -151,7 +155,7 @@ async function attemptStartXvfb(
       if (alive && (lockPid === null || lockPid === daemon.pid)) {
         return {
           outcome: "ready",
-          handle: { display, pid: daemon.pid, logPath: daemon.logPath },
+          handle: { display, pid: daemon.pid, logPath: daemon.logPath, width, height },
         };
       }
     }
