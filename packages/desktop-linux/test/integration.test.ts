@@ -223,6 +223,15 @@ describe.skipIf(!hasXdotool)("window listing failures", () => {
   });
 });
 
+describe("hosted CI prerequisites", () => {
+  it.skipIf(process.env.CI !== "true")(
+    "has x11vnc installed so VNC tests cannot silently skip",
+    () => {
+      expect(hasVnc).toBe(true);
+    },
+  );
+});
+
 describe("startVnc startup supervision", () => {
   const dyingBin = path.join(tmpRoot, "fake-vnc-dying");
   const listeningBin = path.join(tmpRoot, "fake-vnc-listening");

@@ -23,7 +23,9 @@ fuller model.
 The desktop VNC server (`x11vnc`) is started with `-localhost`, so it listens on
 `127.0.0.1` only and is not reachable from the network. It runs without a VNC
 password (`-nopw`); that is safe precisely because the socket never leaves the
-loopback interface. For remote viewing, forward the port over SSH:
+loopback interface. Normal observation is also server-enforced read-only
+(`-viewonly`): a connecting client cannot inject keyboard or mouse input into
+the session, only watch it. For remote viewing, forward the port over SSH:
 
 ```sh
 # `session status` prints the VNC port (5900 + display number)

@@ -48,6 +48,7 @@ export function buildVncArgs(opts: VncArgsOptions): string[] {
     "-forever",
     "-shared",
     "-nopw",
+    "-viewonly",
     "-quiet",
   ];
 }
