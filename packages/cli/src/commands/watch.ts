@@ -49,6 +49,18 @@ export async function watchDesktopSession(
       ],
     };
   }
+  if (opts.waitForViewerExit !== false) {
+    if (viewer.signal !== undefined && viewer.signal !== null) {
+      throw new Error(
+        `VNC viewer for session ${record.id} exited on signal ${viewer.signal}; the session and VNC server remain running`,
+      );
+    }
+    if (viewer.exitCode !== undefined && viewer.exitCode !== 0) {
+      throw new Error(
+        `VNC viewer for session ${record.id} exited with code ${String(viewer.exitCode)}; the session and VNC server remain running`,
+      );
+    }
+  }
   return {
     data,
     lines: [

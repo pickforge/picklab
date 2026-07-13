@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { once } from "node:events";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,12 +9,22 @@ import {
   destroySessionRecord,
   isPidAlive,
   listSessions,
+  readProcessIdentity,
   stopPid,
 } from "@pickforge/picklab-core";
 import { runWatch, watchDesktopSession } from "../src/commands/watch.js";
 
 let root: string;
 let binDir: string;
+let syntheticDisplayNumber: number;
+
+function syntheticDisplay(): string {
+  return `:${syntheticDisplayNumber}`;
+}
+
+function syntheticVncPort(): number {
+  return 5_900 + syntheticDisplayNumber;
+}
 const originalEnv = {
   PICKLAB_HOME: process.env.PICKLAB_HOME,
   PATH: process.env.PATH,
@@ -49,6 +61,18 @@ beforeEach(async () => {
   root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-watch-unit-"));
   binDir = path.join(root, "bin");
   await fs.promises.mkdir(binDir, { recursive: true });
+  const reservation = net.createServer();
+  const listening = once(reservation, "listening");
+  reservation.listen(0, "127.0.0.1");
+  await listening;
+  const address = reservation.address();
+  if (address === null || typeof address === "string" || address.port <= 5_900) {
+    throw new Error("could not reserve a synthetic VNC port");
+  }
+  syntheticDisplayNumber = address.port - 5_900;
+  const closed = once(reservation, "close");
+  reservation.close();
+  await closed;
   process.env.PICKLAB_HOME = path.join(root, "home");
   process.env.PATH = binDir;
   delete process.env.DISPLAY;
@@ -92,8 +116,8 @@ describe("watch command in process", () => {
   });
 
   it("fails closed when desktop sessions are ambiguous", async () => {
-    await createDesktop(":240");
-    await createDesktop(":241");
+    await createDesktop(syntheticDisplay());
+    await createDesktop(syntheticDisplay());
 
     await expect(
       watchDesktopSession({ projectDir: root }),
@@ -102,7 +126,7 @@ describe("watch command in process", () => {
 
   it("starts VNC headlessly and returns endpoint guidance without a viewer", async () => {
     await installVnc();
-    const id = await createDesktop(":242");
+    const id = await createDesktop(syntheticDisplay());
 
     const result = await watchDesktopSession({ session: id, projectDir: root });
 
@@ -122,7 +146,7 @@ describe("watch command in process", () => {
       `process.stdout.write("ignored viewer output\\n");\nprocess.exit(0);\n`,
     );
     process.env.DISPLAY = ":0";
-    const id = await createDesktop(":243");
+    const id = await createDesktop(syntheticDisplay());
 
     const first = await watchDesktopSession({ session: id, projectDir: root });
     const second = await watchDesktopSession({ session: id, projectDir: root });
@@ -138,14 +162,58 @@ describe("watch command in process", () => {
   });
 
   it("rejects a writable VNC server instead of attaching a viewer", async () => {
-    const id = await createDesktop(":244", {
+    const identity = readProcessIdentity(process.pid);
+    if (identity === undefined) throw new Error("test process identity missing");
+    const id = await createDesktop(syntheticDisplay(), {
       vncPid: process.pid,
-      vncPort: 6144,
+      vncStartTimeTicks: identity.startTicks,
+      vncPort: syntheticVncPort(),
       vncViewOnly: false,
     });
 
     await expect(
       watchDesktopSession({ session: id, projectDir: root }),
     ).rejects.toThrow(/server-enforced read-only VNC/);
+  });
+
+  it("fails when an explicit viewer exits nonzero without stopping VNC", async () => {
+    await installVnc();
+    await executable("remote-viewer", "process.exit(7);\n");
+    process.env.DISPLAY = ":0";
+    const id = await createDesktop(syntheticDisplay());
+
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const code = await runWatch({ json: true, session: id, projectDir: root });
+    expect(code).toBe(1);
+    const report = JSON.parse(String(output.mock.calls[0]?.[0]));
+    expect(report.errors.join("\n")).toMatch(
+      /exited with code 7.*remain running/,
+    );
+    const record = (await listSessions()).find((candidate) => candidate.id === id);
+    expect(record?.status).toBe("running");
+    expect(
+      record?.desktop?.vncPid !== undefined &&
+        isPidAlive(record.desktop.vncPid),
+    ).toBe(true);
+  });
+
+  it("fails when an explicit viewer exits on a signal without stopping VNC", async () => {
+    await installVnc();
+    await executable(
+      "remote-viewer",
+      'process.kill(process.pid, "SIGTERM");\n',
+    );
+    process.env.DISPLAY = ":0";
+    const id = await createDesktop(syntheticDisplay());
+
+    await expect(
+      watchDesktopSession({ session: id, projectDir: root }),
+    ).rejects.toThrow(/exited on signal SIGTERM.*remain running/);
+    const record = (await listSessions()).find((candidate) => candidate.id === id);
+    expect(record?.status).toBe("running");
+    expect(
+      record?.desktop?.vncPid !== undefined &&
+        isPidAlive(record.desktop.vncPid),
+    ).toBe(true);
   });
 });

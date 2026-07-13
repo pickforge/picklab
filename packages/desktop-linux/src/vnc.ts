@@ -1,6 +1,7 @@
 import net from "node:net";
 import {
   isPidAlive,
+  readProcessIdentity,
   startDaemon,
   stopPid,
   type EnvLike,
@@ -28,6 +29,7 @@ export interface StartVncOptions {
 
 export interface VncHandle {
   pid: number;
+  startTimeTicks: number;
   port: number;
   logPath: string;
 }
@@ -117,7 +119,19 @@ export async function startVnc(opts: StartVncOptions): Promise<VncHandle> {
         );
       }
       if (await isPortListening(port)) {
-        return { pid: daemon.pid, port, logPath: daemon.logPath };
+        const identity = readProcessIdentity(daemon.pid);
+        if (identity === undefined) {
+          await stopPid(daemon.pid);
+          throw new Error(
+            `Could not verify x11vnc process identity for pid ${daemon.pid}`,
+          );
+        }
+        return {
+          pid: daemon.pid,
+          startTimeTicks: identity.startTicks,
+          port,
+          logPath: daemon.logPath,
+        };
       }
     }
     await sleep(STARTUP_POLL_INTERVAL_MS);

@@ -38,6 +38,11 @@ agent actions while using it. For remote viewing, forward the port over SSH:
 ssh -N -L <vncPort>:127.0.0.1:<vncPort> you@host
 ```
 
+VNC PIDs are reused, reported alive, and stopped only when their persisted
+process-start identity still matches. Session VNC creation and desktop/browser
+destruction share one per-session mutation lock, preventing teardown races from
+orphaning a late x11vnc process.
+
 Do not strip `-localhost` to put VNC on a shared network. An unauthenticated,
 all-interface VNC server is a remote-takeover risk.
 

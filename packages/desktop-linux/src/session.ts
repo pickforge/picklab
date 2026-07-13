@@ -42,6 +42,7 @@ export interface DesktopSessionHandle {
   display: string;
   xvfbPid: number;
   vncPid?: number;
+  vncStartTimeTicks?: number;
   vncPort?: number;
   vncViewOnly?: boolean;
   logDir: string;
@@ -145,6 +146,7 @@ export async function createDesktopSession(
     };
     if (vnc !== undefined) {
       desktop.vncPid = vnc.pid;
+      desktop.vncStartTimeTicks = vnc.startTimeTicks;
       desktop.vncPort = vnc.port;
       desktop.vncViewOnly = opts.vncControl !== true;
     }
@@ -158,6 +160,7 @@ export async function createDesktopSession(
     };
     if (vnc !== undefined) {
       handle.vncPid = vnc.pid;
+      handle.vncStartTimeTicks = vnc.startTimeTicks;
       handle.vncPort = vnc.port;
       handle.vncViewOnly = opts.vncControl !== true;
     }
@@ -165,7 +168,13 @@ export async function createDesktopSession(
   } catch (error) {
     let vncGone = vnc === undefined;
     if (vnc !== undefined) {
-      vncGone = await stopPid(vnc.pid).catch(() => false);
+      vncGone = await stopOwnedSessionVnc(record.id, {
+        display: xvfb?.display ?? xvfbPartial?.display ?? ":0",
+        vncPid: vnc.pid,
+        vncStartTimeTicks: vnc.startTimeTicks,
+      })
+        .then(() => true)
+        .catch(() => false);
     }
     let xvfbGone =
       xvfb === undefined
@@ -210,7 +219,12 @@ export async function createDesktopSession(
                     ...(knownXvfbStartTimeTicks === undefined
                       ? {}
                       : { xvfbStartTimeTicks: knownXvfbStartTimeTicks }),
-                    ...(vnc === undefined ? {} : { vncPid: vnc.pid }),
+                    ...(vnc === undefined
+                      ? {}
+                      : {
+                          vncPid: vnc.pid,
+                          vncStartTimeTicks: vnc.startTimeTicks,
+                        }),
                     width: knownXvfb.width,
                     height: knownXvfb.height,
                   },
@@ -264,6 +278,38 @@ async function readVncLockOwner(lockPath: string): Promise<VncLockOwner | null> 
   return null;
 }
 
+async function releaseVncLock(lockPath: string, token: string): Promise<void> {
+  const current = await readVncLockOwner(lockPath);
+  if (current?.token === token) {
+    const confirmed = await readVncLockOwner(lockPath);
+    if (confirmed?.token === token) {
+      await fs.promises.unlink(lockPath).catch(() => {});
+    }
+  }
+  await fs.promises.unlink(`${lockPath}.${token}`).catch(() => {});
+}
+
+async function breakStaleVncLock(
+  lockPath: string,
+  owner: VncLockOwner,
+): Promise<boolean> {
+  try {
+    await fs.promises.unlink(`${lockPath}.${owner.token}`);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
+  }
+  const confirmed = await readVncLockOwner(lockPath);
+  if (confirmed?.token !== owner.token) return false;
+  try {
+    await fs.promises.unlink(lockPath);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
+  }
+}
+
 async function acquireSessionVncLock(
   id: string,
   registryEnv: EnvLike,
@@ -272,47 +318,86 @@ async function acquireSessionVncLock(
   await fs.promises.mkdir(logDir, { recursive: true });
   const lockPath = path.join(logDir, "ensure-vnc.lock");
   const owner = { pid: process.pid, token: randomUUID() };
+  const sentinelPath = `${lockPath}.${owner.token}`;
+  await fs.promises.writeFile(sentinelPath, JSON.stringify(owner), {
+    flag: "wx",
+  });
   const deadline = Date.now() + VNC_LOCK_TIMEOUT_MS;
+  let acquired = false;
 
-  while (true) {
-    try {
-      const handle = await fs.promises.open(lockPath, "wx");
+  try {
+    while (true) {
       try {
-        await handle.writeFile(JSON.stringify(owner), "utf8");
-      } finally {
-        await handle.close();
-      }
-      return async () => {
-        const current = await readVncLockOwner(lockPath);
-        if (current?.token === owner.token) {
-          await fs.promises.unlink(lockPath).catch(() => {});
+        const handle = await fs.promises.open(lockPath, "wx");
+        try {
+          await handle.writeFile(JSON.stringify(owner), "utf8");
+        } finally {
+          await handle.close();
         }
-      };
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
-    }
-
-    const current = await readVncLockOwner(lockPath);
-    if (current !== null && !isPidAlive(current.pid)) {
-      await fs.promises.unlink(lockPath).catch(() => {});
-      continue;
-    }
-    if (current === null) {
-      try {
-        const stat = await fs.promises.stat(lockPath);
-        if (Date.now() - stat.mtimeMs >= VNC_LOCK_TIMEOUT_MS) {
-          await fs.promises.unlink(lockPath).catch(() => {});
-          continue;
-        }
+        acquired = true;
+        return () => releaseVncLock(lockPath, owner.token);
       } catch (error) {
-        if (errorCode(error) === "ENOENT") continue;
-        throw error;
+        if (errorCode(error) !== "EEXIST") throw error;
       }
+
+      const current = await readVncLockOwner(lockPath);
+      if (
+        current !== null &&
+        !isPidAlive(current.pid) &&
+        (await breakStaleVncLock(lockPath, current))
+      ) {
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting to ensure VNC for session ${id}`);
+      }
+      await sleep(VNC_LOCK_POLL_MS);
     }
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting to ensure VNC for session ${id}`);
+  } finally {
+    if (!acquired) {
+      await fs.promises.unlink(sentinelPath).catch(() => {});
     }
-    await sleep(VNC_LOCK_POLL_MS);
+  }
+}
+
+export async function withSessionVncLock<T>(
+  id: string,
+  registryEnv: EnvLike,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const releaseLock = await acquireSessionVncLock(id, registryEnv);
+  try {
+    return await operation();
+  } finally {
+    await releaseLock();
+  }
+}
+
+export async function stopOwnedSessionVnc(
+  id: string,
+  desktop: DesktopSessionInfo | undefined,
+): Promise<void> {
+  const pid = desktop?.vncPid;
+  if (pid === undefined) return;
+  const startTicks = desktop?.vncStartTimeTicks;
+  if (startTicks === undefined) {
+    if (isPidAlive(pid)) {
+      throw new Error(
+        `Refusing to stop x11vnc (pid ${pid}) for ${id}: process identity is unavailable`,
+      );
+    }
+    return;
+  }
+  if (!processIdentityMatches({ pid, startTicks })) {
+    if (isPidAlive(pid)) {
+      throw new Error(
+        `Refusing to stop x11vnc (pid ${pid}) for ${id}: process identity does not match`,
+      );
+    }
+    return;
+  }
+  if (!(await stopPid(pid))) {
+    throw new Error(`x11vnc (pid ${pid}) survived SIGTERM and SIGKILL`);
   }
 }
 
@@ -324,8 +409,7 @@ export async function ensureSessionVnc(
   if ((await getSession(id, registryEnv)) === undefined) {
     throw new Error(`Session not found: ${id}`);
   }
-  const releaseLock = await acquireSessionVncLock(id, registryEnv);
-  try {
+  return withSessionVncLock(id, registryEnv, async () => {
     const record = await getSession(id, registryEnv);
     if (record === undefined) {
       throw new Error(`Session not found: ${id}`);
@@ -338,6 +422,21 @@ export async function ensureSessionVnc(
       throw new Error(`Session ${id} is not running`);
     }
     if (desktop.vncPid !== undefined && isPidAlive(desktop.vncPid)) {
+      if (desktop.vncStartTimeTicks === undefined) {
+        throw new Error(
+          `Refusing to reuse x11vnc (pid ${desktop.vncPid}) for ${id}: process identity is unavailable`,
+        );
+      }
+      if (
+        !processIdentityMatches({
+          pid: desktop.vncPid,
+          startTicks: desktop.vncStartTimeTicks,
+        })
+      ) {
+        throw new Error(
+          `Refusing to reuse x11vnc (pid ${desktop.vncPid}) for ${id}: process identity does not match`,
+        );
+      }
       if (desktop.vncViewOnly !== true) {
         throw new Error(
           `Session ${id} has an active writable VNC server; watch requires server-enforced read-only VNC`,
@@ -365,6 +464,7 @@ export async function ensureSessionVnc(
           desktop: {
             ...desktop,
             vncPid: vnc.pid,
+            vncStartTimeTicks: vnc.startTimeTicks,
             vncPort: vnc.port,
             vncViewOnly: true,
           },
@@ -372,97 +472,90 @@ export async function ensureSessionVnc(
         registryEnv,
       );
     } catch (error) {
-      await stopPid(vnc.pid).catch(() => {});
+      await stopOwnedSessionVnc(id, {
+        display: desktop.display,
+        vncPid: vnc.pid,
+        vncStartTimeTicks: vnc.startTimeTicks,
+      }).catch(() => {});
       throw error;
     }
     return { pid: vnc.pid, port: vnc.port, reused: false };
-  } finally {
-    await releaseLock();
-  }
+  });
 }
 
 export async function destroyDesktopSession(
   id: string,
   registryEnv: EnvLike = process.env,
 ): Promise<void> {
-  const record = await getSession(id, registryEnv);
-  if (record === undefined) {
+  if ((await getSession(id, registryEnv)) === undefined) {
     throw new Error(`Desktop session not found: ${id}`);
   }
-  const desktop = record.desktop;
-  const failures: Error[] = [];
-  const stops: Array<[string, number]> = [];
-  if (desktop?.vncPid !== undefined) {
-    stops.push(["x11vnc", desktop.vncPid]);
-  }
-  for (const [label, pid] of stops) {
-    try {
-      const stopped = await stopPid(pid);
-      if (!stopped) {
-        failures.push(
-          new Error(`${label} (pid ${pid}) survived SIGTERM and SIGKILL`),
-        );
-      }
-    } catch (error) {
-      failures.push(
-        error instanceof Error
-          ? error
-          : new Error(`Failed to stop ${label} (pid ${pid}): ${String(error)}`),
-      );
+  await withSessionVncLock(id, registryEnv, async () => {
+    const record = await getSession(id, registryEnv);
+    if (record === undefined) {
+      throw new Error(`Desktop session not found: ${id}`);
     }
-  }
-  const xvfbPid = desktop?.xvfbPid;
-  const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
-  if (xvfbPid !== undefined) {
-    if (xvfbStartTimeTicks === undefined) {
-      if (isPidAlive(xvfbPid)) {
-        failures.push(
-          new Error(
-            `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
-          ),
-        );
-      }
-    } else {
-      try {
-        const result = await stopProcessGroupVerified({
-          pid: xvfbPid,
-          startTicks: xvfbStartTimeTicks,
-        });
-        if (
-          result.outcome !== "terminated" &&
-          result.outcome !== "already-dead"
-        ) {
+    const desktop = record.desktop;
+    const failures: Error[] = [];
+    try {
+      await stopOwnedSessionVnc(id, desktop);
+    } catch (error) {
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+    }
+
+    const xvfbPid = desktop?.xvfbPid;
+    const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
+    if (xvfbPid !== undefined) {
+      if (xvfbStartTimeTicks === undefined) {
+        if (isPidAlive(xvfbPid)) {
           failures.push(
             new Error(
-              `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+              `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
             ),
           );
         }
-      } catch (error) {
-        failures.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+      } else {
+        try {
+          const result = await stopProcessGroupVerified({
+            pid: xvfbPid,
+            startTicks: xvfbStartTimeTicks,
+          });
+          if (
+            result.outcome !== "terminated" &&
+            result.outcome !== "already-dead"
+          ) {
+            failures.push(
+              new Error(
+                `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+              ),
+            );
+          }
+        } catch (error) {
+          failures.push(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
       }
     }
-  }
-  if (failures.length > 0) {
-    await updateSession(
-      id,
-      {
-        status: "error",
-        meta: {
-          ...record.meta,
-          [REAPER_CLEANUP_PENDING_META_KEY]: true,
+    if (failures.length > 0) {
+      await updateSession(
+        id,
+        {
+          status: "error",
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
         },
-      },
-      registryEnv,
-    ).catch(() => {});
-    throw new AggregateError(
-      failures,
-      `Failed to stop ${failures.length} process(es) of desktop session ${id}`,
-    );
-  }
-  await destroySessionRecord(id, registryEnv);
+        registryEnv,
+      ).catch(() => {});
+      throw new AggregateError(
+        failures,
+        `Failed to stop ${failures.length} process(es) of desktop session ${id}`,
+      );
+    }
+    await destroySessionRecord(id, registryEnv);
+  });
 }
 
 export async function getDesktopSessionStatus(
@@ -484,7 +577,13 @@ export async function getDesktopSessionStatus(
             pid: desktop.xvfbPid,
             startTicks: desktop.xvfbStartTimeTicks,
           })),
-    vncAlive: desktop?.vncPid !== undefined && isPidAlive(desktop.vncPid),
+    vncAlive:
+      desktop?.vncPid !== undefined &&
+      desktop.vncStartTimeTicks !== undefined &&
+      processIdentityMatches({
+        pid: desktop.vncPid,
+        startTicks: desktop.vncStartTimeTicks,
+      }),
     displayAlive: desktop !== undefined && isDisplayAlive(desktop.display),
   };
 }

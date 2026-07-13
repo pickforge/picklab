@@ -249,12 +249,21 @@ describe("session registry", () => {
     if (vncPid === undefined) {
       throw new Error("child process did not expose a pid");
     }
+    const vncIdentity = readProcessIdentity(vncPid);
+    if (vncIdentity === undefined) {
+      throw new Error("could not read VNC identity");
+    }
     const stale = await createSession(
       {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", xvfbPid: 4_194_304, vncPid },
+        desktop: {
+          display: ":90",
+          xvfbPid: 4_194_304,
+          vncPid,
+          vncStartTimeTicks: vncIdentity.startTicks,
+        },
       },
       env,
     );
@@ -276,7 +285,7 @@ describe("session registry", () => {
     }
   });
 
-  it("keeps an errored record when stopping a helper throws", async () => {
+  it("keeps an errored record and does not signal a helper with missing identity", async () => {
     const helperPid = 4_194_304;
     const stale = await createSession(
       {
@@ -291,50 +300,51 @@ describe("session registry", () => {
       .spyOn(process, "kill")
       .mockImplementation(((_pid: number, signal?: string | number) => {
         if (signal === 0) return true;
-        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+        throw new Error(`unexpected signal ${String(signal)}`);
       }) as typeof process.kill);
     try {
       const reaped = await reapDeadRunningSessions(env, () => false);
 
       expect(reaped).toEqual([]);
       expect((await getSession(stale.id, env))?.status).toBe("error");
+      expect(kill.mock.calls).toEqual([[helperPid, 0]]);
     } finally {
       kill.mockRestore();
     }
   });
 
-  it("keeps an errored record when a helper refuses to stop", async () => {
-    const helperPid = 4_194_304;
+  it("keeps an errored record and does not signal a reused VNC pid", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const helperPid = helper.pid;
+    if (helperPid === undefined) throw new Error("helper pid missing");
+    const identity = readProcessIdentity(helperPid);
+    if (identity === undefined) throw new Error("helper identity missing");
     const stale = await createSession(
       {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", vncPid: helperPid },
+        desktop: {
+          display: ":90",
+          vncPid: helperPid,
+          vncStartTimeTicks: identity.startTicks + 1,
+        },
       },
       env,
     );
-    let resolveTerm!: () => void;
-    const termSignaled = new Promise<void>((resolve) => {
-      resolveTerm = resolve;
-    });
-    const kill = vi.spyOn(process, "kill").mockImplementation((() => {
-      resolveTerm();
-      return true;
-    }) as typeof process.kill);
-    vi.useFakeTimers();
     try {
-      const pending = reapDeadRunningSessions(env, () => false);
-      await termSignaled;
-      await vi.advanceTimersByTimeAsync(6_100);
-      const reaped = await pending;
+      const reaped = await reapDeadRunningSessions(env, () => false);
 
       expect(reaped).toEqual([]);
       expect((await getSession(stale.id, env))?.status).toBe("error");
-      expect(kill).toHaveBeenCalledWith(helperPid, "SIGKILL");
+      expect(isPidAlive(helperPid)).toBe(true);
     } finally {
-      vi.useRealTimers();
-      kill.mockRestore();
+      await stopPid(helperPid, { timeoutMs: 1000 });
+      await waitForExit(helper);
     }
   });
 
@@ -887,6 +897,10 @@ describe("session registry", () => {
       if (xvfbIdentity === undefined) {
         throw new Error("could not read Xvfb identity");
       }
+      const vncIdentity = readProcessIdentity(vnc.pid);
+      if (vncIdentity === undefined) {
+        throw new Error("could not read VNC identity");
+      }
       const stale = await createSession(
         {
           type: "browser",
@@ -895,6 +909,7 @@ describe("session registry", () => {
           desktop: {
             display: ":124",
             vncPid: vnc.pid,
+            vncStartTimeTicks: vncIdentity.startTicks,
             xvfbPid: xvfb.pid,
             xvfbStartTimeTicks: xvfbIdentity.startTicks,
           },

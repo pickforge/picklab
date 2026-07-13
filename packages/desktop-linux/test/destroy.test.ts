@@ -11,6 +11,7 @@ vi.mock("@pickforge/picklab-core", async (importOriginal) => {
     await importOriginal<typeof import("@pickforge/picklab-core")>();
   return {
     ...actual,
+    processIdentityMatches: vi.fn(() => true),
     stopPid: vi.fn(async (pid: number) => {
       if (pid === FAILING_PID) {
         throw new Error(`kill EPERM (pid ${pid})`);
@@ -70,6 +71,7 @@ async function makeDesktopRecord(
     xvfbPid: number;
     xvfbStartTimeTicks: number;
     vncPid?: number;
+    vncStartTimeTicks?: number;
   } = {
     display: ":219",
     xvfbPid,
@@ -77,6 +79,7 @@ async function makeDesktopRecord(
   };
   if (vncPid !== undefined) {
     desktop.vncPid = vncPid;
+    desktop.vncStartTimeTicks = 1;
   }
   await updateSession(record.id, { status: "running", desktop }, registryEnv);
   return record.id;

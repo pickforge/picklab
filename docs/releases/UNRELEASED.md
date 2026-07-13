@@ -57,6 +57,10 @@ then reset this file.
   before stopping VNC/Xvfb helpers or deleting the session record. Reused or
   otherwise unconfirmed groups leave dependent helpers and profile data intact
   and mark the record as errored for inspection.
+- Lazy VNC now persists process-start identity and shares a per-session mutation
+  lock with desktop/browser destruction. Reuse, status, teardown, and reaping
+  fail closed for missing or reused identities without signaling unrelated
+  processes.
 - `startXvfb` gained an additive `displayStart` option so browser sessions use
   displays from `:200` without contending with desktop sessions from `:90`.
 - Added internal `@pickforge/picklab-browser`, owning Chrome/Chromium detection,
@@ -109,14 +113,15 @@ then reset this file.
   logs contained no DevTools websocket capability URL.
 - `bun run typecheck` and `bun run build` pass after rebasing watch onto the
   browser lifecycle.
-- Focused browser/core/desktop/CLI/MCP/security validation passes 226 tests in
+- Focused browser/core/desktop/CLI/MCP/security validation passes 232 tests in
   18 files. Coverage includes browser create/status/destroy, lazy VNC teardown
-  after verified Chrome-group termination, process identity and group cleanup,
-  profile confinement, environment scrubbing, manual/auto viewer config,
+  after verified Chrome-group termination, deterministic ensure/destroy race
+  ordering, stale-lock breakers, VNC process-identity reuse refusal, profile
+  confinement, environment scrubbing, manual/auto viewer config,
   zero/ambiguous/headless watch behavior, process-safe VNC reuse and endpoint
-  ownership, asynchronous viewer launch, attach-failure reporting, JSON stdout
-  isolation, browser viewer/status integration, MCP status-only behavior, and
-  secret redaction.
+  ownership, asynchronous viewer launch, explicit nonzero/signal failure,
+  attach-failure reporting, JSON stdout isolation, browser viewer/status
+  integration, MCP status-only behavior, and secret redaction.
 
 ### Not tested yet
 

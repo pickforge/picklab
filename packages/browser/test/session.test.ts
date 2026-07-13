@@ -317,6 +317,10 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
     );
     const vncPid = vnc.pid;
     if (vncPid === undefined) throw new Error("VNC helper has no pid");
+    const vncIdentity = readProcessIdentity(vncPid);
+    if (vncIdentity === undefined) {
+      throw new Error("VNC helper identity missing");
+    }
     const record = await getSession(session.id, registryEnv);
     if (record?.desktop === undefined) {
       throw new Error("browser desktop leg missing");
@@ -327,7 +331,7 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
         desktop: {
           ...record.desktop,
           vncPid,
-          vncPort: 6200,
+          vncStartTimeTicks: vncIdentity.startTicks,
           vncViewOnly: true,
         },
       },
@@ -354,6 +358,76 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
     }
   }, TEST_TIMEOUT_MS);
 
+
+  it("refuses to signal a browser VNC helper without process identity", async () => {
+    const session = await createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: spawnEnvFor("ready"),
+      cdpTimeoutMs: 5000,
+    });
+    const vnc = spawn(
+      process.execPath,
+      ["-e", "require('node:net').createServer().listen(0)"],
+      { stdio: "ignore" },
+    );
+    const vncPid = vnc.pid;
+    if (vncPid === undefined) throw new Error("VNC helper has no pid");
+    const record = await getSession(session.id, registryEnv);
+    if (record?.desktop === undefined) {
+      throw new Error("browser desktop leg missing");
+    }
+    await updateSession(
+      session.id,
+      {
+        desktop: {
+          ...record.desktop,
+          vncPid,
+          vncViewOnly: true,
+        },
+      },
+      registryEnv,
+    );
+
+    try {
+      const destroyError = await destroyBrowserSession(
+        session.id,
+        registryEnv,
+      ).catch((error: unknown) => error);
+      if (!(destroyError instanceof AggregateError)) {
+        throw new Error("expected aggregate browser destroy failure");
+      }
+      expect(destroyError.errors.map((error) => String(error))).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/process identity is unavailable/),
+        ]),
+      );
+      expect(isPidAlive(vncPid)).toBe(true);
+      const failed = await getSession(session.id, registryEnv);
+      expect(failed?.status).toBe("error");
+
+      await stopPid(vncPid, { timeoutMs: 500 });
+      if (failed?.desktop !== undefined) {
+        await updateSession(
+          session.id,
+          {
+            desktop: {
+              ...failed.desktop,
+              vncPid: undefined,
+              vncStartTimeTicks: undefined,
+            },
+          },
+          registryEnv,
+        );
+      }
+      await destroyBrowserSession(session.id, registryEnv);
+    } finally {
+      if (isPidAlive(vncPid)) {
+        await stopPid(vncPid, { timeoutMs: 500 }).catch(() => {});
+      }
+      await destroyBrowserSession(session.id, registryEnv).catch(() => {});
+    }
+  }, TEST_TIMEOUT_MS);
   it("leaves the display alive when the browser group is unverifiable", async () => {
     const session = await createBrowserSession({
       projectDir,

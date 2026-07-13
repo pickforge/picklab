@@ -145,10 +145,11 @@ supported client
 (`remote-viewer` from virt-viewer, or a TigerVNC-compatible `vncviewer`),
 PickLab opens nothing and prints the loopback endpoint, install guidance, and
 an SSH tunnel command instead.
-Explicit `picklab watch` waits until the viewer closes. In contrast, automatic
-or `session create --viewer` launch returns as soon as the client starts, so the
-viewer never owns or delays session creation. A requested attach failure is
-reported alongside the successfully created session. `--viewer` and
+Explicit `picklab watch` waits until the viewer closes and fails if the client
+exits nonzero or on a signal, while leaving the session and VNC running.
+Automatic or `session create --viewer` launch returns as soon as the client
+starts, so the viewer never owns or delays session creation. A requested attach
+failure is reported alongside the successfully created session. `--viewer` and
 `--vnc-control` are rejected together before creation; `viewer.mode: "auto"` is
 reported as suppressed for an explicitly writable `--vnc-control` session.
 
