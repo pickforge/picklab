@@ -74,6 +74,7 @@ export {
   createSession,
   destroySessionRecord,
   getSession,
+  isDisplaySocketAlive,
   isSessionProcessAlive,
   listSessions,
   reapDeadRunningSessions,

@@ -407,6 +407,49 @@ describe("process identity and group termination", () => {
       read.mockRestore();
     }
   });
+  it("escalates a verified group after its leader exits on SIGTERM", async () => {
+    const pid = 1_234_567;
+    const memberPid = pid + 1;
+    const startTicks = 456;
+    let termSent = false;
+    let killed = false;
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((filePath: fs.PathOrFileDescriptor) => {
+        if (String(filePath).endsWith(`/${pid}/stat`)) {
+          if (termSent) {
+            throw Object.assign(new Error("gone"), { code: "ENOENT" });
+          }
+          return procStat(pid, "S", pid, startTicks);
+        }
+        return procStat(memberPid, "S", pid, startTicks + 1);
+      }) as typeof fs.readFileSync);
+    const entries = vi
+      .spyOn(fs, "readdirSync")
+      .mockImplementation(() => (killed ? [] : [String(memberPid)]) as never);
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === "SIGTERM") termSent = true;
+      if (signal === "SIGKILL") killed = true;
+      return true;
+    });
+    try {
+      const result = await stopProcessGroupVerified(
+        { pid, startTicks },
+        { timeoutMs: 0 },
+      );
+
+      expect(result).toEqual({ outcome: "terminated", signaled: true });
+      expect(kill.mock.calls).toEqual([
+        [-pid, "SIGTERM"],
+        [-pid, "SIGKILL"],
+      ]);
+    } finally {
+      kill.mockRestore();
+      entries.mockRestore();
+      read.mockRestore();
+    }
+  });
+
 
   it("reports an already-dead leader without signaling", async () => {
     const { stdout } = await runCommand(node, [

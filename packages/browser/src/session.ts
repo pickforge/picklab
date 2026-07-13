@@ -302,11 +302,13 @@ export async function createBrowserSession(
       profileDir: layout.profileDir,
       cdpPort: waited.port,
     };
+    assertNotAborted(opts.signal);
     await updateSession(
       record.id,
       { status: "running", desktop, browser },
       registryEnv,
     );
+    assertNotAborted(opts.signal);
 
     return {
       id: record.id,
@@ -506,7 +508,17 @@ export async function destroyBrowserSession(
   }
 
   if (failures.length > 0) {
-    await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+    await updateSession(
+      id,
+      {
+        status: "error",
+        meta: {
+          ...record.meta,
+          [REAPER_CLEANUP_PENDING_META_KEY]: true,
+        },
+      },
+      registryEnv,
+    ).catch(() => {});
     throw new AggregateError(
       failures,
       `Failed to fully destroy browser session ${id}`,

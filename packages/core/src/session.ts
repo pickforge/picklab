@@ -207,12 +207,23 @@ export async function listSessions(
   records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return records;
 }
+export function isDisplaySocketAlive(display: string): boolean {
+  const match = /^:(\d+)$/.exec(display);
+  if (match === null) return false;
+  return fs.existsSync(`/tmp/.X11-unix/X${match[1]}`);
+}
+
 
 export function isSessionProcessAlive(record: SessionRecord): boolean {
   if (record.type === "desktop") {
+    const desktop = record.desktop;
     return (
-      record.desktop?.xvfbPid !== undefined &&
-      isPidAlive(record.desktop.xvfbPid)
+      desktop?.xvfbPid !== undefined &&
+      desktop.xvfbStartTimeTicks !== undefined &&
+      processIdentityMatches({
+        pid: desktop.xvfbPid,
+        startTicks: desktop.xvfbStartTimeTicks,
+      })
     );
   }
   if (record.type === "android") {
@@ -236,12 +247,14 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
         pid: desktop.xvfbPid,
         startTicks: desktop.xvfbStartTimeTicks,
       }) &&
+      isDisplaySocketAlive(desktop.display) &&
       processIdentityMatches({
         pid: browser.browserPid,
         startTicks: browser.browserStartTimeTicks,
       })
     );
   }
+
 
   const desktop = record.desktop;
   const desktopAlive =

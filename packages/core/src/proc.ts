@@ -436,8 +436,9 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * with SIGTERM then SIGKILL escalation. Before the first signal, the recorded
  * process must still exist with its recorded start identity and lead the
  * recorded group. This remains verifiable while the leader is a zombie.
- * Before escalation, a reused PID leading that group is rejected so an
- * unrelated group is never killed.
+ * After that verified group receives SIGTERM, a missing leader does not make
+ * its surviving same-pgid members unsafe: the pgid cannot be reused while they
+ * remain, so SIGKILL escalation is valid. A reused live leader is still refused.
  *
  * The leader must have been spawned as a process-group leader (e.g. `spawn`
  * with `detached: true`), so its PID doubles as the group id.
@@ -478,19 +479,17 @@ export async function stopProcessGroupVerified(
 
   const members = listProcessGroupMembers(identity.pid);
   const currentLeader = readProcStat(identity.pid);
-  if (currentLeader === undefined) {
-    return {
-      outcome: members.length === 0 ? "terminated" : "reused",
-      signaled: true,
-    };
-  }
   if (
-    currentLeader.startTicks !== identity.startTicks ||
-    currentLeader.pgrp !== identity.pid
+    currentLeader !== undefined &&
+    (currentLeader.startTicks !== identity.startTicks ||
+      currentLeader.pgrp !== identity.pid)
   ) {
     return { outcome: "reused", signaled: true };
   }
-  if (currentLeader.state === "Z" && members.length === 0) {
+  if (
+    members.length === 0 &&
+    (currentLeader === undefined || currentLeader.state === "Z")
+  ) {
     return { outcome: "terminated", signaled: true };
   }
   signalGroup(identity.pid, "SIGKILL");

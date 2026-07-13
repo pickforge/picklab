@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import {
+  isDisplaySocketAlive,
   isPidAlive,
   startDaemon,
   stopPid,
@@ -118,7 +119,8 @@ export function allocateDisplay(opts: AllocateDisplayOptions = {}): string {
 }
 
 export function isDisplayAlive(display: string): boolean {
-  return fs.existsSync(displaySocketPath(parseDisplayNumber(display)));
+  parseDisplayNumber(display);
+  return isDisplaySocketAlive(display);
 }
 
 type XvfbAttempt =

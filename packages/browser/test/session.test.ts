@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
   getSession,
@@ -360,14 +360,30 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
       expect(isPidAlive(session.browserPid)).toBe(true);
       expect(isPidAlive(session.xvfbPid)).toBe(true);
       expect(fs.existsSync(session.profileDir)).toBe(true);
-      expect((await getSession(session.id, registryEnv))?.status).toBe("error");
+      const failed = await getSession(session.id, registryEnv);
+      expect(failed?.status).toBe("error");
+      expect(failed?.meta?.reaperCleanupPending).toBe(true);
+
+      await updateSession(
+        session.id,
+        { browser: record.browser },
+        registryEnv,
+      );
+      expect(
+        (await reapDeadRunningSessions(registryEnv)).map(
+          (reaped) => reaped.id,
+        ),
+      ).toEqual([session.id]);
+      expect(await getSession(session.id, registryEnv)).toBeUndefined();
+      expect(fs.existsSync(session.profileDir)).toBe(false);
     } finally {
-      try {
-        process.kill(-session.browserPid, "SIGKILL");
-      } catch {
-        // group already gone
+      for (const pid of [session.browserPid, session.xvfbPid]) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // group already gone
+        }
       }
-      await stopPid(session.xvfbPid, { timeoutMs: 1000 });
     }
   }, TEST_TIMEOUT_MS);
 
@@ -496,6 +512,64 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const id = sessions[0]!.slice(0, -".json".length);
     expect(
       fs.existsSync(path.join(browserSessionLogDir(id, registryEnv), "profile")),
+    ).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it("cleans up when cancellation occurs during the running-record commit", async () => {
+    const controller = new AbortController();
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let aborted = false;
+    const rename = vi
+      .spyOn(fs.promises, "rename")
+      .mockImplementation(async (source, target) => {
+        await realRename(source, target);
+        if (!aborted && String(target).endsWith(".json")) {
+          const content = fs.readFileSync(target, "utf8");
+          if (
+            content.includes('"status": "running"') &&
+            content.includes('"browser"')
+          ) {
+            aborted = true;
+            controller.abort();
+          }
+        }
+      });
+    try {
+      await expect(
+        createBrowserSession({
+          projectDir,
+          registryEnv,
+          env: spawnEnvFor("ready"),
+          cdpTimeoutMs: 5000,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow(/aborted/);
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(aborted).toBe(true);
+    const recordFile = fs
+      .readdirSync(path.join(home, "sessions"))
+      .find((name) => name.endsWith(".json"));
+    if (recordFile === undefined) {
+      throw new Error("Cancelled create did not preserve its error record");
+    }
+    const id = recordFile.slice(0, -".json".length);
+    const record = await getSession(id, registryEnv);
+    expect(record?.status).toBe("error");
+    expect(
+      fs.existsSync(path.join(browserSessionLogDir(id, registryEnv), "profile")),
+    ).toBe(false);
+    expect(
+      record?.browser === undefined
+        ? false
+        : isPidAlive(record.browser.browserPid),
+    ).toBe(false);
+    expect(
+      record?.desktop?.xvfbPid === undefined
+        ? false
+        : isPidAlive(record.desktop.xvfbPid),
     ).toBe(false);
   }, TEST_TIMEOUT_MS);
 

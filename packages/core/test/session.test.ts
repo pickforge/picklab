@@ -338,6 +338,56 @@ describe("session registry", () => {
     }
   });
 
+  it("requires the recorded Xvfb identity for desktop liveness", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const pid = helper.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const identity = readProcessIdentity(pid);
+      if (identity === undefined) {
+        throw new Error("could not read child identity");
+      }
+      const live = await createSession(
+        {
+          type: "desktop",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":119",
+            xvfbPid: pid,
+            xvfbStartTimeTicks: identity.startTicks,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(live)).toBe(true);
+      if (live.desktop === undefined) {
+        throw new Error("desktop record lost its desktop leg");
+      }
+
+      const reused = await updateSession(
+        live.id,
+        {
+          desktop: {
+            ...live.desktop,
+            xvfbStartTimeTicks: identity.startTicks + 1,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(reused)).toBe(false);
+    } finally {
+      await stopPid(pid, { timeoutMs: 1000 });
+      await waitForExit(helper);
+    }
+  });
+
   it("treats a browser session as alive only when the recorded start identity matches", async () => {
     const helper = spawn(
       process.execPath,
@@ -348,6 +398,11 @@ describe("session registry", () => {
     if (pid === undefined) {
       throw new Error("child process did not expose a pid");
     }
+    const displayNumber = 30_000 + (pid % 10_000);
+    const display = `:${displayNumber}`;
+    const displaySocket = `/tmp/.X11-unix/X${displayNumber}`;
+    fs.mkdirSync(path.dirname(displaySocket), { recursive: true });
+    fs.writeFileSync(displaySocket, "");
     try {
       const identity = readProcessIdentity(pid);
       if (identity === undefined) {
@@ -363,7 +418,7 @@ describe("session registry", () => {
             projectDir: "/proj",
             status: "running",
             desktop: {
-              display: ":120",
+              display,
               xvfbPid,
               xvfbStartTimeTicks: identity.startTicks,
             },
@@ -388,10 +443,91 @@ describe("session registry", () => {
 
       const deadDisplay = await makeBrowser(identity.startTicks, 4_194_307);
       expect(isSessionProcessAlive(deadDisplay)).toBe(false);
+
+      fs.rmSync(displaySocket, { force: true });
+      const missingDisplay = await makeBrowser(identity.startTicks);
+      expect(isSessionProcessAlive(missingDisplay)).toBe(false);
     } finally {
+      fs.rmSync(displaySocket, { force: true });
       if (isPidAlive(pid)) {
         await stopPid(pid, { timeoutMs: 1000 });
         await waitForExit(helper);
+      }
+    }
+  });
+
+  it("default reaper removes a browser session whose display socket is missing", async () => {
+    const browser = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    const xvfb = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    if (browser.pid === undefined || xvfb.pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const browserIdentity = readProcessIdentity(browser.pid);
+      const xvfbIdentity = readProcessIdentity(xvfb.pid);
+      if (browserIdentity === undefined || xvfbIdentity === undefined) {
+        throw new Error("could not read process identity");
+      }
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":39999",
+            xvfbPid: xvfb.pid,
+            xvfbStartTimeTicks: xvfbIdentity.startTicks,
+          },
+          browser: {
+            browserPid: browser.pid,
+            browserStartTimeTicks: browserIdentity.startTicks,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir: path.join(home, "sessions", "placeholder", "profile"),
+          },
+        },
+        env,
+      );
+      if (stale.browser === undefined) {
+        throw new Error("browser record lost its browser leg");
+      }
+      const sessionDir = path.join(home, "sessions", stale.id);
+      const profileDir = path.join(sessionDir, "profile");
+      await fs.promises.mkdir(profileDir, { recursive: true });
+      await updateSession(
+        stale.id,
+        {
+          browser: {
+            ...stale.browser,
+            profileDir,
+          },
+        },
+        env,
+      );
+
+      expect(
+        (await reapDeadRunningSessions(env)).map((record) => record.id),
+      ).toEqual([stale.id]);
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      expect(isPidAlive(browser.pid)).toBe(false);
+      expect(isPidAlive(xvfb.pid)).toBe(false);
+    } finally {
+      for (const child of [browser, xvfb]) {
+        if (child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // group already gone
+          }
+        }
       }
     }
   });
