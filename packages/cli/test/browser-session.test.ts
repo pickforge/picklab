@@ -226,6 +226,50 @@ describe.skipIf(!hasXvfb)("built CLI browser lifecycle", () => {
     },
     60_000,
   );
+
+  it(
+    "relays the exact upstream DevTools MCP tool catalog over the built CLI",
+    async () => {
+      const created = parseJson(
+        await runCli([
+          "session",
+          "create",
+          "--type",
+          "browser",
+          "--json",
+        ]),
+      );
+      expect(created.ok).toBe(true);
+
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [cliPath, "browser", "devtools-mcp"],
+        cwd: projectDir,
+        env,
+        stderr: "pipe",
+      });
+      const client = new Client({
+        name: "picklab-devtools-relay-smoke",
+        version: "0.0.0",
+      });
+      await client.connect(transport);
+      try {
+        const tools = await client.listTools();
+        const names = tools.tools.map((tool) => tool.name);
+        expect(names).toEqual(
+          expect.arrayContaining([
+            "navigate_page",
+            "take_snapshot",
+            "list_console_messages",
+            "list_network_requests",
+          ]),
+        );
+      } finally {
+        await client.close();
+      }
+    },
+    60_000,
+  );
 });
 
 describe.skipIf(!hasXvfb)("built MCP browser lifecycle", () => {

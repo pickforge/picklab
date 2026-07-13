@@ -110,7 +110,13 @@ describe("picklab agents list", () => {
     fs.writeFileSync(
       configPath,
       JSON.stringify({
-        mcpServers: { picklab: { command: "picklab", args: ["mcp", "serve"] } },
+        mcpServers: {
+          picklab: { command: "picklab", args: ["mcp", "serve"] },
+          "picklab-browser": {
+            command: "picklab",
+            args: ["browser", "devtools-mcp"],
+          },
+        },
       }),
     );
     const result = await runCli(
@@ -283,13 +289,17 @@ describe("picklab agents link claude-code (claude binary absent)", () => {
       command: "picklab",
       args: ["mcp", "serve"],
     });
+    expect(config.mcpServers["picklab-browser"]).toEqual({
+      command: "picklab",
+      args: ["browser", "devtools-mcp"],
+    });
     expect(backupsIn(home)).toHaveLength(1);
   });
 });
 
 describe("picklab agents link claude-code (claude binary on PATH)", () => {
   function installFakeClaude(
-    script = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\n',
+    script = '#!/bin/sh\nprintf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"\n',
   ): { binDir: string; argsFile: string } {
     const binDir = path.join(tmpDir, "fake-bin");
     fs.mkdirSync(binDir, { recursive: true });
@@ -327,6 +337,15 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
       "picklab",
       "mcp",
       "serve",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab-browser",
+      "--",
+      "picklab",
+      "browser",
+      "devtools-mcp",
     ]);
     expect(fs.existsSync(path.join(home, ".claude.json"))).toBe(false);
   });
@@ -340,6 +359,10 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
       numStartups: 1,
       mcpServers: {
         picklab: { command: "picklab", args: ["mcp", "serve"] },
+        "picklab-browser": {
+          command: "picklab",
+          args: ["browser", "devtools-mcp"],
+        },
       },
     });
     fs.writeFileSync(configPath, original);
@@ -358,13 +381,13 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
     expect(fs.existsSync(argsFile)).toBe(false);
   });
 
-  it("repairs a stale install via claude mcp remove and add", async () => {
+  it("updates a stale install while adding both servers", async () => {
     const { binDir, argsFile } = installFakeClaude(
       [
         "#!/bin/sh",
         'printf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"',
         'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
-        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
+        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]},"picklab-browser":{"command":"picklab","args":["browser","devtools-mcp"]}}}\' > "${HOME}/.claude.json"',
         "fi",
       ].join("\n"),
     );
@@ -391,14 +414,13 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
       mcpServers: {
         picklab: { command: "picklab", args: ["mcp", "serve"] },
+        "picklab-browser": {
+          command: "picklab",
+          args: ["browser", "devtools-mcp"],
+        },
       },
     });
     expect(recordedArgs(argsFile)).toEqual([
-      "mcp",
-      "remove",
-      "--scope",
-      "user",
-      "picklab",
       "mcp",
       "add",
       "--scope",
@@ -408,6 +430,15 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
       "picklab",
       "mcp",
       "serve",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab-browser",
+      "--",
+      "picklab",
+      "browser",
+      "devtools-mcp",
     ]);
   });
 
@@ -423,7 +454,7 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      'error: "claude mcp add" failed (exit code 1): network unavailable',
+      'error: "claude mcp add" failed for picklab (exit code 1): network unavailable',
     );
   });
 
@@ -442,6 +473,11 @@ describe("picklab agents link claude-code (claude binary on PATH)", () => {
       "--scope",
       "user",
       "picklab",
+      "mcp",
+      "remove",
+      "--scope",
+      "user",
+      "picklab-browser",
     ]);
   });
 });

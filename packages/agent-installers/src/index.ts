@@ -21,7 +21,10 @@ export {
 
 export {
   MCP_SERVER_NAME,
+  BROWSER_MCP_SERVER_NAME,
+  browserMcpServerEntry,
   mcpServerEntry,
+  picklabMcpServerEntries,
   renderJsonSnippet,
   renderTomlSnippet,
   SHARED_SNIPPET_BASENAMES,

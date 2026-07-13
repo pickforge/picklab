@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  browserMcpServerEntry,
   mcpServerEntry,
   renderJsonSnippet,
   renderTomlSnippet,
@@ -26,6 +27,12 @@ describe("mcpServerEntry", () => {
       args: ["mcp", "serve"],
     });
   });
+  it("uses a static project-local browser relay command", () => {
+    expect(browserMcpServerEntry()).toEqual({
+      command: "picklab",
+      args: ["browser", "devtools-mcp"],
+    });
+  });
 });
 
 describe("renderJsonSnippet", () => {
@@ -35,6 +42,10 @@ describe("renderJsonSnippet", () => {
         {
           mcpServers: {
             picklab: { command: "picklab", args: ["mcp", "serve"] },
+            "picklab-browser": {
+              command: "picklab",
+              args: ["browser", "devtools-mcp"],
+            },
           },
         },
         null,
@@ -54,7 +65,9 @@ describe("renderJsonSnippet", () => {
 describe("renderTomlSnippet", () => {
   it("renders the exact TOML snippet", () => {
     expect(renderTomlSnippet()).toBe(
-      '[mcp_servers.picklab]\ncommand = "picklab"\nargs = ["mcp", "serve"]\n',
+      '[mcp_servers.picklab]\ncommand = "picklab"\nargs = ["mcp", "serve"]\n' +
+        '[mcp_servers.picklab-browser]\ncommand = "picklab"\n' +
+        'args = ["browser", "devtools-mcp"]\n',
     );
   });
 });

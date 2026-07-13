@@ -32,21 +32,30 @@ resolve_runtime() {
 
 check_node_version() {
   if ! command -v node >/dev/null 2>&1; then
-    echo "error: PickLab itself runs on Node.js >= 20, but node is not on PATH." >&2
-    echo "Install Node.js 20+ (with or without bun) and re-run this script." >&2
+    echo "error: PickLab needs Node.js ^20.19, ^22.12, or >=23, but node is not on PATH." >&2
+    echo "Install a supported Node.js version (with or without bun) and re-run this script." >&2
     exit 1
   fi
   node_version="$(node -v)"
   node_major="$(printf '%s' "${node_version}" | sed 's/^v//' | cut -d. -f1)"
-  case "${node_major}" in
-    ''|*[!0-9]*)
+  node_minor="$(printf '%s' "${node_version}" | sed 's/^v//' | cut -d. -f2)"
+  case "${node_major}.${node_minor}" in
+    *[!0-9.]*|.*|*.)
       echo "error: could not parse the Node.js version from \"${node_version}\"" >&2
       exit 1
       ;;
   esac
-  if [ "${node_major}" -lt 20 ]; then
-    echo "error: PickLab itself runs on Node.js >= 20 (found ${node_version})." >&2
-    echo "Install Node.js 20+ (with or without bun) and re-run this script." >&2
+  supported=0
+  if [ "${node_major}" -eq 20 ] && [ "${node_minor}" -ge 19 ]; then
+    supported=1
+  elif [ "${node_major}" -eq 22 ] && [ "${node_minor}" -ge 12 ]; then
+    supported=1
+  elif [ "${node_major}" -ge 23 ]; then
+    supported=1
+  fi
+  if [ "${supported}" -ne 1 ]; then
+    echo "error: PickLab needs Node.js ^20.19, ^22.12, or >=23 (found ${node_version})." >&2
+    echo "Install a supported Node.js version (with or without bun) and re-run this script." >&2
     exit 1
   fi
 }

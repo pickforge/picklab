@@ -25,6 +25,7 @@ import {
   runAgentsList,
   runAgentsUnlink,
 } from "./commands/agents.js";
+import { runBrowserDevtoolsMcp } from "./commands/browser.js";
 import {
   runDesktopClick,
   runDesktopDoubleClick,
@@ -215,6 +216,18 @@ export function buildProgram(): Command {
   ).action(async (opts) => {
     process.exitCode = await runWatch(opts);
   });
+
+  const browser = program
+    .command("browser")
+    .description("Connect agent browser tooling to the active PickLab browser");
+
+  browser
+    .command("devtools-mcp")
+    .description("Relay Chrome DevTools MCP over stdio")
+    .option("--project-dir <dir>", "project directory (defaults to cwd)")
+    .action(async (opts) => {
+      process.exitCode = await runBrowserDevtoolsMcp(opts);
+    });
 
   const desktop = program
     .command("desktop")

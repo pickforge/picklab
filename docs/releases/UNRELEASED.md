@@ -41,6 +41,10 @@ then reset this file.
   created session, rejects explicit viewer plus writable VNC, and suppresses
   auto-viewing for writable VNC. MCP status and session resources report
   viewer endpoint/readiness but never launch a host GUI.
+- New static `picklab-browser` agent entry runs `picklab browser devtools-mcp`.
+  It discovers exactly one live browser session for the current project on
+  every connection, so browser recreation needs no endpoint config changes.
+  The command does not accept a browser URL or websocket endpoint.
 
 ## Internal/release changes
 
@@ -68,6 +72,23 @@ then reset this file.
   environment, PID-identity process-group teardown, status, retryable
   partial-failure cleanup, and concurrent-session safety. The DevTools websocket
   path/GUID is never persisted.
+- Added an exact direct dependency on `chrome-devtools-mcp@1.5.0`. PickLab
+  validates its installed manifest name, version, declared bin, and confined
+  real path, then starts that bin directly with Node and a derived loopback
+  `--browser-url`; runtime `npx`, upstream update checks, and usage statistics
+  are disabled.
+- Added a framing-aware bidirectional NDJSON relay with protocol validation,
+  arbitrary chunk buffering, exact raw-byte preservation when hooks do not
+  transform a message, request/response hooks for follow-up coordination,
+  backpressure, EOF/signal forwarding, bounded hung-child cleanup, exit
+  propagation, and redacted stderr-only diagnostics. Pending JSON-RPC records
+  are capped at 16 MiB and diagnostic lines at 64 KiB. The implementation uses
+  a local typed deferred helper rather than newer runtime Promise APIs, keeping
+  the upstream-compatible Node 20.19 floor.
+- CI and release workflows pin Node `20.19.0`, the advertised minimum that
+  exercises the relay and upstream package contract.
+- The canonical installer enforces the same supported Node branches:
+  `^20.19`, `^22.12`, or `>=23`.
 - CI installs a supported browser and requires the real headed-Chrome integration
   suite to execute rather than silently skip.
 - SECURITY.md documents the residual same-UID and local-process risks.
@@ -125,10 +146,26 @@ then reset this file.
 - Real x11vnc + TigerVNC proof attached a host viewer to the isolated display,
   confirmed server-enforced `-viewonly`, and verified that closing the viewer
   left the PickLab session, VNC server, and Xvfb running.
+- Relay slice: `bun run typecheck` and `bun run build` pass. The final focused
+  browser relay, CLI, and installer command passed 17 files / 161 tests. After
+  rebasing onto live watch and applying the final review fix, the integrated
+  full suite passes 70 files / 780 tests with 2 skipped.
+  Coverage includes exact package/bin/spawn validation, bounded NDJSON and
+  diagnostic fragmentation, transformations, protocol fail-closed behavior,
+  IDs/order/cancellation, backpressure, clean/forced exit races, stubborn
+  child-process errors with held stdin and verified SIGKILL cleanup, genuine
+  spawn failures with no `exit` event, EOF/signals/hung cleanup, real open-stdin
+  CLI exit 137 after escalation,
+  stderr purity, session scoping, static agent entries, installer Node-version
+  boundaries, required-browser CI prerequisite enforcement, and operation
+  without native `Promise.withResolvers`.
+- A real headed-Chrome + exact upstream `chrome-devtools-mcp@1.5.0` smoke
+  navigated a local page and verified accessibility snapshot, console, and
+  network metadata through the built `picklab browser devtools-mcp` command.
+  The existing real-Chrome lifecycle integration also passed (3 tests).
 
 ### Not tested yet
 
-- Installer or updater flow.
 - Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
@@ -136,4 +173,4 @@ then reset this file.
 
 ### Release blockers
 
-- None known for the live watch slice.
+- None known for the DevTools relay slice.

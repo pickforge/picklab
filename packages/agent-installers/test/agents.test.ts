@@ -48,7 +48,7 @@ function recordedArgs(env: Record<string, string>): string[] {
     .filter((line) => line !== "");
 }
 
-const RECORDING_CLAUDE = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "${CLAUDE_ARGS_FILE}"\n';
+const RECORDING_CLAUDE = '#!/bin/sh\nprintf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"\n';
 
 describe("default config paths", () => {
   it("derive from HOME", () => {
@@ -104,6 +104,10 @@ describe("linkClaudeCode without the claude binary", () => {
       command: "picklab",
       args: ["mcp", "serve"],
     });
+    expect(config.mcpServers["picklab-browser"]).toEqual({
+      command: "picklab",
+      args: ["browser", "devtools-mcp"],
+    });
     expect(await claudeCodeIsRegistered(configPath)).toBe(true);
 
     const removed = await unlinkClaudeCode(configPath, cleanEnv);
@@ -139,6 +143,15 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
       "picklab",
       "mcp",
       "serve",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab-browser",
+      "--",
+      "picklab",
+      "browser",
+      "devtools-mcp",
     ]);
     expect(fs.existsSync(configPath)).toBe(false);
   });
@@ -152,6 +165,10 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
       numStartups: 2,
       mcpServers: {
         picklab: { command: "picklab", args: ["mcp", "serve"] },
+        "picklab-browser": {
+          command: "picklab",
+          args: ["browser", "devtools-mcp"],
+        },
       },
     });
     fs.writeFileSync(configPath, original);
@@ -163,13 +180,13 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     expect(fs.existsSync(env.CLAUDE_ARGS_FILE)).toBe(false);
   });
 
-  it("repairs a stale ~/.claude.json picklab entry via remove and add", async () => {
+  it("updates a stale ~/.claude.json while adding both servers", async () => {
     const env = installFakeClaude(
       [
         "#!/bin/sh",
         'printf \'%s\\n\' "$@" >> "${CLAUDE_ARGS_FILE}"',
         'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
-        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
+        '  printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]},"picklab-browser":{"command":"picklab","args":["browser","devtools-mcp"]}}}\' > "${HOME}/.claude.json"',
         "fi",
       ].join("\n"),
     );
@@ -189,11 +206,6 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     expect(await claudeCodeIsRegistered(configPath)).toBe(true);
     expect(recordedArgs(env)).toEqual([
       "mcp",
-      "remove",
-      "--scope",
-      "user",
-      "picklab",
-      "mcp",
       "add",
       "--scope",
       "user",
@@ -202,6 +214,15 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
       "picklab",
       "mcp",
       "serve",
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "picklab-browser",
+      "--",
+      "picklab",
+      "browser",
+      "devtools-mcp",
     ]);
   });
 
@@ -215,6 +236,11 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
       "--scope",
       "user",
       "picklab",
+      "mcp",
+      "remove",
+      "--scope",
+      "user",
+      "picklab-browser",
     ]);
   });
 
@@ -222,8 +248,8 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     const env = installFakeClaude(
       [
         "#!/bin/sh",
-        'printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]}}}\' > "${HOME}/.claude.json"',
-        'echo "MCP server picklab already exists in user config." >&2',
+        'printf \'%s\\n\' \'{"mcpServers":{"picklab":{"command":"picklab","args":["mcp","serve"]},"picklab-browser":{"command":"picklab","args":["browser","devtools-mcp"]}}}\' > "${HOME}/.claude.json"',
+        'echo "MCP server ${5:-unknown} already exists in user config." >&2',
         "exit 1",
       ].join("\n"),
     );
@@ -236,7 +262,7 @@ describe("linkClaudeCode with the claude binary on PATH", () => {
     const env = installFakeClaude('#!/bin/sh\necho "boom" >&2\nexit 1\n');
     await expect(
       linkClaudeCode(path.join(home, ".claude.json"), env),
-    ).rejects.toThrow('"claude mcp add" failed (exit code 1): boom');
+    ).rejects.toThrow('"claude mcp add" failed for picklab (exit code 1): boom');
   });
 
   it("treats a not-found claude mcp remove as a no-op", async () => {

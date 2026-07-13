@@ -26,6 +26,8 @@ afterEach(() => {
 const EXPECTED_BLOCK =
   `${TOML_MARKER_BEGIN}\n` +
   '[mcp_servers.picklab]\ncommand = "picklab"\nargs = ["mcp", "serve"]\n' +
+  '[mcp_servers.picklab-browser]\ncommand = "picklab"\n' +
+  'args = ["browser", "devtools-mcp"]\n' +
   `${TOML_MARKER_END}\n`;
 
 function backupsIn(dir: string): string[] {
@@ -141,7 +143,7 @@ describe("inspectTomlFile / tomlFileHasMcpServer", () => {
         '[mcp_servers.picklab]\ncommand = "old-picklab"\nargs = ["mcp", "serve"]\n' +
         `${TOML_MARKER_END}\n`,
     );
-    expect(await tomlFileHasMcpServer(file)).toBe(true);
+    expect(await tomlFileHasMcpServer(file)).toBe(false);
     expect(
       await tomlFileHasMcpServer(file, {
         command: "picklab",

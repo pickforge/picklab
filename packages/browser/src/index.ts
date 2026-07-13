@@ -39,3 +39,40 @@ export {
   type BrowserSessionStatus,
   type CreateBrowserSessionOptions,
 } from "./session.js";
+
+export { createDeferred, type Deferred } from "./deferred.js";
+
+export {
+  JsonRpcNdjsonBuffer,
+  DEFAULT_MAX_JSON_RPC_RECORD_BYTES,
+  JsonRpcProtocolError,
+  assertJsonRpcMessage,
+  pumpJsonRpcNdjson,
+  serializeJsonRpcMessage,
+  writeWithBackpressure,
+  type JsonRpcHook,
+  type JsonRpcId,
+  type JsonRpcMessage,
+  type JsonRpcRecord,
+  type PumpJsonRpcNdjsonOptions,
+} from "./ndjson.js";
+
+export {
+  CHROME_DEVTOOLS_MCP_BIN,
+  CHROME_DEVTOOLS_MCP_PACKAGE,
+  CHROME_DEVTOOLS_MCP_VERSION,
+  DEFAULT_MAX_DIAGNOSTIC_LINE_BYTES,
+  resolveDevtoolsMcpExecutable,
+  resolveLiveBrowserSession,
+  runDevtoolsMcpRelay,
+  runProjectDevtoolsMcp,
+  type DevtoolsMcpExecutable,
+  type DevtoolsSpawn,
+  type LiveBrowserSession,
+  type RelayExit,
+  type RelayHooks,
+  type RelaySignalSource,
+  type ResolveLiveBrowserSessionOptions,
+  type RunDevtoolsMcpRelayOptions,
+  type RunProjectDevtoolsMcpOptions,
+} from "./devtools-mcp.js";

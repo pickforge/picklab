@@ -6,6 +6,7 @@ import {
   jsonFileHasMcpServer,
   jsonFileMcpServerState,
   mergeMcpServerIntoJsonFile,
+  picklabMcpServerEntries,
   removeMcpServerFromJsonFile,
 } from "../src/index.js";
 
@@ -42,7 +43,7 @@ describe("mergeMcpServerIntoJsonFile", () => {
     expect(result.changed).toBe(true);
     expect(result.backupPath).toBeUndefined();
     expect(readJson(nested)).toEqual({
-      mcpServers: { picklab: { command: "picklab", args: ["mcp", "serve"] } },
+      mcpServers: picklabMcpServerEntries(),
     });
   });
 
@@ -71,6 +72,10 @@ describe("mergeMcpServerIntoJsonFile", () => {
       mcpServers: {
         other: { command: "other-mcp", args: [] },
         picklab: { command: "picklab", args: ["mcp", "serve"] },
+        "picklab-browser": {
+          command: "picklab",
+          args: ["browser", "devtools-mcp"],
+        },
       },
     });
   });
@@ -105,13 +110,17 @@ describe("mergeMcpServerIntoJsonFile", () => {
 });
 
 describe("removeMcpServerFromJsonFile", () => {
-  it("removes only the picklab entry and backs up first", async () => {
+  it("removes both PickLab entries and backs up first", async () => {
     fs.writeFileSync(
       file,
       JSON.stringify({
         mcpServers: {
           other: { command: "other-mcp", args: [] },
           picklab: { command: "picklab", args: ["mcp", "serve"] },
+          "picklab-browser": {
+            command: "picklab",
+            args: ["browser", "devtools-mcp"],
+          },
         },
       }),
     );
@@ -135,7 +144,13 @@ describe("removeMcpServerFromJsonFile", () => {
       file,
       JSON.stringify({
         theme: "dark",
-        mcpServers: { picklab: { command: "picklab", args: ["mcp", "serve"] } },
+        mcpServers: {
+          picklab: { command: "picklab", args: ["mcp", "serve"] },
+          "picklab-browser": {
+            command: "picklab",
+            args: ["browser", "devtools-mcp"],
+          },
+        },
       }),
     );
     const result = await removeMcpServerFromJsonFile(file);
@@ -179,11 +194,15 @@ describe("jsonFileHasMcpServer / jsonFileMcpServerState", () => {
       JSON.stringify({
         mcpServers: {
           picklab: { command: "old-picklab", args: ["mcp", "serve"] },
+          "picklab-browser": {
+            command: "picklab",
+            args: ["browser", "devtools-mcp"],
+          },
         },
       }),
     );
     const expected = { command: "picklab", args: ["mcp", "serve"] };
-    expect(await jsonFileMcpServerState(file)).toBe(true);
+    expect(await jsonFileMcpServerState(file)).toBe(false);
     expect(await jsonFileMcpServerState(file, { expected })).toBe(false);
     expect(await jsonFileHasMcpServer(file, { expected })).toBe(false);
   });

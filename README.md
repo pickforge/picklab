@@ -40,6 +40,8 @@ bun add -g @pickforge/picklab
 
 This ships two binaries: `picklab` (CLI) and `picklab-mcp` (MCP stdio server). The installer never uses sudo.
 
+The Chrome DevTools relay requires Node.js `^20.19.0`, `^22.12.0`, or `>=23.0.0`.
+
 ## Quickstart
 
 ```sh
@@ -62,6 +64,8 @@ Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manif
 ### Concurrent sessions
 
 Each session gets its own isolated display or emulator, so several agents and projects can run labs side by side. When a command or tool is called without an explicit session id, the default resolves per project: only running sessions created for the same project directory are considered. Pass `session` ids (CLI: `--session <id>`) to target a specific lab, including one belonging to another project.
+
+`picklab browser devtools-mcp` is intentionally stricter: it always resolves exactly one live browser session for the current project. It does not accept a session id, browser URL, or WebSocket endpoint.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/pickforge/picklab/main/assets/brand/picklab-run-lab-mock.svg" alt="PICKLAB · RUN LAB — desktop session, Android emulator, live screenshots, logs, and agent terminal" width="900">
@@ -89,10 +93,16 @@ For any other agent, add the stdio server yourself:
     "picklab": {
       "command": "picklab",
       "args": ["mcp", "serve"]
+    },
+    "picklab-browser": {
+      "command": "picklab",
+      "args": ["browser", "devtools-mcp"]
     }
   }
 }
 ```
+
+`picklab-browser` is static. Each invocation discovers the one live browser session for the agent's project and derives its loopback CDP URL in memory, so recreating a session never requires an agent config edit. The relay runs the bundled, exact `chrome-devtools-mcp@1.5.0`; it does not use `npx` or connect to a personal browser.
 
 Custom agents can be stored under `~/.picklab/agents`:
 
@@ -111,9 +121,10 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 | Android | `android start`, `android install-apk <apk>`, `android launch-app <pkg>`, `android screenshot`, `android tap <x> <y>`, `android type <text>`, `android back`, `android home`, `android ui-tree`, `android logcat`, `android adb [args...]` |
 | Artifacts | `artifacts list`, `artifacts open <runId>`, `artifacts report [runId]` |
 | Agents | `agents list`, `agents install <agent>`, `agents link <agent>`, `agents unlink <agent>`, `agents doctor`, `agents add` |
+| Browser | `browser devtools-mcp` |
 | MCP | `mcp serve` |
 
-Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedicated AVD), `desktop+android`. Most commands accept `--json` for machine-readable output and `--project-dir` to target another project.
+Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedicated AVD), `desktop+android`, and `browser` (isolated headed Chrome with loopback CDP). Most commands accept `--json` for machine-readable output and `--project-dir` to target another project.
 
 `session create --vnc` is read-only. When a human must enter a password, API key, or OTP directly into the lab app, `--vnc-control` creates an explicitly writable VNC session instead. Pause agent input while using it; coordinated human takeover is tracked separately.
 
@@ -184,6 +195,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 | `packages/core` | Config, sessions, artifacts, manifests, process supervision |
 | `packages/desktop-linux` | Xvfb, VNC, window, input, and screenshot automation |
 | `packages/android` | AVD, emulator, ADB, UIAutomator, and logcat orchestration |
+| `packages/browser` | Isolated Chrome sessions and the session-aware DevTools MCP relay |
 | `packages/mcp-server` | MCP tools, resources, and prompts |
 | `packages/agent-installers` | Codex, Claude Code, Cursor, and custom agent registration |
 | `packages/cli` | The `picklab` and `picklab-mcp` binaries |
@@ -192,6 +204,8 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 
 - MCP tools never invoke sudo. Privileged provisioning happens only through the CLI (`picklab setup lab-user`, or `init` with explicit `--create-lab-user`), with explicit consent (`--yes` or a prompt).
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
+- The DevTools relay validates the installed upstream package name, exact version, declared bin, and confined real path before spawning Node with an argument array. Its browser URL is always derived as `http://127.0.0.1:<session-cdp-port>`.
+- Relay stdout is protocol-only. A pending JSON-RPC record is capped at 16 MiB. Upstream diagnostic lines are capped at 64 KiB, redacted, and forwarded only to stderr; an over-limit line is dropped with a safe notice. Upstream update checks and usage statistics are disabled.
 - VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
 - PickLab provisions a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`) so lab workloads do not borrow your personal resources. Running session processes under the lab user is planned post-MVP.
