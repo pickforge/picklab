@@ -112,7 +112,7 @@ then reset this file.
   profile, session logs, and the session record were removed. Persisted Chrome
   logs contained no DevTools websocket capability URL.
 - `bun run typecheck` and `bun run build` pass after rebasing watch onto the
-  browser lifecycle.
+  browser lifecycle. The full suite passes 65 files / 737 tests with 2 skipped.
 - Focused browser/core/desktop/CLI/MCP/security validation passes 232 tests in
   18 files. Coverage includes browser create/status/destroy, lazy VNC teardown
   after verified Chrome-group termination, deterministic ensure/destroy race
@@ -122,6 +122,9 @@ then reset this file.
   ownership, asynchronous viewer launch, explicit nonzero/signal failure,
   attach-failure reporting, JSON stdout isolation, browser viewer/status
   integration, MCP status-only behavior, and secret redaction.
+- Real x11vnc + TigerVNC proof attached a host viewer to the isolated display,
+  confirmed server-enforced `-viewonly`, and verified that closing the viewer
+  left the PickLab session, VNC server, and Xvfb running.
 
 ### Not tested yet
 
@@ -129,9 +132,8 @@ then reset this file.
 - Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
-- Human-observed attach/close recording against a real host VNC client.
 - Live remote SSH-tunnel smoke test.
 
 ### Release blockers
 
-- None known for this internal lifecycle slice.
+- None known for the live watch slice.
