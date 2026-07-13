@@ -131,6 +131,16 @@ then reset this file.
   existing one-shot screenshot run. Session destroy finalizes and releases the
   run, and dead-session reaping finalizes it as failed. Evidence failures are
   redacted, stderr-only, and never change the underlying tool result.
+- The browser DevTools relay now correlates `tools/call` requests and responses
+  into the same session evidence run. It persists only allowlisted target
+  metadata, typed-value lengths/types, bounded sanitized errors, failed network
+  request metadata (method, origin/path, status/type/timing/error), and
+  warning/error console summaries; never request/response bodies, headers,
+  query strings, userinfo, raw arguments, evaluated code, or typed text.
+  Explicit inline PNG screenshot results are copied into the run and associated
+  with their action. Pending calls are closed on relay exit, diagnostic fan-out
+  is bounded, `evidence.enabled: false` is honored, and all evidence failures
+  remain redacted and relay-transparent.
 - Hosted CI now installs `x11vnc` alongside the other desktop test
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
@@ -288,6 +298,15 @@ then reset this file.
   disabled/no-session behavior, evidence-write failure isolation, active-run
   reuse, explicit/shared session finalization, in-flight claim coordination,
   and dead-session reaping. Two independent changed-HEAD reviews are clean.
+- DevTools evidence instrumentation: `bun run typecheck` and `bun run build`
+  pass; the full and coverage suites pass 76 files / 942 passed / 2 skipped
+  with all global thresholds met. Focused tests cover request/response
+  correlation, strict tool/target allowlists, typed/form privacy, URL stripping,
+  fail-closed JSON-RPC and tool-result errors, pinned-directory inline PNG
+  association and cap cleanup, failed-network and severity-only console
+  diagnostics, malformed/unmatched traffic, pending-call closure, disabled
+  configuration, evidence-write failure isolation, and bounded diagnostics.
+  Two independent changed-HEAD reviews are clean.
 
 ### Not tested yet
 
