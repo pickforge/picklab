@@ -20,6 +20,7 @@ export type SessionStatus = "starting" | "running" | "stopped" | "error";
 export interface DesktopSessionInfo {
   display: string;
   xvfbPid?: number;
+  xvfbStartTimeTicks?: number;
   vncPid?: number;
   vncPort?: number;
   vncViewOnly?: boolean;
@@ -222,10 +223,19 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
   }
   if (record.type === "browser") {
     const browser = record.browser;
-    const xvfbPid = record.desktop?.xvfbPid;
-    if (browser?.browserPid === undefined || xvfbPid === undefined) return false;
+    const desktop = record.desktop;
+    if (
+      browser?.browserPid === undefined ||
+      desktop?.xvfbPid === undefined ||
+      desktop.xvfbStartTimeTicks === undefined
+    ) {
+      return false;
+    }
     return (
-      isPidAlive(xvfbPid) &&
+      processIdentityMatches({
+        pid: desktop.xvfbPid,
+        startTicks: desktop.xvfbStartTimeTicks,
+      }) &&
       processIdentityMatches({
         pid: browser.browserPid,
         startTicks: browser.browserStartTimeTicks,
@@ -233,10 +243,18 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
     );
   }
 
-  const alive = [
-    record.desktop?.xvfbPid === undefined
+  const desktop = record.desktop;
+  const desktopAlive =
+    desktop?.xvfbPid === undefined
       ? false
-      : isPidAlive(record.desktop.xvfbPid),
+      : desktop.xvfbStartTimeTicks === undefined
+        ? isPidAlive(desktop.xvfbPid)
+        : processIdentityMatches({
+            pid: desktop.xvfbPid,
+            startTicks: desktop.xvfbStartTimeTicks,
+          });
+  const alive = [
+    desktopAlive,
     record.android?.emulatorPid === undefined
       ? false
       : isPidAlive(record.android.emulatorPid),
@@ -244,7 +262,7 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
   return alive.some(Boolean);
 }
 
-const REAPER_CLEANUP_PENDING = "reaperCleanupPending";
+export const REAPER_CLEANUP_PENDING_META_KEY = "reaperCleanupPending";
 
 export async function reapDeadRunningSessions(
   env: EnvLike = process.env,
@@ -254,7 +272,7 @@ export async function reapDeadRunningSessions(
   for (const record of await listSessions(env)) {
     const retryPending =
       record.status === "error" &&
-      record.meta?.[REAPER_CLEANUP_PENDING] === true;
+      record.meta?.[REAPER_CLEANUP_PENDING_META_KEY] === true;
     if (record.status !== "running" && !retryPending) continue;
     if (!retryPending && (await isAlive(record))) continue;
     if (!(await stopRecordedPids(record, env))) {
@@ -262,7 +280,10 @@ export async function reapDeadRunningSessions(
         record.id,
         {
           status: "error",
-          meta: { ...record.meta, [REAPER_CLEANUP_PENDING]: true },
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
         },
         env,
       ).catch(() => {});
@@ -275,7 +296,10 @@ export async function reapDeadRunningSessions(
         record.id,
         {
           status: "error",
-          meta: { ...record.meta, [REAPER_CLEANUP_PENDING]: true },
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
         },
         env,
       ).catch(() => {});
@@ -286,34 +310,40 @@ export async function reapDeadRunningSessions(
   return reaped;
 }
 
+async function stopRecordedGroup(
+  pid: number,
+  startTicks: number,
+): Promise<boolean> {
+  try {
+    const result = await stopProcessGroupVerified({ pid, startTicks });
+    return (
+      result.outcome === "terminated" || result.outcome === "already-dead"
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function stopRecordedPids(
   record: SessionRecord,
   env: EnvLike,
 ): Promise<boolean> {
   const browser = record.browser;
-  let browserGroupGone = browser === undefined;
-  if (browser !== undefined) {
-    try {
-      const result = await stopProcessGroupVerified({
-        pid: browser.browserPid,
-        startTicks: browser.browserStartTimeTicks,
-      });
-      browserGroupGone =
-        result.outcome === "terminated" || result.outcome === "already-dead";
-    } catch {
-      browserGroupGone = false;
-    }
-    if (!browserGroupGone) {
-      return false;
-    }
+  if (
+    browser !== undefined &&
+    !(await stopRecordedGroup(
+      browser.browserPid,
+      browser.browserStartTimeTicks,
+    ))
+  ) {
+    return false;
   }
 
+
   const pids = new Set(
-    [
-      record.desktop?.vncPid,
-      record.desktop?.xvfbPid,
-      record.android?.emulatorPid,
-    ].filter((pid): pid is number => pid !== undefined),
+    [record.desktop?.vncPid, record.android?.emulatorPid].filter(
+      (pid): pid is number => pid !== undefined,
+    ),
   );
   for (const pid of pids) {
     if (!isPidAlive(pid)) {
@@ -328,9 +358,27 @@ async function stopRecordedPids(
     }
   }
 
-  if (browser?.profileMode === "ephemeral") {
+  const desktop = record.desktop;
+  if (desktop?.xvfbPid !== undefined) {
+    if (desktop.xvfbStartTimeTicks === undefined) {
+      if (isPidAlive(desktop.xvfbPid)) return false;
+    } else if (
+      !(await stopRecordedGroup(
+        desktop.xvfbPid,
+        desktop.xvfbStartTimeTicks,
+      ))
+    ) {
+      return false;
+    }
+  }
+
+  const pendingBrowserCleanup =
+    record.type === "browser" &&
+    record.meta?.[REAPER_CLEANUP_PENDING_META_KEY] === true;
+  if (browser?.profileMode === "ephemeral" || pendingBrowserCleanup) {
     const sessionDir = path.join(sessionsDir(env), record.id);
-    if (!(await isProfileConfined(sessionDir, browser.profileDir))) {
+    const profileDir = browser?.profileDir ?? path.join(sessionDir, "profile");
+    if (!(await isProfileConfined(sessionDir, profileDir))) {
       return false;
     }
     try {

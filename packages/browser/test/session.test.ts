@@ -9,6 +9,8 @@ import {
   getSession,
   isPidAlive,
   listProcessGroupMembers,
+  reapDeadRunningSessions,
+  readProcessIdentity,
   stopPid,
   updateSession,
   type CreateSessionInput,
@@ -266,6 +268,41 @@ describe.skipIf(!hasXvfb)("getBrowserSessionStatus (fake binaries)", () => {
     }
   }, TEST_TIMEOUT_MS);
 
+  it("treats a missing display socket as dead and reaps it before the next create", async () => {
+    const first = await createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: spawnEnvFor("ready"),
+      cdpTimeoutMs: 5000,
+    });
+    let second: BrowserSessionHandle | undefined;
+    try {
+      const displayNumber = Number(first.display.slice(1));
+      fs.rmSync(`/tmp/.X11-unix/X${displayNumber}`, { force: true });
+
+      const status = await getBrowserSessionStatus(first.id, registryEnv);
+      expect(status.xvfbAlive).toBe(true);
+      expect(status.browserAlive).toBe(true);
+      expect(status.displayAlive).toBe(false);
+      expect(status.alive).toBe(false);
+
+      second = await createBrowserSession({
+        projectDir,
+        registryEnv,
+        env: spawnEnvFor("ready"),
+        cdpTimeoutMs: 5000,
+      });
+      expect(await getSession(first.id, registryEnv)).toBeUndefined();
+      expect(isPidAlive(first.xvfbPid)).toBe(false);
+      expect(isPidAlive(first.browserPid)).toBe(false);
+    } finally {
+      await destroyBrowserSession(first.id, registryEnv).catch(() => {});
+      if (second !== undefined) {
+        await destroyBrowserSession(second.id, registryEnv).catch(() => {});
+      }
+    }
+  }, TEST_TIMEOUT_MS);
+
   it("throws for an unknown session", async () => {
     await expect(
       getBrowserSessionStatus("brow-ffffffff", registryEnv),
@@ -354,12 +391,17 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
       env: { PATH: "/usr/bin:/bin" },
       displayStart: 300,
     });
+    const xvfbIdentity = readProcessIdentity(xvfb.pid);
+    if (xvfbIdentity === undefined) {
+      throw new Error("Xvfb identity was unavailable");
+    }
     await updateSession(
       record.id,
       {
         desktop: {
           display: xvfb.display,
           xvfbPid: xvfb.pid,
+          xvfbStartTimeTicks: xvfbIdentity.startTicks,
           width: xvfb.width,
           height: xvfb.height,
         },
@@ -493,6 +535,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
 
     const failed = await getSession(id, registryEnv);
     expect(failed?.status).toBe("error");
+    expect(failed?.meta?.reaperCleanupPending).toBe(true);
     const failedXvfbPid = failed?.desktop?.xvfbPid;
     if (failedXvfbPid === undefined) {
       throw new Error("Failed create did not persist the Xvfb pid");
@@ -512,7 +555,9 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
 
     await stopPid(childPid, { timeoutMs: 1000 });
-    await destroyBrowserSession(id, registryEnv);
+    expect(
+      (await reapDeadRunningSessions(registryEnv)).map((record) => record.id),
+    ).toEqual([id]);
     expect(await getSession(id, registryEnv)).toBeUndefined();
     expect(isPidAlive(failedXvfbPid)).toBe(false);
     expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);

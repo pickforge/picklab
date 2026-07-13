@@ -82,12 +82,14 @@ then reset this file.
   teardown and fail-closed handling for an unconfirmed browser identity.
 - `bun run typecheck`
 - `bun run build` for all packages.
-- Focused browser/core/CLI/MCP/security tests: 133 passed.
+- Focused browser/core/desktop/CLI/MCP/security tests: 201 passed / 2 skipped.
 - Fake-Chrome lifecycle tests cover private runtime modes, verified CDP HTTP
-  readiness, create/status/destroy, concurrent displays, crash-after-port,
-  crash/stall/cancellation cleanup, retry after unverifiable startup cleanup,
-  symlink-safe profile confinement, retryable reaper removal failures, GUID
-  exclusion, and environment scrubbing.
+  readiness, create/status/destroy, display-socket liveness, concurrent
+  displays, crash-after-port, crash/stall/cancellation cleanup, automatic retry
+  after unverifiable or pre-browser startup cleanup, symlink-safe profile
+  confinement, retryable reaper removal failures, capability-URL log redaction
+  with preserved diagnostics, verified Xvfb PID identity and reuse refusal,
+  GUID exclusion, and environment scrubbing.
 - Built `picklab` and `picklab-mcp` tests cover browser create, status, individual
   destroy, destroy-all, profile removal, and environment scrubbing.
 

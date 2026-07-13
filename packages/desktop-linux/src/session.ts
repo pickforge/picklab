@@ -4,9 +4,12 @@ import {
   destroySessionRecord,
   getSession,
   isPidAlive,
+  processIdentityMatches,
+  readProcessIdentity,
   reapDeadRunningSessions,
   sessionsDir,
   stopPid,
+  stopProcessGroupVerified,
   updateSession,
   type DesktopSessionInfo,
   type EnvLike,
@@ -70,6 +73,7 @@ export async function createDesktopSession(
   const logDir = desktopSessionLogDir(record.id, registryEnv);
 
   let xvfb: XvfbHandle | undefined;
+  let xvfbStartTimeTicks: number | undefined;
   let vnc: VncHandle | undefined;
   try {
     xvfb = await startXvfb({
@@ -78,6 +82,11 @@ export async function createDesktopSession(
       logDir,
       env: opts.env,
     });
+    const xvfbIdentity = readProcessIdentity(xvfb.pid);
+    if (xvfbIdentity === undefined) {
+      throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
+    }
+    xvfbStartTimeTicks = xvfbIdentity.startTicks;
     if (wantsVnc) {
       vnc = await startVnc({
         display: xvfb.display,
@@ -90,6 +99,7 @@ export async function createDesktopSession(
     const desktop: DesktopSessionInfo = {
       display: xvfb.display,
       xvfbPid: xvfb.pid,
+      xvfbStartTimeTicks,
       width: xvfb.width,
       height: xvfb.height,
     };
@@ -116,8 +126,11 @@ export async function createDesktopSession(
     if (vnc !== undefined) {
       await stopPid(vnc.pid).catch(() => {});
     }
-    if (xvfb !== undefined) {
-      await stopPid(xvfb.pid).catch(() => {});
+    if (xvfb !== undefined && xvfbStartTimeTicks !== undefined) {
+      await stopProcessGroupVerified({
+        pid: xvfb.pid,
+        startTicks: xvfbStartTimeTicks,
+      }).catch(() => {});
     }
     await updateSession(record.id, { status: "error" }, registryEnv).catch(
       () => {},
@@ -140,9 +153,6 @@ export async function destroyDesktopSession(
   if (desktop?.vncPid !== undefined) {
     stops.push(["x11vnc", desktop.vncPid]);
   }
-  if (desktop?.xvfbPid !== undefined) {
-    stops.push(["Xvfb", desktop.xvfbPid]);
-  }
   for (const [label, pid] of stops) {
     try {
       const stopped = await stopPid(pid);
@@ -157,6 +167,40 @@ export async function destroyDesktopSession(
           ? error
           : new Error(`Failed to stop ${label} (pid ${pid}): ${String(error)}`),
       );
+    }
+  }
+  const xvfbPid = desktop?.xvfbPid;
+  const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
+  if (xvfbPid !== undefined) {
+    if (xvfbStartTimeTicks === undefined) {
+      if (isPidAlive(xvfbPid)) {
+        failures.push(
+          new Error(
+            `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
+          ),
+        );
+      }
+    } else {
+      try {
+        const result = await stopProcessGroupVerified({
+          pid: xvfbPid,
+          startTicks: xvfbStartTimeTicks,
+        });
+        if (
+          result.outcome !== "terminated" &&
+          result.outcome !== "already-dead"
+        ) {
+          failures.push(
+            new Error(
+              `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+            ),
+          );
+        }
+      } catch (error) {
+        failures.push(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
     }
   }
   if (failures.length > 0) {
@@ -180,7 +224,14 @@ export async function getDesktopSessionStatus(
   const desktop = record.desktop;
   return {
     record,
-    xvfbAlive: desktop?.xvfbPid !== undefined && isPidAlive(desktop.xvfbPid),
+    xvfbAlive:
+      desktop?.xvfbPid !== undefined &&
+      (desktop.xvfbStartTimeTicks === undefined
+        ? isPidAlive(desktop.xvfbPid)
+        : processIdentityMatches({
+            pid: desktop.xvfbPid,
+            startTicks: desktop.xvfbStartTimeTicks,
+          })),
     vncAlive: desktop?.vncPid !== undefined && isPidAlive(desktop.vncPid),
     displayAlive: desktop !== undefined && isDisplayAlive(desktop.display),
   };

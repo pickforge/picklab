@@ -20,12 +20,25 @@ vi.mock("@pickforge/picklab-core", async (importOriginal) => {
       }
       return true;
     }),
+    stopProcessGroupVerified: vi.fn(
+      async ({ pid }: { pid: number; startTicks: number }) => {
+        if (pid === FAILING_PID) {
+          throw new Error(`kill EPERM (pid ${pid})`);
+        }
+        return {
+          outcome: pid === STUCK_PID ? "survived" : "terminated",
+          signaled: true,
+        };
+      },
+    ),
   };
 });
 
 import {
   createSession,
   getSession,
+  stopPid,
+  stopProcessGroupVerified,
   updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
@@ -51,9 +64,15 @@ async function makeDesktopRecord(
     { type: "desktop", projectDir },
     registryEnv,
   );
-  const desktop: { display: string; xvfbPid: number; vncPid?: number } = {
+  const desktop: {
+    display: string;
+    xvfbPid: number;
+    xvfbStartTimeTicks: number;
+    vncPid?: number;
+  } = {
     display: ":219",
     xvfbPid,
+    xvfbStartTimeTicks: 1,
   };
   if (vncPid !== undefined) {
     desktop.vncPid = vncPid;
@@ -76,15 +95,19 @@ describe("destroyDesktopSession exception safety", () => {
   });
 
   it("still stops xvfb when stopping vnc throws", async () => {
-    const { stopPid } = await import("@pickforge/picklab-core");
     const stopPidMock = vi.mocked(stopPid);
+    const stopGroupMock = vi.mocked(stopProcessGroupVerified);
     stopPidMock.mockClear();
+    stopGroupMock.mockClear();
     const id = await makeDesktopRecord(777_777, FAILING_PID);
     await expect(destroyDesktopSession(id, registryEnv)).rejects.toThrow(
       /failed to stop 1/i,
     );
     expect(stopPidMock).toHaveBeenCalledWith(FAILING_PID);
-    expect(stopPidMock).toHaveBeenCalledWith(777_777);
+    expect(stopGroupMock).toHaveBeenCalledWith({
+      pid: 777_777,
+      startTicks: 1,
+    });
   });
 
   it("treats a pid surviving SIGKILL as a stop failure", async () => {
@@ -94,7 +117,7 @@ describe("destroyDesktopSession exception safety", () => {
     );
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).errors[0]).toMatchObject({
-      message: expect.stringMatching(/survived SIGTERM and SIGKILL/),
+      message: expect.stringMatching(/could not be verified as gone/),
     });
     const after = await getSession(id, registryEnv);
     expect(after?.status).toBe("error");

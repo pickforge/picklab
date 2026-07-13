@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
   getSession,
   isPidAlive,
   isProfileConfined,
+  isSessionProcessAlive,
   processIdentityMatches,
   reapDeadRunningSessions,
   readProcessIdentity,
@@ -22,7 +24,6 @@ import {
 import {
   isDisplayAlive,
   startXvfb,
-  stopXvfb,
   type XvfbHandle,
 } from "@pickforge/picklab-desktop-linux";
 import { buildChromeArgs } from "./args.js";
@@ -160,11 +161,34 @@ async function stopBrowserGroup(
   }
 }
 
+function isBrowserReaperRecordAlive(record: SessionRecord): boolean {
+  if (record.type !== "browser") {
+    return isSessionProcessAlive(record);
+  }
+  const desktop = record.desktop;
+  const browser = record.browser;
+  return (
+    desktop?.xvfbPid !== undefined &&
+    desktop.xvfbStartTimeTicks !== undefined &&
+    processIdentityMatches({
+      pid: desktop.xvfbPid,
+      startTicks: desktop.xvfbStartTimeTicks,
+    }) &&
+    isDisplayAlive(desktop.display) &&
+    browser !== undefined &&
+    processIdentityMatches({
+      pid: browser.browserPid,
+      startTicks: browser.browserStartTimeTicks,
+    })
+  );
+}
+
 /**
- * Create an isolated headed-Chrome session: a private Xvfb display plus a headed
- * Chrome on an ephemeral profile with a loopback CDP endpoint. Any partial
- * failure tears down every process and deletes the profile before rethrowing,
- * so a failed create leaves no orphaned process group and no profile data.
+ * Create an isolated headed-Chrome session: a private Xvfb display plus headed
+ * Chrome on an ephemeral profile with a loopback CDP endpoint. A partial
+ * failure tears down every process and deletes the profile before rethrowing.
+ * If cleanup cannot be confirmed, the error record retains every known
+ * identity and is marked for a later reaper retry.
  */
 export async function createBrowserSession(
   opts: CreateBrowserSessionOptions,
@@ -177,7 +201,7 @@ export async function createBrowserSession(
     ...(opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : {}),
   });
 
-  await reapDeadRunningSessions(registryEnv);
+  await reapDeadRunningSessions(registryEnv, isBrowserReaperRecordAlive);
   const record = await createSession(
     { type: "browser", projectDir: opts.projectDir },
     registryEnv,
@@ -186,6 +210,7 @@ export async function createBrowserSession(
   const layout = browserRuntimeLayout(logDir);
 
   let xvfb: XvfbHandle | undefined;
+  let xvfbIdentity: ProcessIdentity | undefined;
   let browserIdentity: ProcessIdentity | undefined;
   try {
     await makeRuntimeDirs(layout);
@@ -198,6 +223,10 @@ export async function createBrowserSession(
       waitTimeoutMs: opts.xvfbWaitTimeoutMs ?? DEFAULT_XVFB_WAIT_TIMEOUT_MS,
       displayStart: BROWSER_DISPLAY_START,
     });
+    xvfbIdentity = readProcessIdentity(xvfb.pid);
+    if (xvfbIdentity === undefined) {
+      throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
+    }
 
     const args = buildChromeArgs({
       profileDir: layout.profileDir,
@@ -261,6 +290,7 @@ export async function createBrowserSession(
     const desktop: DesktopSessionInfo = {
       display: xvfb.display,
       xvfbPid: xvfb.pid,
+      xvfbStartTimeTicks: xvfbIdentity.startTicks,
       width: xvfb.width,
       height: xvfb.height,
     };
@@ -292,10 +322,11 @@ export async function createBrowserSession(
     const { gone: browserGone } = await stopBrowserGroup(browserIdentity);
     let xvfbGone = xvfb === undefined;
     if (browserGone && xvfb !== undefined) {
-      try {
-        xvfbGone = await stopXvfb(xvfb.pid);
-      } catch {
+      if (xvfbIdentity === undefined) {
         xvfbGone = false;
+      } else {
+        const stopped = await stopBrowserGroup(xvfbIdentity);
+        xvfbGone = stopped.gone;
       }
     }
     const runtimeFailures = browserGone
@@ -309,6 +340,9 @@ export async function createBrowserSession(
         : {
             display: xvfb.display,
             xvfbPid: xvfb.pid,
+            ...(xvfbIdentity === undefined
+              ? {}
+              : { xvfbStartTimeTicks: xvfbIdentity.startTicks }),
             width: xvfb.width,
             height: xvfb.height,
           };
@@ -328,6 +362,10 @@ export async function createBrowserSession(
         ? { status: "error" }
         : {
             status: "error",
+            meta: {
+              ...record.meta,
+              [REAPER_CLEANUP_PENDING_META_KEY]: true,
+            },
             ...(desktop === undefined ? {} : { desktop }),
             ...(browser === undefined ? {} : { browser }),
           },
@@ -348,7 +386,12 @@ export async function getBrowserSessionStatus(
   const desktop = record.desktop;
   const browser = record.browser;
   const xvfbAlive =
-    desktop?.xvfbPid !== undefined && isPidAlive(desktop.xvfbPid);
+    desktop?.xvfbPid !== undefined &&
+    desktop.xvfbStartTimeTicks !== undefined &&
+    processIdentityMatches({
+      pid: desktop.xvfbPid,
+      startTicks: desktop.xvfbStartTimeTicks,
+    });
   const displayAlive =
     desktop !== undefined && isDisplayAlive(desktop.display);
   const browserAlive =
@@ -362,7 +405,7 @@ export async function getBrowserSessionStatus(
     xvfbAlive,
     displayAlive,
     browserAlive,
-    alive: xvfbAlive && browserAlive,
+    alive: xvfbAlive && displayAlive && browserAlive,
     ...(browser?.cdpPort !== undefined ? { cdpPort: browser.cdpPort } : {}),
   };
 }
@@ -406,17 +449,31 @@ export async function destroyBrowserSession(
     );
   }
 
-  const xvfbPid = record.desktop?.xvfbPid;
+  const desktop = record.desktop;
+  const xvfbPid = desktop?.xvfbPid;
+  const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
   if (xvfbPid !== undefined && gone) {
-    try {
-      const stopped = await stopXvfb(xvfbPid);
-      if (!stopped) {
+    if (xvfbStartTimeTicks === undefined) {
+      if (isPidAlive(xvfbPid)) {
         failures.push(
-          new Error(`Xvfb (pid ${xvfbPid}) survived SIGTERM and SIGKILL`),
+          new Error(
+            `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
+          ),
         );
       }
-    } catch (error) {
-      failures.push(asError(error));
+    } else {
+      const stopped = await stopBrowserGroup({
+        pid: xvfbPid,
+        startTicks: xvfbStartTimeTicks,
+      });
+      if (!stopped.gone) {
+        failures.push(
+          stopped.error ??
+            new Error(
+              `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+            ),
+        );
+      }
     }
   } else if (xvfbPid !== undefined) {
     failures.push(

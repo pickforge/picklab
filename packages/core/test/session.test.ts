@@ -283,7 +283,7 @@ describe("session registry", () => {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", xvfbPid: helperPid },
+        desktop: { display: ":90", vncPid: helperPid },
       },
       env,
     );
@@ -310,7 +310,7 @@ describe("session registry", () => {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", xvfbPid: helperPid },
+        desktop: { display: ":90", vncPid: helperPid },
       },
       env,
     );
@@ -362,7 +362,11 @@ describe("session registry", () => {
             type: "browser",
             projectDir: "/proj",
             status: "running",
-            desktop: { display: ":120", xvfbPid },
+            desktop: {
+              display: ":120",
+              xvfbPid,
+              xvfbStartTimeTicks: identity.startTicks,
+            },
             browser: {
               browserPid: pid,
               browserStartTimeTicks,
@@ -396,18 +400,26 @@ describe("session registry", () => {
     const helper = spawn(
       process.execPath,
       ["-e", "setInterval(() => {}, 1000)"],
-      { stdio: "ignore" },
+      { detached: true, stdio: "ignore" },
     );
     const xvfbPid = helper.pid;
     if (xvfbPid === undefined) {
       throw new Error("child process did not expose a pid");
+    }
+    const xvfbIdentity = readProcessIdentity(xvfbPid);
+    if (xvfbIdentity === undefined) {
+      throw new Error("desktop helper identity was unavailable");
     }
     const stale = await createSession(
       {
         type: "browser",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":121", xvfbPid },
+        desktop: {
+          display: ":121",
+          xvfbPid,
+          xvfbStartTimeTicks: xvfbIdentity.startTicks,
+        },
         browser: {
           browserPid: 4_194_306,
           browserStartTimeTicks: 1,
@@ -446,6 +458,43 @@ describe("session registry", () => {
         await stopPid(xvfbPid, { timeoutMs: 1000 });
         await waitForExit(helper);
       }
+    }
+  });
+
+  it("refuses to signal a reused Xvfb pid while reaping", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const xvfbPid = helper.pid;
+    if (xvfbPid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    const identity = readProcessIdentity(xvfbPid);
+    if (identity === undefined) {
+      throw new Error("desktop helper identity was unavailable");
+    }
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: {
+          display: ":124",
+          xvfbPid,
+          xvfbStartTimeTicks: identity.startTicks + 1,
+        },
+      },
+      env,
+    );
+    try {
+      expect(await reapDeadRunningSessions(env, () => false)).toEqual([]);
+      expect(isPidAlive(xvfbPid)).toBe(true);
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+    } finally {
+      await stopPid(xvfbPid, { timeoutMs: 1000 });
+      await waitForExit(helper);
     }
   });
 
@@ -557,6 +606,42 @@ describe("session registry", () => {
     }
   });
 
+  it("removes pending browser runtime without a browser leg", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "error",
+        desktop: { display: ":125", xvfbPid: 4_194_313 },
+        meta: { reaperCleanupPending: true },
+      },
+      env,
+    );
+    const sessionDir = path.join(home, "sessions", stale.id);
+    const runtimePaths = [
+      path.join(sessionDir, "profile"),
+      path.join(sessionDir, "home", ".config"),
+      path.join(sessionDir, "home", ".cache"),
+      path.join(sessionDir, "home", ".local", "share"),
+      path.join(sessionDir, "home", ".local", "state"),
+      path.join(sessionDir, "tmp"),
+      path.join(sessionDir, "xdg-runtime"),
+    ];
+    for (const runtimePath of runtimePaths) {
+      await fs.promises.mkdir(runtimePath, { recursive: true });
+      await fs.promises.writeFile(path.join(runtimePath, "data"), "secret");
+    }
+
+    expect(
+      (await reapDeadRunningSessions(env)).map((record) => record.id),
+    ).toEqual([stale.id]);
+    expect(await getSession(stale.id, env)).toBeUndefined();
+    for (const runtimePath of runtimePaths) {
+      expect(fs.existsSync(runtimePath)).toBe(false);
+    }
+    expect(fs.existsSync(sessionDir)).toBe(false);
+  });
+
   it("does not delete a profile that escapes the session dir when reaping", async () => {
     const outside = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "picklab-outside-"),
@@ -603,6 +688,7 @@ describe("session registry", () => {
       stdio: "ignore",
     });
     const xvfb = spawn(process.execPath, ["-e", stopLogger("xvfb")], {
+      detached: true,
       stdio: "ignore",
     });
     if (
@@ -618,6 +704,10 @@ describe("session registry", () => {
       if (identity === undefined) {
         throw new Error("could not read browser identity");
       }
+      const xvfbIdentity = readProcessIdentity(xvfb.pid);
+      if (xvfbIdentity === undefined) {
+        throw new Error("could not read Xvfb identity");
+      }
       const stale = await createSession(
         {
           type: "browser",
@@ -627,6 +717,7 @@ describe("session registry", () => {
             display: ":124",
             vncPid: vnc.pid,
             xvfbPid: xvfb.pid,
+            xvfbStartTimeTicks: xvfbIdentity.startTicks,
           },
           browser: {
             browserPid: identity.pid,
@@ -664,7 +755,10 @@ describe("session registry", () => {
       for (const child of [browser, vnc, xvfb]) {
         if (child.pid !== undefined && isPidAlive(child.pid)) {
           try {
-            process.kill(child === browser ? -child.pid : child.pid, "SIGKILL");
+            process.kill(
+              child === browser || child === xvfb ? -child.pid : child.pid,
+              "SIGKILL",
+            );
           } catch {
             // already gone
           }

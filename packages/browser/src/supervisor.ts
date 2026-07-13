@@ -36,8 +36,36 @@ let childCode = 1;
 const child = spawn(binary, args, {
   env: process.env,
   shell: false,
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", "pipe"],
 });
+let stderrBuffer = "";
+function forwardBrowserStderr(line) {
+  process.stderr.write(
+    line.replace(
+      /ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+/g,
+      "[redacted DevTools capability URL]",
+    ),
+  );
+}
+function flushBrowserStderr(final = false) {
+  let newline = stderrBuffer.indexOf("\n");
+  while (newline !== -1) {
+    const line = stderrBuffer.slice(0, newline + 1);
+    stderrBuffer = stderrBuffer.slice(newline + 1);
+    forwardBrowserStderr(line);
+    newline = stderrBuffer.indexOf("\n");
+  }
+  if (final && stderrBuffer !== "") {
+    forwardBrowserStderr(stderrBuffer);
+    stderrBuffer = "";
+  }
+}
+child.stderr.setEncoding("utf8");
+child.stderr.on("data", (chunk) => {
+  stderrBuffer += chunk;
+  flushBrowserStderr();
+});
+child.stderr.once("end", () => flushBrowserStderr(true));
 child.once("error", (error) => {
   console.error("Failed to launch browser:", error.message);
   childExited = true;

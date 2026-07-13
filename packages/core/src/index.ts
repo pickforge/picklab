@@ -70,6 +70,7 @@ export {
 } from "./target.js";
 
 export {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
   getSession,
