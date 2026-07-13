@@ -72,10 +72,10 @@ then reset this file.
   (length + allowlisted input type only), `sanitizeActionTarget` (per-field
   allowlist; unknown fields dropped), and `sanitizeNetworkFailure`
   (method/origin-path/status/resource type/timing/sanitized error only —
-  never headers, bodies, or query). No runtime consumers yet beyond the
-  strengthened redaction.
-- Added a dormant computer-use evidence storage foundation to
-  `@pickforge/picklab-core` (no producers wired yet). New `evidence.ts` provides
+  never headers, bodies, or query). MCP computer-use producers now consume
+  these sanitizers before appending actions.
+- Added the computer-use evidence storage foundation to
+  `@pickforge/picklab-core`. New `evidence.ts` provides
   a session-scoped active-run pointer claimed with an atomic `wx` protocol. The
   winner stamps a claim carrying its verifiable owner identity (PID +
   `/proc` start ticks) at creation time, then creates the run and atomically
@@ -111,8 +111,7 @@ then reset this file.
   `actionLog`, and `evidenceTruncated` fields; `createRun({ evidence: true })`
   stamps them and seeds the empty journal, so plain screenshot runs are
   unaffected. Config resolution gained `evidence.enabled` (product
-  configuration, default true) via `isEvidenceEnabled`. No MCP or DevTools relay
-  instrumentation is included.
+  configuration, default true) via `isEvidenceEnabled`.
 - Added backward-compatible evidence rendering for recorded runs: CLI and MCP
   artifact reports now include a deterministically ordered, defensively redacted
   action timeline, while legacy runs remain artifact inventories. Evidence runs
@@ -123,8 +122,15 @@ then reset this file.
   reads bind no-follow descriptors to the validated file identity and re-check
   the pathname after reading; journal reads/appends also use no-follow opens.
   Report publication uses an exclusive temporary file plus atomic rename so
-  planted symlinks are never followed. No action producers
-  or DevTools/MCP instrumentation are included in this slice.
+  planted symlinks are never followed.
+- MCP desktop, Android, and session tools now append sanitized success/failure
+  actions to one active evidence run per session. Typed values persist only as
+  length plus allowlisted input type; metadata actions never auto-capture
+  screenshots. Explicit screenshot tools associate confined PNG paths with the
+  active journal, while sessions without an active evidence run preserve the
+  existing one-shot screenshot run. Session destroy finalizes and releases the
+  run, and dead-session reaping finalizes it as failed. Evidence failures are
+  redacted, stderr-only, and never change the underlying tool result.
 - Hosted CI now installs `x11vnc` alongside the other desktop test
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
@@ -275,6 +281,13 @@ then reset this file.
   screenshot embedding, action/report resource MIME and listings, and rejection
   of symlinked journals, reports, screenshots, run directories, planted report
   publication targets, and parent-directory swaps between validation and open.
+- MCP evidence instrumentation: `bun run typecheck` and `bun run build` pass;
+  the full and coverage suites pass 75 files / 928 passed / 2 skipped with all
+  global thresholds met. Coverage includes sanitized typed actions and
+  thrown/structured failures, confined screenshot association,
+  disabled/no-session behavior, evidence-write failure isolation, active-run
+  reuse, explicit/shared session finalization, in-flight claim coordination,
+  and dead-session reaping. Two independent changed-HEAD reviews are clean.
 
 ### Not tested yet
 

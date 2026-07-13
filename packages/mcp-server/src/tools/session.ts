@@ -27,6 +27,7 @@ import {
   getDesktopSessionStatus,
 } from "@pickforge/picklab-desktop-linux";
 import { runTool, type ServerContext } from "../context.js";
+import { withMcpEvidence } from "../evidence.js";
 
 interface SessionSummary extends Record<string, unknown> {
   id: string;
@@ -173,6 +174,24 @@ export async function createSessions(
   return sessions;
 }
 
+export async function recordCreatedSessionsEvidence(
+  ctx: ServerContext,
+  sessions: readonly SessionSummary[],
+  tool: "session_create" | "android_start",
+): Promise<void> {
+  for (const session of sessions) {
+    await withMcpEvidence(
+      ctx,
+      {
+        sessionId: session.id,
+        tool,
+        target: { name: session.type },
+      },
+      async () => ({ data: {} }),
+    );
+  }
+}
+
 export async function sessionStatusEntry(
   ctx: ServerContext,
   record: SessionRecord,
@@ -305,14 +324,14 @@ export function registerSessionTools(
       },
     },
     (args, extra) =>
-      runTool(async () => ({
-        data: {
-          sessions: await createSessions(ctx, args, {
-            onProgress: progressReporter(extra),
-            signal: extra.signal,
-          }),
-        },
-      })),
+      runTool(async () => {
+        const sessions = await createSessions(ctx, args, {
+          onProgress: progressReporter(extra),
+          signal: extra.signal,
+        });
+        await recordCreatedSessionsEvidence(ctx, sessions, "session_create");
+        return { data: { sessions } };
+      }),
   );
 
   server.registerTool(
@@ -379,7 +398,18 @@ export function registerSessionTools(
         const errors: string[] = [];
         for (const record of records) {
           try {
-            await destroyRecord(ctx, record);
+            await withMcpEvidence(
+              ctx,
+              {
+                sessionId: record.id,
+                tool: "session_destroy",
+                target: { name: record.type },
+              },
+              async () => {
+                await destroyRecord(ctx, record);
+                return { data: {} };
+              },
+            );
             destroyed.push(record.id);
           } catch (error) {
             errors.push(

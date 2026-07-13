@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  activePointerPath,
+  listRuns,
+  readActions,
+  saveProjectConfig,
+} from "@pickforge/picklab-core";
+import {
   adbLogLines,
   connectLab,
   FAKE_SERIAL,
@@ -64,6 +70,67 @@ describe("android tools (fake adb)", () => {
       `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_BACK`,
       `-s ${FAKE_SERIAL} shell input keyevent KEYCODE_HOME`,
     ]);
+  });
+
+  it("records sanitized session actions without typed-value leakage", async () => {
+    const typedSecret = `password-${PLANTED_TOKEN}`;
+    await lab.client.callTool({
+      name: "android_tap",
+      arguments: { x: 10, y: 20 },
+    });
+    await lab.client.callTool({
+      name: "android_type",
+      arguments: { text: typedSecret },
+    });
+    await lab.client.callTool({ name: "android_back", arguments: {} });
+
+    const [manifest] = await listRuns(dirs.projectDir);
+    const records = await readActions(
+      path.join(dirs.projectDir, ".picklab", "runs", manifest!.runId),
+    );
+    expect(records.map((record) => record.actionId)).toHaveLength(3);
+    expect(
+      records.map((record) => "tool" in record && record.tool),
+    ).toEqual(["android_tap", "android_type", "android_back"]);
+    expect(records[0]).toMatchObject({
+      source: "mcp",
+      sessionId,
+      status: "ok",
+      target: { x: 10, y: 20 },
+    });
+    expect(records[1]).toMatchObject({
+      source: "mcp",
+      sessionId,
+      status: "ok",
+      target: { length: typedSecret.length, inputType: "text" },
+    });
+    expect(JSON.stringify(records)).not.toContain(typedSecret);
+    expect(JSON.stringify(records)).not.toContain(PLANTED_TOKEN);
+    expect(
+      fs.readdirSync(
+        path.join(
+          dirs.projectDir,
+          ".picklab",
+          "runs",
+          manifest!.runId,
+          "screenshots",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not create evidence when capture is disabled", async () => {
+    await saveProjectConfig(dirs.projectDir, {
+      evidence: { enabled: false },
+    });
+    const report = parseToolJson(
+      await lab.client.callTool({
+        name: "android_tap",
+        arguments: { x: 1, y: 2 },
+      }),
+    );
+    expect(report.ok).toBe(true);
+    expect(await listRuns(dirs.projectDir)).toEqual([]);
   });
 
   it("installs an apk resolved against the project dir", async () => {
@@ -171,7 +238,28 @@ describe("android tools (fake adb)", () => {
       ),
     );
     expect(manifest.sessionId).toBe(sessionId);
-    expect(manifest.artifacts[0].type).toBe("screenshot");
+    expect(manifest.evidenceVersion).toBe(1);
+    expect(manifest.artifacts).toEqual([]);
+    const records = await readActions(
+      path.join(
+        dirs.projectDir,
+        ".picklab",
+        "runs",
+        report.runId as string,
+      ),
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      source: "mcp",
+      tool: "android_screenshot",
+      sessionId,
+      status: "ok",
+    });
+    expect(
+      "artifacts" in records[0]! ? records[0].artifacts : undefined,
+    ).toEqual([
+      path.join("screenshots", path.basename(report.path as string)),
+    ]);
   });
 
   it("uses an explicit serial without a session", async () => {
@@ -246,6 +334,30 @@ describe("android_start (fake sdk)", () => {
       expect(session.avdName).toBe("picklab-avd");
       expect(session.serial).toMatch(/^emulator-\d+$/);
 
+      const [activeManifest] = await listRuns(startDirs.projectDir);
+      expect(activeManifest).toMatchObject({
+        sessionId: session.id,
+        status: "running",
+        evidenceVersion: 1,
+      });
+      expect(
+        await readActions(
+          path.join(
+            startDirs.projectDir,
+            ".picklab",
+            "runs",
+            activeManifest!.runId,
+          ),
+        ),
+      ).toMatchObject([
+        {
+          source: "mcp",
+          tool: "android_start",
+          sessionId: session.id,
+          status: "ok",
+        },
+      ]);
+
       const destroyed = parseToolJson(
         await startLab.client.callTool({
           name: "session_destroy",
@@ -256,6 +368,27 @@ describe("android_start (fake sdk)", () => {
       expect(destroyed.destroyed).toEqual([session.id]);
       const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
       expect(() => process.kill(pid, 0)).toThrow();
+      const [finalizedManifest] = await listRuns(startDirs.projectDir);
+      expect(finalizedManifest).toMatchObject({
+        runId: activeManifest!.runId,
+        status: "completed",
+      });
+      expect(
+        await readActions(
+          path.join(
+            startDirs.projectDir,
+            ".picklab",
+            "runs",
+            finalizedManifest!.runId,
+          ),
+        ),
+      ).toMatchObject([
+        { tool: "android_start", status: "ok" },
+        { tool: "session_destroy", status: "ok" },
+      ]);
+      expect(
+        fs.existsSync(activePointerPath(startDirs.projectDir, session.id)),
+      ).toBe(false);
     } finally {
       killFakeEmulator(pidFile);
       await startLab.close();

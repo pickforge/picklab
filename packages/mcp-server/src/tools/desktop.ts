@@ -26,6 +26,7 @@ import {
   runTool,
   type ServerContext,
 } from "../context.js";
+import { withMcpEvidence } from "../evidence.js";
 
 const sessionArg = {
   session: z
@@ -91,27 +92,37 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        const app = await launchApp({
-          display,
-          command: args.command,
-          args: args.args ?? [],
-          env: ctx.env,
-          logDir: desktopSessionLogDir(id, ctx.env),
-          cwd:
-            args.cwd === undefined
-              ? undefined
-              : path.resolve(ctx.projectDir, args.cwd),
-        });
-        const data: Record<string, unknown> = {
-          sessionId: id,
-          display,
-          pid: app.pid,
-          logPath: app.logPath,
-        };
-        if (args.waitWindow !== undefined) {
-          data.window = await waitForWindow(display, args.waitWindow);
-        }
-        return { data };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_launch",
+            target: { name: args.command },
+          },
+          async () => {
+            const app = await launchApp({
+              display,
+              command: args.command,
+              args: args.args ?? [],
+              env: ctx.env,
+              logDir: desktopSessionLogDir(id, ctx.env),
+              cwd:
+                args.cwd === undefined
+                  ? undefined
+                  : path.resolve(ctx.projectDir, args.cwd),
+            });
+            const data: Record<string, unknown> = {
+              sessionId: id,
+              display,
+              pid: app.pid,
+              logPath: app.logPath,
+            };
+            if (args.waitWindow !== undefined) {
+              data.window = await waitForWindow(display, args.waitWindow);
+            }
+            return { data };
+          },
+        );
       }),
   );
 
@@ -120,9 +131,9 @@ export function registerDesktopTools(
     {
       title: "Desktop screenshot",
       description:
-        "Capture the desktop display as PNG. By default the image is " +
-        "recorded as an artifact of a new run under .picklab/runs and " +
-        "returned inline when small enough.",
+        "Capture the desktop display as PNG. By default the image joins the " +
+        "session's active evidence run, or creates a one-shot run when evidence " +
+        "is disabled or no session is selected. Small images return inline.",
       inputSchema: {
         ...sessionArg,
         out: z
@@ -140,22 +151,48 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        const target = await resolveScreenshotTarget(ctx, args, "desktop", id);
-        let tool: string | undefined;
-        const data = await captureToTarget(target, async () => {
-          const result = await screenshot({
-            display,
-            outPath: target.outPath,
-            env: ctx.env,
-          });
-          tool = result.tool;
-        });
-        data.sessionId = id;
-        data.display = display;
-        data.tool = tool;
-        const image = await imageContent(target.outPath);
-        Object.assign(data, image.meta);
-        return { data, extraContent: image.content };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_screenshot",
+            artifacts: (result) =>
+              typeof result.data?.path === "string" ? [result.data.path] : [],
+          },
+          async ({ actionId, run }) => {
+            const target =
+              run !== undefined &&
+              args.out === undefined &&
+              args.runSlug === undefined
+                ? {
+                    outPath: path.join(
+                      run.dir,
+                      "screenshots",
+                      `${actionId}.png`,
+                    ),
+                  }
+                : await resolveScreenshotTarget(ctx, args, "desktop", id);
+            let tool: string | undefined;
+            const data = await captureToTarget(target, async () => {
+              const result = await screenshot({
+                display,
+                outPath: target.outPath,
+                env: ctx.env,
+              });
+              tool = result.tool;
+            });
+            data.sessionId = id;
+            data.display = display;
+            data.tool = tool;
+            if (run !== undefined && target.run === undefined) {
+              data.runId = run.runId;
+              data.runDir = run.dir;
+            }
+            const image = await imageContent(target.outPath);
+            Object.assign(data, image.meta);
+            return { data, extraContent: image.content };
+          },
+        );
       }),
   );
 
@@ -174,16 +211,31 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await click({ display, x: args.x, y: args.y, button: args.button });
-        return {
-          data: {
+        return withMcpEvidence(
+          ctx,
+          {
             sessionId: id,
-            display,
-            x: args.x,
-            y: args.y,
-            button: args.button ?? 1,
+            tool: "desktop_click",
+            target: { x: args.x, y: args.y },
           },
-        };
+          async () => {
+            await click({
+              display,
+              x: args.x,
+              y: args.y,
+              button: args.button,
+            });
+            return {
+              data: {
+                sessionId: id,
+                display,
+                x: args.x,
+                y: args.y,
+                button: args.button ?? 1,
+              },
+            };
+          },
+        );
       }),
   );
 
@@ -203,10 +255,20 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await move({ display, x: args.x, y: args.y });
-        return {
-          data: { sessionId: id, display, x: args.x, y: args.y },
-        };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_move",
+            target: { x: args.x, y: args.y },
+          },
+          async () => {
+            await move({ display, x: args.x, y: args.y });
+            return {
+              data: { sessionId: id, display, x: args.x, y: args.y },
+            };
+          },
+        );
       }),
   );
 
@@ -243,24 +305,37 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await scroll({
-          display,
-          deltaX: args.deltaX,
-          deltaY: args.deltaY,
-          x: args.x,
-          y: args.y,
-        });
-        const data: Record<string, unknown> = {
-          sessionId: id,
-          display,
-          deltaX: args.deltaX,
-          deltaY: args.deltaY,
-        };
-        if (args.x !== undefined && args.y !== undefined) {
-          data.x = args.x;
-          data.y = args.y;
-        }
-        return { data };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_scroll",
+            target:
+              args.x === undefined || args.y === undefined
+                ? undefined
+                : { x: args.x, y: args.y },
+          },
+          async () => {
+            await scroll({
+              display,
+              deltaX: args.deltaX,
+              deltaY: args.deltaY,
+              x: args.x,
+              y: args.y,
+            });
+            const data: Record<string, unknown> = {
+              sessionId: id,
+              display,
+              deltaX: args.deltaX,
+              deltaY: args.deltaY,
+            };
+            if (args.x !== undefined && args.y !== undefined) {
+              data.x = args.x;
+              data.y = args.y;
+            }
+            return { data };
+          },
+        );
       }),
   );
 
@@ -290,26 +365,36 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await drag({
-          display,
-          fromX: args.fromX,
-          fromY: args.fromY,
-          toX: args.toX,
-          toY: args.toY,
-          button: args.button,
-          durationMs: args.durationMs,
-        });
-        return {
-          data: {
+        return withMcpEvidence(
+          ctx,
+          {
             sessionId: id,
-            display,
-            fromX: args.fromX,
-            fromY: args.fromY,
-            toX: args.toX,
-            toY: args.toY,
-            button: args.button ?? 1,
+            tool: "desktop_drag",
+            target: { x: args.toX, y: args.toY },
           },
-        };
+          async () => {
+            await drag({
+              display,
+              fromX: args.fromX,
+              fromY: args.fromY,
+              toX: args.toX,
+              toY: args.toY,
+              button: args.button,
+              durationMs: args.durationMs,
+            });
+            return {
+              data: {
+                sessionId: id,
+                display,
+                fromX: args.fromX,
+                fromY: args.fromY,
+                toX: args.toX,
+                toY: args.toY,
+                button: args.button ?? 1,
+              },
+            };
+          },
+        );
       }),
   );
 
@@ -335,22 +420,32 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await doubleClick({
-          display,
-          x: args.x,
-          y: args.y,
-          button: args.button,
-          intervalMs: args.intervalMs,
-        });
-        return {
-          data: {
+        return withMcpEvidence(
+          ctx,
+          {
             sessionId: id,
-            display,
-            x: args.x,
-            y: args.y,
-            button: args.button ?? 1,
+            tool: "desktop_double_click",
+            target: { x: args.x, y: args.y },
           },
-        };
+          async () => {
+            await doubleClick({
+              display,
+              x: args.x,
+              y: args.y,
+              button: args.button,
+              intervalMs: args.intervalMs,
+            });
+            return {
+              data: {
+                sessionId: id,
+                display,
+                x: args.x,
+                y: args.y,
+                button: args.button ?? 1,
+              },
+            };
+          },
+        );
       }),
   );
 
@@ -367,10 +462,20 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await typeText({ display, text: args.text });
-        return {
-          data: { sessionId: id, display, length: args.text.length },
-        };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_type",
+            typedValue: { value: args.text, inputType: "text" },
+          },
+          async () => {
+            await typeText({ display, text: args.text });
+            return {
+              data: { sessionId: id, display, length: args.text.length },
+            };
+          },
+        );
       }),
   );
 
@@ -389,8 +494,18 @@ export function registerDesktopTools(
     (args) =>
       runTool(async () => {
         const { id, display } = await resolveDesktop(ctx, args.session);
-        await pressKey({ display, key: args.key });
-        return { data: { sessionId: id, display, key: args.key } };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: id,
+            tool: "desktop_key",
+            typedValue: { value: args.key },
+          },
+          async () => {
+            await pressKey({ display, key: args.key });
+            return { data: { sessionId: id, display, key: args.key } };
+          },
+        );
       }),
   );
 }

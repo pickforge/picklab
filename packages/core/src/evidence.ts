@@ -138,6 +138,7 @@ export type PointerResolution =
   | { status: "claiming"; raw: string; claim?: ActiveEvidenceClaim }
   | {
       status: "active";
+      raw: string;
       pointer: ActiveEvidencePointer;
       manifest: RunManifest;
     }
@@ -366,7 +367,7 @@ export async function resolveActivePointer(
   if (!identityIsAlive(pointer.ownerPid, pointer.ownerStartTicks)) {
     return { status: "stale", raw, pointer };
   }
-  return { status: "active", pointer, manifest };
+  return { status: "active", raw, pointer, manifest };
 }
 
 /**
@@ -777,6 +778,90 @@ export async function beginEvidenceRun(
   throw new Error(
     `Failed to acquire an active evidence run for session ${sessionId} ` +
       `within ${CLAIM_TOTAL_DEADLINE_MS}ms`,
+  );
+}
+
+/**
+ * Finalize and release the evidence run currently associated with a session.
+ * The pointer is compare-cleared only after the manifest is durable, so a
+ * concurrently replaced pointer is never removed.
+ */
+export async function finalizeActiveEvidenceRun(
+  projectDir: string,
+  sessionId: string,
+  status: RunStatus = "completed",
+): Promise<RunManifest | undefined> {
+  for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
+    const resolution = await resolveActivePointer(projectDir, sessionId);
+    if (resolution.status === "absent") return undefined;
+
+    if (resolution.status === "claiming") {
+      const owner = resolution.claim;
+      if (
+        owner !== undefined &&
+        identityIsAlive(owner.ownerPid, owner.ownerStartTicks)
+      ) {
+        await delay(claimBackoff(attempt));
+        continue;
+      }
+      if (owner === undefined && attempt < EMPTY_CLAIM_GRACE_ATTEMPTS) {
+        await delay(claimBackoff(attempt));
+        continue;
+      }
+      if (
+        await clearActivePointer(projectDir, sessionId, {
+          expectRaw: resolution.raw,
+        })
+      ) {
+        return undefined;
+      }
+      continue;
+    }
+    if (resolution.status === "corrupt") {
+      if (
+        await clearActivePointer(projectDir, sessionId, {
+          expectRaw: resolution.raw,
+        })
+      ) {
+        return undefined;
+      }
+      continue;
+    }
+
+    const pointer = resolution.pointer;
+    if (pointer === undefined) continue;
+    const runDir = path.join(runsDir(projectDir), pointer.runId);
+    const manifest =
+      resolution.status === "active"
+        ? resolution.manifest
+        : await readManifest(runDir);
+    if (manifest === undefined || !isEvidenceRun(manifest)) {
+      if (
+        await clearActivePointer(projectDir, sessionId, {
+          expectRaw: resolution.raw,
+        })
+      ) {
+        return undefined;
+      }
+      continue;
+    }
+
+    if (manifest.status === "running") {
+      manifest.evidenceTruncated = await isEvidenceTruncated(runDir);
+      await new RunHandle(runDir, manifest).finish(status);
+    }
+    if (
+      !(await clearActivePointer(projectDir, sessionId, {
+        expectRaw: resolution.raw,
+      }))
+    ) {
+      continue;
+    }
+    await pruneFinalizedEvidenceRuns(projectDir);
+    return manifest;
+  }
+  throw new Error(
+    `Failed to finalize the active evidence run for session ${sessionId}`,
   );
 }
 

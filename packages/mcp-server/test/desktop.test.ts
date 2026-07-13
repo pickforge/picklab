@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { listSessions } from "@pickforge/picklab-core";
+import {
+  listRuns,
+  listSessions,
+  readActions,
+} from "@pickforge/picklab-core";
 import {
   detectScreenshotTool,
   destroyDesktopSession,
@@ -184,6 +188,36 @@ describe.skipIf(!hasDesktopStack)("desktop flow (real Xvfb)", () => {
       expect(destroyed.ok).toBe(true);
       expect(destroyed.destroyed).toEqual([session.id]);
       expect(await listSessions(registryEnv)).toEqual([]);
+      const [manifest] = await listRuns(dirs.projectDir);
+      expect(manifest).toMatchObject({
+        sessionId: session.id,
+        status: "completed",
+      });
+      const actions = await readActions(
+        path.join(
+          dirs.projectDir,
+          ".picklab",
+          "runs",
+          manifest!.runId,
+        ),
+      );
+      expect(
+        actions.find(
+          (action) => "tool" in action && action.tool === "desktop_key",
+        ),
+      ).toMatchObject({
+        target: { length: 6, inputType: "other" },
+      });
+      expect(
+        fs.existsSync(
+          path.join(
+            dirs.projectDir,
+            ".picklab",
+            "runs",
+            `.active-${session.id}.json`,
+          ),
+        ),
+      ).toBe(false);
     },
     TEST_TIMEOUT_MS,
   );
