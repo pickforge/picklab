@@ -9,6 +9,7 @@ export interface BrowserDevtoolsMcpOptions {
 export interface BrowserDevtoolsMcpDependencies {
   runRelay?: typeof runProjectDevtoolsMcp;
   signalCurrentProcess?: (signal: NodeJS.Signals) => void;
+  exitProcess?: (code: number) => void;
 }
 
 export async function runBrowserDevtoolsMcp(
@@ -20,6 +21,10 @@ export async function runBrowserDevtoolsMcp(
       projectDir: resolveProjectDir(opts),
     });
     if (exit.signal === "SIGKILL") {
+      (dependencies.exitProcess ??
+        ((code) => {
+          process.exit(code);
+        }))(137);
       return 137;
     }
     if (exit.signal !== null) {

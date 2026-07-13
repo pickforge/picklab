@@ -221,11 +221,21 @@ export interface RunDevtoolsMcpRelayOptions {
   maxDiagnosticLineBytes?: number;
 }
 
-function observeChildExit(child: ChildProcess): Promise<RelayExit> {
-  const exit = createDeferred<RelayExit>();
-  child.once("error", exit.reject);
-  child.once("exit", (code, signal) => exit.resolve({ code, signal }));
-  return exit.promise;
+interface ChildObservation {
+  outcome: Promise<RelayExit>;
+  exited: Promise<RelayExit>;
+}
+
+function observeChildExit(child: ChildProcess): ChildObservation {
+  const outcome = createDeferred<RelayExit>();
+  const exited = createDeferred<RelayExit>();
+  child.once("error", outcome.reject);
+  child.once("exit", (code, signal) => {
+    const observed = { code, signal };
+    outcome.resolve(observed);
+    exited.resolve(observed);
+  });
+  return { outcome: outcome.promise, exited: exited.promise };
 }
 
 async function pumpRedactedDiagnostics(
@@ -335,7 +345,7 @@ export async function runDevtoolsMcpRelay(
     },
   );
   assertRelayChild(child);
-  const exit = observeChildExit(child);
+  const { outcome: exit, exited } = observeChildExit(child);
   const inputAbort = new AbortController();
   let terminationRequested = false;
   const inputPump = pumpJsonRpcNdjson(input, child.stdin, {
@@ -359,7 +369,7 @@ export async function runDevtoolsMcpRelay(
     () => {
       eofTimer = setTimeout(() => {
         terminationRequested = true;
-        void stopChild(child, exit, timeoutMs).catch(() => {});
+        void stopChild(child, exited, timeoutMs).catch(() => {});
       }, timeoutMs);
       eofTimer.unref();
     },
@@ -401,22 +411,28 @@ export async function runDevtoolsMcpRelay(
       child.stdin.destroy();
       child.stdout.destroy();
       child.stderr.destroy();
-      child.kill("SIGTERM");
-      await Promise.allSettled([inputPump, outputPump, diagnosticsPump]);
+      const stopping = stopChild(child, exited, timeoutMs);
+      const pumpCleanup = Promise.allSettled([
+        inputPump,
+        outputPump,
+        diagnosticsPump,
+      ]);
+      const stopped = await stopping;
+      await pumpCleanup;
       throw new Error(
-        `Chrome DevTools MCP relay failed: child process error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`,
+        `Chrome DevTools MCP relay failed: child process error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)} (upstream exit ${stopped.code ?? stopped.signal ?? "unknown"})`,
       );
     }
     if (outcome.kind === "error") {
       if (terminationRequested) {
-        const observed = await exit;
+        const observed = await exited;
         inputAbort.abort();
         await Promise.allSettled([inputPump, outputPump, diagnosticsPump]);
         return observed;
       }
       terminationRequested = true;
       inputAbort.abort();
-      const stopped = await stopChild(child, exit, timeoutMs);
+      const stopped = await stopChild(child, exited, timeoutMs);
       await Promise.allSettled([inputPump, outputPump, diagnosticsPump]);
       throw new Error(
         `Chrome DevTools MCP relay failed: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)} (upstream exit ${stopped.code ?? stopped.signal ?? "unknown"})`,

@@ -87,6 +87,8 @@ then reset this file.
   the upstream-compatible Node 20.19 floor.
 - CI and release workflows pin Node `20.19.0`, the advertised minimum that
   exercises the relay and upstream package contract.
+- The canonical installer enforces the same supported Node branches:
+  `^20.19`, `^22.12`, or `>=23`.
 - CI installs a supported browser and requires the real headed-Chrome integration
   suite to execute rather than silently skip.
 - SECURITY.md documents the residual same-UID and local-process risks.
@@ -145,14 +147,15 @@ then reset this file.
   confirmed server-enforced `-viewonly`, and verified that closing the viewer
   left the PickLab session, VNC server, and Xvfb running.
 - Relay slice: `bun run typecheck` and `bun run build` pass. The final focused
-  browser relay, CLI, and installer command passed 16 files / 154 tests.
+  browser relay, CLI, and installer command passed 17 files / 161 tests.
   Coverage includes exact package/bin/spawn validation, bounded NDJSON and
   diagnostic fragmentation, transformations, protocol fail-closed behavior,
-  IDs/order/cancellation, backpressure, clean/forced exit races, child-process
-  errors with held stdin, EOF/signals/hung cleanup, controlled exit 137 after
-  SIGKILL escalation, stderr purity, session scoping, static agent entries,
-  required-browser CI prerequisite enforcement, and operation without native
-  `Promise.withResolvers`.
+  IDs/order/cancellation, backpressure, clean/forced exit races, stubborn
+  child-process errors with held stdin and verified SIGKILL cleanup,
+  EOF/signals/hung cleanup, real open-stdin CLI exit 137 after escalation,
+  stderr purity, session scoping, static agent entries, installer Node-version
+  boundaries, required-browser CI prerequisite enforcement, and operation
+  without native `Promise.withResolvers`.
 - A real headed-Chrome + exact upstream `chrome-devtools-mcp@1.5.0` smoke
   navigated a local page and verified accessibility snapshot, console, and
   network metadata through the built `picklab browser devtools-mcp` command.

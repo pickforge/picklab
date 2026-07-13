@@ -2,8 +2,9 @@ import fs from "node:fs";
 import { spawn, type SpawnOptions } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionRecord } from "@pickforge/picklab-core";
 import {
@@ -31,6 +32,19 @@ function temporaryDirectory(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-devtools-mcp-"));
   temporaryDirectories.push(dir);
   return dir;
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await delay(10);
+  }
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Timed out waiting for ${filePath}`);
+  }
 }
 
 function writePackage(
@@ -247,7 +261,7 @@ describe("runDevtoolsMcpRelay", () => {
         spawnedOptions = options;
         return spawn(command, args, options);
       },
-      shutdownTimeoutMs: 100,
+      shutdownTimeoutMs: 5_000,
     });
     expect(exit).toEqual({ code: 0, signal: null });
     expect(spawnedCommand).toBe(process.execPath);
@@ -320,11 +334,23 @@ describe("runDevtoolsMcpRelay", () => {
     ).resolves.toEqual({ code: 7, signal: null });
   });
 
-  it("aborts held stdin and all pumps when the child emits error", async () => {
+  it("force-kills a stubborn child after error while aborting held stdin", async () => {
     const dir = temporaryDirectory();
+    const readyPath = path.join(dir, "child-error-ready");
     const script = path.join(dir, "child-error-upstream.mjs");
-    fs.writeFileSync(script, "process.stdin.resume();\n");
+    fs.writeFileSync(
+      script,
+      [
+        'import fs from "node:fs";',
+        'import net from "node:net";',
+        'process.on("SIGTERM", () => {});',
+        'net.createServer().listen(0, "127.0.0.1");',
+        'fs.writeFileSync(process.env.READY_PATH, "ready");',
+        "process.stdin.resume();",
+      ].join("\n"),
+    );
     const input = new PassThrough();
+    let childPid: number | undefined;
     await expect(
       runDevtoolsMcpRelay({
         session: fakeSession(),
@@ -332,17 +358,24 @@ describe("runDevtoolsMcpRelay", () => {
         input,
         output: collect([]),
         diagnostics: collect([]),
+        env: { PATH: process.env.PATH, READY_PATH: readyPath },
         signalSource: new Signals(),
         shutdownTimeoutMs: 20,
         spawnProcess: (command, args, options) => {
           const child = spawn(command, args, options);
-          queueMicrotask(() => {
+          childPid = child.pid;
+          void waitForFile(readyPath).then(() => {
             child.emit("error", new Error("synthetic child failure"));
           });
           return child;
         },
       }),
     ).rejects.toThrow("child process error: synthetic child failure");
+    if (childPid === undefined) {
+      throw new Error("child pid was not observed");
+    }
+    const observedChildPid = childPid;
+    expect(() => process.kill(observedChildPid, 0)).toThrow();
   });
 
   it("drains a pending response write and ignores stdin abort after clean exit", async () => {
@@ -418,7 +451,6 @@ describe("runDevtoolsMcpRelay", () => {
         "process.stdin.resume();",
       ].join("\n"),
     );
-    const watcher = fs.watch(dir);
     const signals = new Signals();
     const run = runDevtoolsMcpRelay({
       session: fakeSession(),
@@ -430,10 +462,7 @@ describe("runDevtoolsMcpRelay", () => {
       signalSource: signals,
       shutdownTimeoutMs: 20,
     });
-    while (!fs.existsSync(readyPath)) {
-      await once(watcher, "change");
-    }
-    watcher.close();
+    await waitForFile(readyPath);
     signals.emit("SIGTERM");
     await expect(run).resolves.toEqual({ code: null, signal: "SIGTERM" });
   });
@@ -536,7 +565,6 @@ describe("runDevtoolsMcpRelay", () => {
         'fs.writeFileSync(process.env.READY_PATH, "ready");',
       ].join("\n"),
     );
-    const watcher = fs.watch(dir);
     const input = new PassThrough();
     const run = runDevtoolsMcpRelay({
       session: fakeSession(),
@@ -548,10 +576,7 @@ describe("runDevtoolsMcpRelay", () => {
       signalSource: new Signals(),
       shutdownTimeoutMs: 20,
     });
-    while (!fs.existsSync(readyPath)) {
-      await once(watcher, "change");
-    }
-    watcher.close();
+    await waitForFile(readyPath);
     input.end();
     await expect(run).resolves.toEqual({ code: null, signal: "SIGKILL" });
   });
@@ -571,7 +596,6 @@ describe("runDevtoolsMcpRelay", () => {
     );
     const signals = new Signals();
     const input = new PassThrough();
-    const watcher = fs.watch(dir);
     const run = runDevtoolsMcpRelay({
       session: fakeSession(),
       executable: fakeExecutable(script),
@@ -582,10 +606,7 @@ describe("runDevtoolsMcpRelay", () => {
       signalSource: signals,
       shutdownTimeoutMs: 20,
     });
-    while (!fs.existsSync(readyPath)) {
-      await once(watcher, "change");
-    }
-    watcher.close();
+    await waitForFile(readyPath);
     signals.emit("SIGTERM");
     await expect(run).resolves.toEqual({ code: null, signal: "SIGKILL" });
   });

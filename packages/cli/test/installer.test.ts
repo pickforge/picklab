@@ -212,11 +212,70 @@ describe("install.sh", () => {
     });
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("PickLab itself runs on Node.js >= 20");
-    expect(result.stderr).toContain("Install Node.js 20+ (with or without bun)");
+    expect(result.stderr).toContain("PickLab needs Node.js ^20.19, ^22.12, or >=23");
+    expect(result.stderr).toContain("Install a supported Node.js version");
     expect(result.stdout).not.toContain("Installing");
     expect(fs.existsSync(bunCalled)).toBe(false);
   });
+
+  it.each(["20.18.9", "21.9.0", "22.11.9"])(
+    "rejects unsupported Node.js %s before installing",
+    async (version) => {
+      const { home, dir } = makeCase(`sh-node-reject-${version}`);
+      const fakeBin = path.join(dir, "bin");
+      const bunCalled = path.join(dir, "bun-called");
+      writeExecutable(
+        path.join(fakeBin, "node"),
+        ["#!/bin/sh", `printf '%s\\n' v${version}`].join("\n"),
+      );
+      writeExecutable(
+        path.join(fakeBin, "bun"),
+        [
+          "#!/bin/sh",
+          "printf '%s\\n' called >\"${FAKE_BUN_CALLED}\"",
+          "exit 0",
+        ].join("\n"),
+      );
+      const result = await run("/bin/sh", [installScript], {
+        cwd: dir,
+        env: baseEnv(home, {
+          PATH: [fakeBin, "/usr/bin", "/bin"].join(path.delimiter),
+          PICKLAB_INSTALL_FROM_TARBALL: tarball,
+          FAKE_BUN_CALLED: bunCalled,
+        }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(
+        `PickLab needs Node.js ^20.19, ^22.12, or >=23 (found v${version})`,
+      );
+      expect(fs.existsSync(bunCalled)).toBe(false);
+    },
+  );
+
+  it.each(["20.19.0", "22.12.0", "23.0.0"])(
+    "accepts the supported Node.js boundary %s",
+    async (version) => {
+      const { home, dir } = makeCase(`sh-node-accept-${version}`);
+      const fakeBin = path.join(dir, "bin");
+      writeExecutable(
+        path.join(fakeBin, "node"),
+        ["#!/bin/sh", `printf '%s\\n' v${version}`].join("\n"),
+      );
+      const result = await run("/bin/sh", [installScript], {
+        cwd: dir,
+        env: baseEnv(home, {
+          PATH: [fakeBin, "/usr/bin", "/bin"].join(path.delimiter),
+          PICKLAB_INSTALL_FROM_TARBALL: tarball,
+          PICKLAB_INSTALL_RUNTIME: "invalid",
+        }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(
+        'unsupported PICKLAB_INSTALL_RUNTIME "invalid"',
+      );
+      expect(result.stderr).not.toContain("PickLab needs Node.js");
+    },
+  );
 
   it("uses bun pm bin -g to verify installs in a custom global bin dir", async () => {
     const { home, dir } = makeCase("sh-bun-custom-bin");
@@ -226,7 +285,7 @@ describe("install.sh", () => {
     const bunLog = path.join(dir, "bun.log");
     writeExecutable(
       path.join(fakeBin, "node"),
-      ["#!/bin/sh", "printf '%s\\n' v20.0.0"].join("\n"),
+      ["#!/bin/sh", "printf '%s\\n' v20.19.0"].join("\n"),
     );
     writeExecutable(
       path.join(fakeBin, "bun"),
