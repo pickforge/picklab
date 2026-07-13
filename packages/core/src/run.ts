@@ -5,6 +5,15 @@ import { ensureDir, runsDir } from "./paths.js";
 export type RunStatus = "running" | "completed" | "failed";
 export type ArtifactType = "screenshot" | "log" | "report" | "other";
 
+/**
+ * Evidence storage constants. Kept in `run.ts` (not `evidence.ts`) so that
+ * `createRun` can stamp the manifest without importing the evidence module,
+ * avoiding an import cycle: `evidence.ts` depends on `run.ts`, never the
+ * reverse.
+ */
+export const EVIDENCE_VERSION = 1 as const;
+export const EVIDENCE_ACTION_LOG = "actions.jsonl";
+
 export interface RunArtifact {
   type: ArtifactType;
   name: string;
@@ -20,12 +29,31 @@ export interface RunManifest {
   status: RunStatus;
   artifacts: RunArtifact[];
   meta?: Record<string, unknown>;
+  /**
+   * Evidence marker. Present (value `1`) only on computer-use runs that carry
+   * an append-only action journal. Absent on legacy/plain screenshot runs,
+   * which keeps them listing and reading unchanged.
+   */
+  evidenceVersion?: typeof EVIDENCE_VERSION;
+  /** Journal file name relative to the run dir, e.g. `actions.jsonl`. */
+  actionLog?: string;
+  /**
+   * Summary flag copied from the authoritative journal by a finalizer once the
+   * evidence cap is hit. The journal (its truncation marker) remains the source
+   * of truth; appends never rewrite the manifest to set this.
+   */
+  evidenceTruncated?: boolean;
 }
 
 export interface CreateRunOptions {
   now?: Date;
   sessionId?: string;
   meta?: Record<string, unknown>;
+  /**
+   * When true, stamp the manifest with evidence fields and create an empty
+   * append-only action journal. Plain runs omit this and stay non-evidence.
+   */
+  evidence?: boolean;
 }
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -144,6 +172,16 @@ export async function createRun(
   };
   if (opts.sessionId !== undefined) manifest.sessionId = opts.sessionId;
   if (opts.meta !== undefined) manifest.meta = opts.meta;
+  if (opts.evidence === true) {
+    manifest.evidenceVersion = EVIDENCE_VERSION;
+    manifest.actionLog = EVIDENCE_ACTION_LOG;
+    // Create the empty journal up front so appenders open (not create) it and
+    // readers see a real file even before the first action lands.
+    await fs.promises.writeFile(path.join(runDir, EVIDENCE_ACTION_LOG), "", {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  }
 
   await writeManifest(runDir, manifest);
   return new RunHandle(runDir, manifest);

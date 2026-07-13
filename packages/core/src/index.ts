@@ -14,6 +14,7 @@ export {
 
 export {
   deepMerge,
+  isEvidenceEnabled,
   loadConfig,
   readConfigFile,
   resolvedDefaults,
@@ -26,6 +27,8 @@ export {
 
 export {
   createRun,
+  EVIDENCE_ACTION_LOG,
+  EVIDENCE_VERSION,
   listRuns,
   RunHandle,
   type ArtifactType,
@@ -34,6 +37,35 @@ export {
   type RunManifest,
   type RunStatus,
 } from "./run.js";
+
+export {
+  activePointerPath,
+  appendAction,
+  beginEvidenceRun,
+  clearActivePointer,
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_MAX_LINE_BYTES,
+  EVIDENCE_RETENTION_KEEP,
+  isEvidenceRun,
+  isEvidenceTruncated,
+  isTruncationRecord,
+  pruneFinalizedEvidenceRuns,
+  readActions,
+  resolveActivePointer,
+  type ActiveEvidenceClaim,
+  type ActiveEvidencePointer,
+  type AppendActionOptions,
+  type AppendOutcome,
+  type AppendResult,
+  type BeginEvidenceRunOptions,
+  type BeginEvidenceRunResult,
+  type EvidenceAction,
+  type EvidenceActionStatus,
+  type EvidenceRecord,
+  type EvidenceTruncationRecord,
+  type PointerResolution,
+  type PruneEvidenceOptions,
+} from "./evidence.js";
 
 export { isSecretKey, redactEnv, redactSecrets } from "./redact.js";
 
