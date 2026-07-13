@@ -314,9 +314,9 @@ async function acquireSessionVncLock(
   id: string,
   registryEnv: EnvLike,
 ): Promise<() => Promise<void>> {
-  const logDir = desktopSessionLogDir(id, registryEnv);
-  await fs.promises.mkdir(logDir, { recursive: true });
-  const lockPath = path.join(logDir, "ensure-vnc.lock");
+  const registryDir = sessionsDir(registryEnv);
+  await fs.promises.mkdir(registryDir, { recursive: true });
+  const lockPath = path.join(registryDir, `${id}.ensure-vnc.lock`);
   const owner = { pid: process.pid, token: randomUUID() };
   const sentinelPath = `${lockPath}.${owner.token}`;
   await fs.promises.writeFile(sentinelPath, JSON.stringify(owner), {
@@ -337,7 +337,15 @@ async function acquireSessionVncLock(
         acquired = true;
         return () => releaseVncLock(lockPath, owner.token);
       } catch (error) {
-        if (errorCode(error) !== "EEXIST") throw error;
+        const code = errorCode(error);
+        if (code === "ENOENT") {
+          if ((await getSession(id, registryEnv)) === undefined) {
+            throw new Error(`Session not found: ${id}`);
+          }
+          await sleep(VNC_LOCK_POLL_MS);
+          continue;
+        }
+        if (code !== "EEXIST") throw error;
       }
 
       const current = await readVncLockOwner(lockPath);

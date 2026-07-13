@@ -187,14 +187,17 @@ describe("ensureSessionVnc", () => {
       },
       registryEnv,
     );
-    const logDir = desktopSessionLogDir(record.id, registryEnv);
-    await fs.promises.mkdir(logDir, { recursive: true });
+    const lockPath = path.join(
+      home,
+      "sessions",
+      `${record.id}.ensure-vnc.lock`,
+    );
     await fs.promises.writeFile(
-      path.join(logDir, "ensure-vnc.lock"),
+      lockPath,
       JSON.stringify({ pid: 4_194_304, token: "stale-owner" }),
     );
     await fs.promises.writeFile(
-      path.join(logDir, "ensure-vnc.lock.stale-owner"),
+      `${lockPath}.stale-owner`,
       JSON.stringify({ pid: 4_194_304, token: "stale-owner" }),
     );
 
@@ -226,7 +229,7 @@ describe("ensureSessionVnc", () => {
       vncPort: syntheticVncPort(),
       vncViewOnly: true,
     });
-    expect(fs.existsSync(path.join(logDir, "ensure-vnc.lock"))).toBe(false);
+    expect(fs.existsSync(lockPath)).toBe(false);
 
     await openVncViewer({
       port: first.port,
@@ -404,6 +407,10 @@ describe("ensureSessionVnc", () => {
       });
       await scheduler.yield();
       await scheduler.yield();
+      await fs.promises.rm(desktopSessionLogDir(record.id, registryEnv), {
+        recursive: true,
+        force: true,
+      });
       await destroySessionRecord(record.id, registryEnv);
     });
 
