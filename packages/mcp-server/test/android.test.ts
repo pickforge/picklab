@@ -387,6 +387,18 @@ describe("android_start (fake sdk)", () => {
         { tool: "session_destroy", status: "ok" },
       ]);
       expect(
+        await fs.promises.readFile(
+          path.join(
+            startDirs.projectDir,
+            ".picklab",
+            "runs",
+            finalizedManifest!.runId,
+            "report.html",
+          ),
+          "utf8",
+        ),
+      ).toContain("session_destroy");
+      expect(
         fs.existsSync(activePointerPath(startDirs.projectDir, session.id)),
       ).toBe(false);
     } finally {

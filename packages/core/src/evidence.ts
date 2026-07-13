@@ -221,6 +221,18 @@ function isSafeRunId(runId: string): boolean {
   return SAFE_NAME_PATTERN.test(runId) && !runId.includes("..");
 }
 
+function manifestMatchesPointer(
+  manifest: RunManifest,
+  pointer: ActiveEvidencePointer,
+  sessionId: string,
+): boolean {
+  return (
+    manifest.runId === pointer.runId &&
+    manifest.sessionId === sessionId &&
+    pointer.sessionId === sessionId
+  );
+}
+
 /** Absolute path of the active-run pointer for a session. */
 export function activePointerPath(
   projectDir: string,
@@ -358,7 +370,11 @@ export async function resolveActivePointer(
   const manifest = await readManifest(
     path.join(runsDir(projectDir), pointer.runId),
   );
-  if (manifest === undefined || manifest.status !== "running") {
+  if (
+    manifest === undefined ||
+    manifest.status !== "running" ||
+    !manifestMatchesPointer(manifest, pointer, sessionId)
+  ) {
     return { status: "stale", raw, pointer };
   }
   // A running manifest is only truly active while its recorded owner lives. A
@@ -835,7 +851,11 @@ export async function finalizeActiveEvidenceRun(
       resolution.status === "active"
         ? resolution.manifest
         : await readManifest(runDir);
-    if (manifest === undefined || !isEvidenceRun(manifest)) {
+    if (
+      manifest === undefined ||
+      !isEvidenceRun(manifest) ||
+      !manifestMatchesPointer(manifest, pointer, sessionId)
+    ) {
       if (
         await clearActivePointer(projectDir, sessionId, {
           expectRaw: resolution.raw,

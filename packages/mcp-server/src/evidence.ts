@@ -5,12 +5,15 @@ import {
   appendAction,
   beginEvidenceRun,
   isEvidenceEnabled,
+  isEvidenceRun,
   loadConfig,
   sanitizeActionTarget,
   sanitizeErrorText,
   sanitizeTypedValue,
+  writeEvidenceReport,
   type EvidenceAction,
   type RunHandle,
+  type RunManifest,
   type SanitizedTypedValue,
 } from "@pickforge/picklab-core";
 import type { ServerContext, ToolReport } from "./context.js";
@@ -26,6 +29,7 @@ export interface McpEvidenceOptions<T> {
   target?: Record<string, unknown>;
   typedValue?: { value: string; inputType?: string };
   artifacts?: (result: T, run: RunHandle) => readonly string[];
+  refreshReportAfterRecord?: boolean;
 }
 
 function evidenceStatus(error: unknown): EvidenceAction["status"] {
@@ -51,6 +55,25 @@ async function evidenceRun(
   if (!isEvidenceEnabled(config)) return undefined;
   return (await beginEvidenceRun(ctx.projectDir, sessionId, { slug: "computer-use" }))
     .run;
+}
+
+async function refreshFinalizedReport(run: RunHandle): Promise<void> {
+  const parsed: unknown = JSON.parse(
+    await fs.promises.readFile(path.join(run.dir, "manifest.json"), "utf8"),
+  );
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error(`Invalid evidence manifest for run ${run.runId}`);
+  }
+  const manifest = parsed as RunManifest;
+  if (
+    !isEvidenceRun(manifest) ||
+    manifest.runId !== run.runId ||
+    manifest.sessionId !== run.manifest.sessionId ||
+    manifest.status === "running"
+  ) {
+    return;
+  }
+  await writeEvidenceReport(run.dir, manifest);
 }
 
 async function confinedArtifacts(
@@ -145,6 +168,9 @@ export async function withMcpEvidence<T extends ToolReport>(
           action.error = sanitizeErrorText(result.errors!.join("; "));
         }
         await appendAction(run.dir, action);
+        if (options.refreshReportAfterRecord === true) {
+          await refreshFinalizedReport(run);
+        }
       } catch (error) {
         reportEvidenceFailure(options.tool, error);
       }

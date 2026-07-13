@@ -307,6 +307,17 @@ then reset this file.
   diagnostics, malformed/unmatched traffic, pending-call closure, disabled
   configuration, evidence-write failure isolation, and bounded diagnostics.
   Two independent changed-HEAD reviews are clean.
+- Final evidence integration: `bun run typecheck` and `bun run build` pass;
+  the full and coverage suites pass 77 files / 945 passed / 2 skipped with all
+  global thresholds met. A failed DevTools relay flow produces an automatically
+  finalized, useful HTML report without persisted typed text, URL query tokens,
+  headers, bodies, JWTs, CDP capability values, or OTPs. Focused lifecycle tests
+  cover report publication on explicit destruction and dead-session reaping,
+  inclusion of the final `session_destroy` action, rejection of mismatched
+  manifest/pointer identities, and fresh relay-target resolution after browser
+  recreation. README and security guidance document recording, resources, the
+  100 MiB threshold, 20-run retention, opt-out behavior, and unredactable
+  screenshot pixels. Two independent changed-HEAD reviews are clean.
 
 ### Not tested yet
 
@@ -317,4 +328,4 @@ then reset this file.
 
 ### Release blockers
 
-- None known for the DevTools relay slice.
+- None known for the final evidence integration slice.

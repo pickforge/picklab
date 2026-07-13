@@ -2,10 +2,12 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { finalizeActiveEvidenceRun } from "./evidence.js";
+import { writeEvidenceReport } from "./evidence-render.js";
 import {
   ensureDir,
   isProfileConfined,
   sessionsDir,
+  runsDir,
   type EnvLike,
 } from "./paths.js";
 import {
@@ -446,11 +448,17 @@ export async function destroySessionRecord(
   }
   const record = await getSession(id, env);
   if (record !== undefined) {
-    await finalizeActiveEvidenceRun(
+    const finalized = await finalizeActiveEvidenceRun(
       record.projectDir,
       record.id,
       evidenceStatus,
-    ).catch(() => {});
+    ).catch(() => undefined);
+    if (finalized !== undefined) {
+      await writeEvidenceReport(
+        path.join(runsDir(record.projectDir), finalized.runId),
+        finalized,
+      ).catch(() => {});
+    }
   }
   await fs.promises.rm(sessionPath(id, env), { force: true });
 }

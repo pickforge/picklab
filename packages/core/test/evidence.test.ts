@@ -346,6 +346,28 @@ describe("pointer resolution and clearing", () => {
     );
   });
 
+  it("rejects a manifest whose identity differs from its active pointer", async () => {
+    const sessionId = "desk-mismatch";
+    const { run } = await beginEvidenceRun(project, sessionId);
+    const manifestPath = path.join(run.dir, "manifest.json");
+    const manifest = JSON.parse(
+      await fs.promises.readFile(manifestPath, "utf8"),
+    );
+    manifest.runId = "../../outside";
+    await fs.promises.writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect((await resolveActivePointer(project, sessionId)).status).toBe(
+      "stale",
+    );
+    await expect(
+      finalizeActiveEvidenceRun(project, sessionId),
+    ).resolves.toBeUndefined();
+    expect(fs.existsSync(activePointerPath(project, sessionId))).toBe(false);
+    expect(fs.existsSync(path.join(project, "outside", "report.html"))).toBe(
+      false,
+    );
+  });
+
   it("recovers a corrupt pointer by starting a fresh run", async () => {
     await fs.promises.mkdir(runsRoot(), { recursive: true });
     await fs.promises.writeFile(

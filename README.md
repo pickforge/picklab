@@ -61,6 +61,46 @@ picklab session destroy --all
 
 Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manifest, so a run is inspectable and reproducible after the fact.
 
+### Evidence recording
+
+Computer-use tools record one session-scoped evidence run by default. MCP
+desktop, Android, and session actions share the same append-only timeline as
+browser DevTools actions. Destroying a session, or reaping a dead one, finalizes
+the run and writes a static `report.html` filmstrip.
+
+A finalized evidence run under `.picklab/runs/<runId>/` contains:
+
+- `manifest.json` — run identity, status, and evidence metadata
+- `actions.jsonl` — authoritative, append-only sanitized action timeline
+- `report.html` — escaped, no-script human filmstrip generated at finalization
+- `screenshots/` and `logs/` — associated artifacts, when explicitly captured
+
+Typed values are stored only as length and input type. Network failures keep
+only allowlisted method, URL origin/path without its query, status, resource
+type, timing, and sanitized error metadata; headers and bodies are never kept.
+PickLab does not take implicit screenshots for input actions. Explicit
+screenshot tools still capture the screen exactly as displayed.
+
+The journal and associated artifacts have a 100 MiB recording threshold per
+run. The record that crosses the threshold may exceed it; PickLab then writes a
+durable metadata-only truncation marker and stops appending further payloads.
+Only the latest 20 finalized evidence runs are retained; active/running and
+legacy runs are never pruned.
+
+Evidence recording is enabled by default. Disable the action timeline for a
+project in `.picklab/config.json`:
+
+```json
+{
+  "evidence": {
+    "enabled": false
+  }
+}
+```
+
+This does not block an explicitly requested screenshot command. Screenshot
+pixels cannot be redacted; see [SECURITY.md](SECURITY.md#recorded-evidence-and-screenshots).
+
 ### Concurrent sessions
 
 Each session gets its own isolated display or emulator, so several agents and projects can run labs side by side. When a command or tool is called without an explicit session id, the default resolves per project: only running sessions created for the same project directory are considered. Pass `session` ids (CLI: `--session <id>`) to target a specific lab, including one belonging to another project.
@@ -180,6 +220,8 @@ Resources, addressable as `picklab://` URIs:
 - `picklab://runs/{runId}/manifest` — run manifest
 - `picklab://runs/{runId}/screenshots/{name}` — screenshots
 - `picklab://runs/{runId}/logs/{name}` — logs
+- `picklab://runs/{runId}/actions` — sanitized action timeline JSON
+- `picklab://runs/{runId}/report` — static HTML evidence filmstrip
 - `picklab://sessions/{sessionId}/status` — session liveness
   The status includes a read-only viewer endpoint/readiness report when VNC is
   present. MCP never opens a host GUI; only the CLI launches viewer windows.
@@ -208,6 +250,8 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 - Relay stdout is protocol-only. A pending JSON-RPC record is capped at 16 MiB. Upstream diagnostic lines are capped at 64 KiB, redacted, and forwarded only to stderr; an over-limit line is dropped with a safe notice. Upstream update checks and usage statistics are disabled.
 - VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
+- Evidence timelines persist only allowlisted metadata; typed values become length/type metadata, and network headers, bodies, and URL queries are dropped. Static HTML reports escape page-controlled text and use a no-script, no-network CSP.
+- Screenshot files contain raw pixels and cannot be redacted. Avoid explicit captures on screens containing secrets, and use `evidence.enabled: false` when an action timeline is not appropriate. See [SECURITY.md](SECURITY.md#recorded-evidence-and-screenshots).
 - PickLab provisions a dedicated locked lab user (`picklab-lab`) and a dedicated AVD (`picklab-avd`) so lab workloads do not borrow your personal resources. Running session processes under the lab user is planned post-MVP.
 - Agent config edits are atomic, with backups of the previous config.
 

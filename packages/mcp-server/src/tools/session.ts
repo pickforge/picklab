@@ -404,6 +404,7 @@ export function registerSessionTools(
                 sessionId: record.id,
                 tool: "session_destroy",
                 target: { name: record.type },
+                refreshReportAfterRecord: true,
               },
               async () => {
                 await destroyRecord(ctx, record);
