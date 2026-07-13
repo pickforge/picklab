@@ -570,7 +570,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     writeExecutable(
       path.join(binDir, "Xvfb"),
       [
-        "#!/usr/bin/node",
+        `#!${process.execPath}`,
         'const fs = require("node:fs");',
         'fs.writeFileSync(process.env.XVFB_STARTED, `${process.pid} ${process.argv[2]}`);',
         "setInterval(() => {}, 1000);",
@@ -630,7 +630,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     expect(await getSession(id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
-  it("persists partial identities when startup cleanup is unverifiable and supports retry", async () => {
+  it("preserves retry state or completes cleanup across the supervisor reap race", async () => {
     const sessionsPath = path.join(home, "sessions");
     fs.mkdirSync(sessionsPath, { recursive: true });
     const recordReady = waitForEntry(
@@ -651,16 +651,25 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const handoffDeadline = Date.now() + TEST_TIMEOUT_MS;
     let leaderPid: number | undefined;
     let childPid: number | undefined;
+    let xvfbPid: number | undefined;
     while (
-      (leaderPid === undefined || childPid === undefined) &&
+      (leaderPid === undefined ||
+        childPid === undefined ||
+        xvfbPid === undefined) &&
       Date.now() < handoffDeadline
     ) {
-      leaderPid = (await getSession(id, registryEnv))?.browser?.browserPid;
+      const current = await getSession(id, registryEnv);
+      leaderPid = current?.browser?.browserPid;
+      xvfbPid = current?.desktop?.xvfbPid;
       childPid =
         leaderPid === undefined
           ? undefined
           : listProcessGroupMembers(leaderPid).find((pid) => pid !== leaderPid);
-      if (leaderPid === undefined || childPid === undefined) {
+      if (
+        leaderPid === undefined ||
+        childPid === undefined ||
+        xvfbPid === undefined
+      ) {
         await scheduler.yield();
       }
     }
@@ -668,7 +677,9 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
       leaderPid === undefined ||
       leaderPid <= 0 ||
       childPid === undefined ||
-      childPid <= 0
+      childPid <= 0 ||
+      xvfbPid === undefined ||
+      xvfbPid <= 0
     ) {
       throw new Error(
         "Browser ownership handoff did not persist a real leader and child PID",
@@ -688,32 +699,43 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
 
     const failed = await getSession(id, registryEnv);
     expect(failed?.status).toBe("error");
-    expect(failed?.meta?.reaperCleanupPending).toBe(true);
-    const failedXvfbPid = failed?.desktop?.xvfbPid;
-    if (failedXvfbPid === undefined) {
-      throw new Error("Failed create did not persist the Xvfb pid");
+    if (failed?.meta?.reaperCleanupPending === true) {
+      const failedXvfbPid = failed.desktop?.xvfbPid;
+      if (failedXvfbPid === undefined) {
+        throw new Error("Failed create did not persist the Xvfb pid");
+      }
+      expect(failed.browser).toMatchObject({
+        browserPid: leaderPid,
+        profileMode: "ephemeral",
+        profileDir: path.join(sessionDir, "profile"),
+      });
+      expect(failed.browser?.cdpPort).toBeUndefined();
+      expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
+
+      await expect(destroyBrowserSession(id, registryEnv)).rejects.toThrow(
+        /Failed to fully destroy browser session/,
+      );
+      expect(isPidAlive(failedXvfbPid)).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
+
+      await stopPid(childPid, { timeoutMs: 1000 });
+      expect(
+        (await reapDeadRunningSessions(registryEnv)).map((record) => record.id),
+      ).toEqual([id]);
+      expect(await getSession(id, registryEnv)).toBeUndefined();
+      expect(isPidAlive(failedXvfbPid)).toBe(false);
+      expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);
+    } else {
+      // Cleanup may observe the matching supervisor while it is still a zombie,
+      // verify the group, and complete teardown before the test sees the record.
+      expect(failed?.desktop).toBeUndefined();
+      expect(failed?.browser).toBeUndefined();
+      expect(listProcessGroupMembers(leaderPid)).toEqual([]);
+      expect(isPidAlive(xvfbPid)).toBe(false);
+      expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);
+      await destroyBrowserSession(id, registryEnv);
+      expect(await getSession(id, registryEnv)).toBeUndefined();
     }
-    expect(failed?.browser).toMatchObject({
-      browserPid: leaderPid,
-      profileMode: "ephemeral",
-      profileDir: path.join(sessionDir, "profile"),
-    });
-    expect(failed?.browser?.cdpPort).toBeUndefined();
-    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
-
-    await expect(destroyBrowserSession(id, registryEnv)).rejects.toThrow(
-      /Failed to fully destroy browser session/,
-    );
-    expect(isPidAlive(failedXvfbPid)).toBe(true);
-    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(true);
-
-    await stopPid(childPid, { timeoutMs: 1000 });
-    expect(
-      (await reapDeadRunningSessions(registryEnv)).map((record) => record.id),
-    ).toEqual([id]);
-    expect(await getSession(id, registryEnv)).toBeUndefined();
-    expect(isPidAlive(failedXvfbPid)).toBe(false);
-    expect(fs.existsSync(path.join(sessionDir, "profile"))).toBe(false);
   }, TEST_TIMEOUT_MS);
 
   it("kills the process group and removes the profile when Chrome stalls", async () => {
