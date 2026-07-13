@@ -105,6 +105,30 @@ async function waitForEntry(
   }
 }
 
+async function waitForXvfbStarted(
+  dir: string,
+  startedFile: string,
+): Promise<{ pid: number; display: string }> {
+  await waitForEntry(dir, (name) => name === path.basename(startedFile));
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const [pidText, display] = fs
+      .readFileSync(startedFile, "utf8")
+      .trim()
+      .split(/\s+/);
+    const pid = Number(pidText);
+    if (
+      Number.isSafeInteger(pid) &&
+      display !== undefined &&
+      /^:\d+$/.test(display)
+    ) {
+      return { pid, display };
+    }
+    await scheduler.wait(10);
+  }
+  throw new Error("Fake Xvfb did not publish a valid startup marker");
+}
+
 
 describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
   it("brings up both legs, persists the contract, and never persists the GUID", async () => {
@@ -679,12 +703,13 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
       [
         `#!${process.execPath}`,
         'const fs = require("node:fs");',
-        'fs.writeFileSync(process.env.XVFB_STARTED, `${process.pid} ${process.argv[2]}`);',
+        'fs.closeSync(fs.openSync(process.env.XVFB_STARTED, "w"));',
+        'setTimeout(() => fs.writeFileSync(process.env.XVFB_STARTED, `${process.pid} ${process.argv[2]}`), 25);',
         "setInterval(() => {}, 1000);",
       ].join("\n"),
     );
     const controller = new AbortController();
-    const started = waitForEntry(tmp, (name) => name === "xvfb-started");
+    const started = waitForXvfbStarted(tmp, startedFile);
     const creating = createBrowserSession({
       projectDir,
       registryEnv,
@@ -696,15 +721,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
       signal: controller.signal,
     });
 
-    await started;
-    const [pidText, display] = fs
-      .readFileSync(startedFile, "utf8")
-      .trim()
-      .split(/\s+/);
-    const xvfbPid = Number(pidText);
-    if (!Number.isSafeInteger(xvfbPid) || display === undefined) {
-      throw new Error("Fake Xvfb did not publish a valid startup marker");
-    }
+    const { pid: xvfbPid, display } = await started;
     controller.abort();
     await expect(creating).rejects.toThrow(/aborted/);
 

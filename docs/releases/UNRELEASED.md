@@ -48,6 +48,10 @@ then reset this file.
 
 ## Internal/release changes
 
+- Stabilized the browser Xvfb cancellation regression test by waiting for the
+  fake process's complete PID/display marker instead of treating file creation
+  as publication. This removes the full-suite/coverage race that could abandon
+  the in-flight create and cascade into a misleading ownership-handoff failure.
 - Strengthened `redactSecrets` (pickforge/picklab#20): Cookie/Set-Cookie
   values pair by pair, including balanced double/single-quoted values and
   apostrophes in unquoted values, while cookie attributes like
@@ -185,6 +189,10 @@ then reset this file.
   navigated a local page and verified accessibility snapshot, console, and
   network metadata through the built `picklab browser devtools-mcp` command.
   The existing real-Chrome lifecycle integration also passed (3 tests).
+- Xvfb cancellation regression: 60 focused iterations and 12 parallel
+  browser + desktop-linux suite iterations pass with a deliberately split
+  fake startup-marker publication; the browser session suite (25 tests) and
+  `bun run typecheck` pass.
 
 ### Not tested yet
 
