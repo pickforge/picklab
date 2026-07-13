@@ -92,7 +92,13 @@ then reset this file.
   preserved diagnostics, verified Xvfb PID identity and reuse refusal,
   post-SIGTERM group escalation, GUID exclusion, and environment scrubbing.
 - Built `picklab` and `picklab-mcp` tests cover browser create, status, individual
-  destroy, destroy-all, profile removal, and environment scrubbing.
+  destroy, destroy-all, complete session-directory removal, profile removal, and
+  environment scrubbing.
+- Final full coverage suite: 63 files, 705 passed / 2 skipped, all thresholds met.
+- Real built-CLI Chrome proof covered create, running status, visible typing and
+  navigation, screenshot inspection, and destroy; Chrome, Xvfb, the ephemeral
+  profile, session logs, and the session record were removed. Persisted Chrome
+  logs contained no DevTools websocket capability URL.
 
 ### Not tested yet
 
@@ -100,9 +106,6 @@ then reset this file.
 - Platform smoke checks outside Linux.
 - Live hosted CI run with `x11vnc` actually installed (validated locally via
   fake binaries and a `CI=true` dry run only).
-- Full-suite and coverage runs after the resumed lifecycle edits.
-- Live real-Chrome integration after the resumed lifecycle edits (CI remains
-  configured to require it on Linux).
 
 ### Release blockers
 
