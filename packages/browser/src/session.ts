@@ -18,6 +18,7 @@ import {
   type BrowserSessionInfo,
   type DesktopSessionInfo,
   type EnvLike,
+  type OwnedDaemonHandle,
   type ProcessIdentity,
   type SessionRecord,
 } from "@pickforge/picklab-core";
@@ -36,7 +37,7 @@ import {
 } from "./env.js";
 import { waitForDevToolsPort } from "./devtools.js";
 import { buildSupervisedBrowserCommand } from "./supervisor.js";
-import { asError } from "./util.js";
+import { asError, sleep } from "./util.js";
 
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
 // A browser session also launches a heavy real Chrome, so its private Xvfb can
@@ -162,6 +163,40 @@ async function stopBrowserGroup(
   }
 }
 
+function ownedDaemonExited(daemon: OwnedDaemonHandle): boolean {
+  return daemon.child.exitCode !== null || daemon.child.signalCode !== null;
+}
+
+async function waitForOwnedIdentity(
+  daemon: OwnedDaemonHandle,
+): Promise<ProcessIdentity | undefined> {
+  const deadline = Date.now() + 1_000;
+  for (;;) {
+    const identity = readProcessIdentity(daemon.pid);
+    if (identity !== undefined) return identity;
+    if (ownedDaemonExited(daemon) || Date.now() >= deadline) return undefined;
+    await sleep(10);
+  }
+}
+
+async function stopOwnedBrowserDaemon(
+  daemon: OwnedDaemonHandle,
+): Promise<boolean> {
+  try {
+    if (ownedDaemonExited(daemon)) return true;
+    const closed = new Promise<void>((resolve) => {
+      daemon.child.once("close", () => resolve());
+    });
+    daemon.child.kill("SIGKILL");
+    if (!ownedDaemonExited(daemon)) await closed;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    daemon.release();
+  }
+}
+
 
 /**
  * Create an isolated headed-Chrome session: a private Xvfb display plus headed
@@ -194,6 +229,7 @@ export async function createBrowserSession(
   let xvfbPartial: XvfbPartialStart | undefined;
   let xvfbIdentity: ProcessIdentity | undefined;
   let browserIdentity: ProcessIdentity | undefined;
+  let browserDaemon: OwnedDaemonHandle | undefined;
   try {
     assertNotAborted(opts.signal);
     await makeRuntimeDirs(layout);
@@ -207,8 +243,21 @@ export async function createBrowserSession(
         waitTimeoutMs: opts.xvfbWaitTimeoutMs ?? DEFAULT_XVFB_WAIT_TIMEOUT_MS,
         displayStart: BROWSER_DISPLAY_START,
         signal: opts.signal,
-        onSpawn: (partial) => {
+        onSpawn: async (partial) => {
           xvfbPartial = partial;
+          await updateSession(
+            record.id,
+            {
+              desktop: {
+                display: partial.display,
+                xvfbPid: partial.pid,
+                xvfbStartTimeTicks: partial.startTimeTicks,
+                width: partial.width,
+                height: partial.height,
+              },
+            },
+            registryEnv,
+          );
         },
       });
     } catch (error) {
@@ -217,10 +266,17 @@ export async function createBrowserSession(
       }
       throw error;
     }
-    xvfbIdentity = readProcessIdentity(xvfb.pid);
-    if (xvfbIdentity === undefined) {
-      throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
-    }
+    xvfbIdentity = {
+      pid: xvfb.pid,
+      startTicks: xvfb.startTimeTicks,
+    };
+    const desktop: DesktopSessionInfo = {
+      display: xvfb.display,
+      xvfbPid: xvfb.pid,
+      xvfbStartTimeTicks: xvfbIdentity.startTicks,
+      width: xvfb.width,
+      height: xvfb.height,
+    };
 
     const args = buildChromeArgs({
       profileDir: layout.profileDir,
@@ -241,15 +297,34 @@ export async function createBrowserSession(
       binaryPath,
       args,
     );
-    const daemon = await startDaemon(supervised.command, supervised.args, {
+    browserDaemon = await startDaemon(supervised.command, supervised.args, {
       logDir,
       name: "chrome",
       env: childEnv,
       cleanEnv: true,
+      owned: true,
     });
-    // Snapshot identity immediately so cleanup can target the exact process
-    // group even if Chrome dies before it publishes a port.
-    browserIdentity = readProcessIdentity(daemon.pid);
+    browserIdentity = await waitForOwnedIdentity(browserDaemon);
+    if (browserIdentity === undefined) {
+      await stopOwnedBrowserDaemon(browserDaemon);
+      throw new Error(
+        `Chrome process ${browserDaemon.pid} could not be identified during startup; ` +
+          `check the log at ${browserDaemon.logPath}`,
+      );
+    }
+    const startingBrowser: BrowserSessionInfo = {
+      browserPid: browserIdentity.pid,
+      browserStartTimeTicks: browserIdentity.startTicks,
+      binaryPath,
+      profileMode: "ephemeral",
+      profileDir: layout.profileDir,
+    };
+    await updateSession(
+      record.id,
+      { desktop, browser: startingBrowser },
+      registryEnv,
+    );
+    browserDaemon.release();
 
     const waited = await waitForDevToolsPort({
       profileDir: layout.profileDir,
@@ -265,35 +340,21 @@ export async function createBrowserSession(
       throw new Error(
         waited.reason === "exited"
           ? `Chrome exited during startup before exposing a DevTools port; ` +
-            `check the log at ${daemon.logPath}`
+            `check the log at ${browserDaemon.logPath}`
           : `Chrome did not expose a DevTools port within ` +
             `${opts.cdpTimeoutMs ?? DEFAULT_CDP_TIMEOUT_MS}ms; ` +
-            `check the log at ${daemon.logPath}`,
+            `check the log at ${browserDaemon.logPath}`,
       );
     }
 
-    const identity = readProcessIdentity(daemon.pid);
-    if (identity === undefined) {
+    if (!processIdentityMatches(browserIdentity)) {
       throw new Error(
-        `Chrome process ${daemon.pid} vanished right after startup; ` +
-          `check the log at ${daemon.logPath}`,
+        `Chrome process ${browserDaemon.pid} vanished right after startup; ` +
+          `check the log at ${browserDaemon.logPath}`,
       );
     }
-    browserIdentity = identity;
-
-    const desktop: DesktopSessionInfo = {
-      display: xvfb.display,
-      xvfbPid: xvfb.pid,
-      xvfbStartTimeTicks: xvfbIdentity.startTicks,
-      width: xvfb.width,
-      height: xvfb.height,
-    };
     const browser: BrowserSessionInfo = {
-      browserPid: identity.pid,
-      browserStartTimeTicks: identity.startTicks,
-      binaryPath,
-      profileMode: "ephemeral",
-      profileDir: layout.profileDir,
+      ...startingBrowser,
       cdpPort: waited.port,
     };
     assertNotAborted(opts.signal);
@@ -308,14 +369,18 @@ export async function createBrowserSession(
       id: record.id,
       display: xvfb.display,
       xvfbPid: xvfb.pid,
-      browserPid: identity.pid,
+      browserPid: browserIdentity.pid,
       cdpPort: waited.port,
       profileDir: layout.profileDir,
       binaryPath,
       logDir,
     };
   } catch (error) {
-    const { gone: browserGone } = await stopBrowserGroup(browserIdentity);
+    const browserGone =
+      browserIdentity === undefined && browserDaemon !== undefined
+        ? await stopOwnedBrowserDaemon(browserDaemon)
+        : (await stopBrowserGroup(browserIdentity)).gone;
+    browserDaemon?.release();
     const xvfbGone =
       xvfb === undefined
         ? (xvfbPartial?.cleanupConfirmed ?? true)
@@ -353,10 +418,17 @@ export async function createBrowserSession(
             profileMode: "ephemeral" as const,
             profileDir: layout.profileDir,
           };
+    const clearedMeta = { ...record.meta };
+    delete clearedMeta[REAPER_CLEANUP_PENDING_META_KEY];
     await updateSession(
       record.id,
       cleanupComplete
-        ? { status: "error" }
+        ? {
+            status: "error",
+            desktop: undefined,
+            browser: undefined,
+            meta: clearedMeta,
+          }
         : {
             status: "error",
             meta: {

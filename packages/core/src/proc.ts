@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -224,11 +224,27 @@ export interface DaemonHandle {
   logPath: string;
 }
 
-export async function startDaemon(
+export interface OwnedDaemonHandle extends DaemonHandle {
+  child: ChildProcess;
+  release(): void;
+}
+
+export function startDaemon(
+  cmd: string,
+  args: readonly string[],
+  opts: StartDaemonOptions & { owned: true },
+): Promise<OwnedDaemonHandle>;
+export function startDaemon(
   cmd: string,
   args: readonly string[],
   opts: StartDaemonOptions,
-): Promise<DaemonHandle> {
+): Promise<DaemonHandle>;
+
+export async function startDaemon(
+  cmd: string,
+  args: readonly string[],
+  opts: StartDaemonOptions & { owned?: boolean },
+): Promise<DaemonHandle | OwnedDaemonHandle> {
   await fs.promises.mkdir(opts.logDir, { recursive: true });
   const name = opts.name ?? path.basename(cmd);
   const logPath = path.join(opts.logDir, `${name}.log`);
@@ -248,15 +264,29 @@ export async function startDaemon(
     throw error;
   }
 
-  return new Promise<DaemonHandle>((resolve, reject) => {
+  return new Promise<DaemonHandle | OwnedDaemonHandle>((resolve, reject) => {
     const onSpawn = (): void => {
       cleanup();
       if (child.pid === undefined) {
         reject(new Error(`Failed to start daemon: ${cmd}`));
         return;
       }
-      child.unref();
-      resolve({ pid: child.pid, logPath });
+      if (opts.owned === true) {
+        let released = false;
+        resolve({
+          pid: child.pid,
+          logPath,
+          child,
+          release: () => {
+            if (released) return;
+            released = true;
+            child.unref();
+          },
+        });
+      } else {
+        child.unref();
+        resolve({ pid: child.pid, logPath });
+      }
     };
     const onError = (error: Error): void => {
       cleanup();

@@ -6,7 +6,6 @@ import {
   getSession,
   isPidAlive,
   processIdentityMatches,
-  readProcessIdentity,
   reapDeadRunningSessions,
   sessionsDir,
   stopPid,
@@ -90,8 +89,21 @@ export async function createDesktopSession(
         height: opts.height,
         logDir,
         env: opts.env,
-        onSpawn: (partial) => {
+        onSpawn: async (partial) => {
           xvfbPartial = partial;
+          await updateSession(
+            record.id,
+            {
+              desktop: {
+                display: partial.display,
+                xvfbPid: partial.pid,
+                xvfbStartTimeTicks: partial.startTimeTicks,
+                width: partial.width,
+                height: partial.height,
+              },
+            },
+            registryEnv,
+          );
         },
       });
     } catch (error) {
@@ -100,11 +112,7 @@ export async function createDesktopSession(
       }
       throw error;
     }
-    const xvfbIdentity = readProcessIdentity(xvfb.pid);
-    if (xvfbIdentity === undefined) {
-      throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
-    }
-    xvfbStartTimeTicks = xvfbIdentity.startTicks;
+    xvfbStartTimeTicks = xvfb.startTimeTicks;
     if (wantsVnc) {
       vnc = await startVnc({
         display: xvfb.display,
@@ -167,10 +175,12 @@ export async function createDesktopSession(
       knownXvfb !== undefined && xvfbPartial?.pid === knownXvfb.pid
         ? xvfbPartial.startTimeTicks
         : xvfbStartTimeTicks;
+    const clearedMeta = { ...record.meta };
+    delete clearedMeta[REAPER_CLEANUP_PENDING_META_KEY];
     await updateSession(
       record.id,
       cleanupComplete
-        ? { status: "error" }
+        ? { status: "error", desktop: undefined, meta: clearedMeta }
         : {
             status: "error",
             meta: {
@@ -263,7 +273,17 @@ export async function destroyDesktopSession(
     }
   }
   if (failures.length > 0) {
-    await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+    await updateSession(
+      id,
+      {
+        status: "error",
+        meta: {
+          ...record.meta,
+          [REAPER_CLEANUP_PENDING_META_KEY]: true,
+        },
+      },
+      registryEnv,
+    ).catch(() => {});
     throw new AggregateError(
       failures,
       `Failed to stop ${failures.length} process(es) of desktop session ${id}`,

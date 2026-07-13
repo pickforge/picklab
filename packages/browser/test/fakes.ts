@@ -67,7 +67,6 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       "  });",
       "}",
       "setInterval(() => {}, 1000);",
-      'if (MODE === "stubborn-stall" && sessionDir) safeWrite(path.join(sessionDir, "chrome.ready"), String(process.pid));',
     ].join("\n"),
   );
   writeExecutable(

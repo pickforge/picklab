@@ -48,6 +48,7 @@ export {
   stopPid,
   stopProcessGroupVerified,
   type DaemonHandle,
+  type OwnedDaemonHandle,
   type ProcessIdentity,
   type RunCommandOptions,
   type RunCommandResult,

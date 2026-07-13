@@ -115,9 +115,6 @@ describe("Xvfb startup failure ownership", () => {
       display: ":241",
       logDir: path.join(tmpRoot, "xvfb-abort"),
       env: { ...fakeEnv, FAKE_XVFB_MODE: "stall" },
-      onSpawn: () => {
-        throw new Error("observer failed");
-      },
       signal: controller.signal,
       waitTimeoutMs: 10_000,
     }).catch((caught: unknown) => caught);

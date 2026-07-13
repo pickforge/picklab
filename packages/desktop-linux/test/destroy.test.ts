@@ -35,6 +35,7 @@ vi.mock("@pickforge/picklab-core", async (importOriginal) => {
 });
 
 import {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   getSession,
   stopPid,
@@ -92,6 +93,18 @@ describe("destroyDesktopSession exception safety", () => {
     expect((error as AggregateError).message).toMatch(/failed to stop 2/i);
     const after = await getSession(id, registryEnv);
     expect(after?.status).toBe("error");
+    expect(after?.meta?.[REAPER_CLEANUP_PENDING_META_KEY]).toBe(true);
+    expect(after?.desktop).toMatchObject({
+      xvfbPid: FAILING_PID,
+      vncPid: FAILING_PID,
+    });
+    vi.mocked(stopPid).mockResolvedValueOnce(true);
+    vi.mocked(stopProcessGroupVerified).mockResolvedValueOnce({
+      outcome: "terminated",
+      signaled: true,
+    });
+    await destroyDesktopSession(id, registryEnv);
+    expect(await getSession(id, registryEnv)).toBeUndefined();
   });
 
   it("still stops xvfb when stopping vnc throws", async () => {

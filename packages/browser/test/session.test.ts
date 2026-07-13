@@ -104,16 +104,6 @@ async function waitForEntry(
   }
 }
 
-function processGroupId(pid: number): number {
-  const content = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-  const close = content.lastIndexOf(")");
-  const fields = content.slice(close + 1).trim().split(/\s+/);
-  const pgrp = Number(fields[2]);
-  if (!Number.isSafeInteger(pgrp) || pgrp <= 0) {
-    throw new Error(`Could not read process group for pid ${pid}`);
-  }
-  return pgrp;
-}
 
 describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
   it("brings up both legs, persists the contract, and never persists the GUID", async () => {
@@ -658,15 +648,37 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     const id = recordFile.slice(0, -".json".length);
     const sessionDir = browserSessionLogDir(id, registryEnv);
     await waitForEntry(sessionsPath, (name) => name === id);
-    const readyFile = await waitForEntry(
-      sessionDir,
-      (name) => name === "chrome.ready",
-    );
-    const childPid = Number(
-      fs.readFileSync(path.join(sessionDir, readyFile), "utf8").trim(),
-    );
-    const leaderPid = processGroupId(childPid);
-    expect(leaderPid).not.toBe(childPid);
+    const handoffDeadline = Date.now() + TEST_TIMEOUT_MS;
+    let leaderPid: number | undefined;
+    let childPid: number | undefined;
+    while (
+      (leaderPid === undefined || childPid === undefined) &&
+      Date.now() < handoffDeadline
+    ) {
+      leaderPid = (await getSession(id, registryEnv))?.browser?.browserPid;
+      childPid =
+        leaderPid === undefined
+          ? undefined
+          : listProcessGroupMembers(leaderPid).find((pid) => pid !== leaderPid);
+      if (leaderPid === undefined || childPid === undefined) {
+        await scheduler.yield();
+      }
+    }
+    if (
+      leaderPid === undefined ||
+      leaderPid <= 0 ||
+      childPid === undefined ||
+      childPid <= 0
+    ) {
+      throw new Error(
+        "Browser ownership handoff did not persist a real leader and child PID",
+      );
+    }
+    // The durable record identifies the stable supervisor. Let its freshly
+    // spawned child finish installing the fake Chrome signal handlers before
+    // killing the supervisor, then prove the same child still owns the group.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(listProcessGroupMembers(leaderPid)).toContain(childPid);
 
     process.kill(leaderPid, "SIGKILL");
     while (fs.existsSync(`/proc/${leaderPid}`)) {
