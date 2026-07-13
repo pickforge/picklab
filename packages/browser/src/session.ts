@@ -25,6 +25,8 @@ import {
 import {
   XvfbStartError,
   startXvfb,
+  stopOwnedSessionVnc,
+  withSessionVncLock,
   type XvfbHandle,
   type XvfbPartialStart,
 } from "@pickforge/picklab-desktop-linux";
@@ -481,122 +483,147 @@ export async function getBrowserSessionStatus(
 
 /**
  * Destroy a browser session: kill the verified Chrome process group and confirm
- * it is dead, stop the private Xvfb, then delete the ephemeral profile. The
- * profile is removed only after the group is confirmed gone, so no live Chrome
- * can recreate files after deletion. Cleanup failures aggregate into one error
+ * it is dead, stop lazy VNC before the private Xvfb, then delete the ephemeral
+ * profile. The profile is removed only after the group is confirmed gone, so
+ * no live Chrome can recreate files after deletion. Cleanup failures aggregate
+ * into one error
  * and leave the record in `error` state for inspection.
  */
 export async function destroyBrowserSession(
   id: string,
   registryEnv: EnvLike = process.env,
 ): Promise<void> {
-  const record = await getSession(id, registryEnv);
-  if (record === undefined) {
+  const initial = await getSession(id, registryEnv);
+  if (initial === undefined) {
     throw new Error(`Browser session not found: ${id}`);
   }
-  if (record.type !== "browser") {
+  if (initial.type !== "browser") {
     throw new Error(`Session ${id} is not a browser session`);
   }
 
-  const failures: Error[] = [];
-  const browser = record.browser;
-  const { gone, error: groupError } = await stopBrowserGroup(
-    browser === undefined
-      ? undefined
-      : {
-          pid: browser.browserPid,
-          startTicks: browser.browserStartTimeTicks,
-        },
-  );
-  if (groupError !== undefined) {
-    failures.push(groupError);
-  } else if (!gone) {
-    failures.push(
-      new Error(
-        `Chrome process group (pid ${browser?.browserPid ?? "unknown"}) could not be verified as gone`,
-      ),
-    );
-  }
+  await withSessionVncLock(id, registryEnv, async () => {
+    const record = await getSession(id, registryEnv);
+    if (record === undefined) {
+      throw new Error(`Browser session not found: ${id}`);
+    }
+    if (record.type !== "browser") {
+      throw new Error(`Session ${id} is not a browser session`);
+    }
 
-  const desktop = record.desktop;
-  const xvfbPid = desktop?.xvfbPid;
-  const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
-  if (xvfbPid !== undefined && gone) {
-    if (xvfbStartTimeTicks === undefined) {
-      if (isPidAlive(xvfbPid)) {
-        failures.push(
-          new Error(
-            `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
-          ),
-        );
+    const failures: Error[] = [];
+    const browser = record.browser;
+    const { gone, error: groupError } = await stopBrowserGroup(
+      browser === undefined
+        ? undefined
+        : {
+            pid: browser.browserPid,
+            startTicks: browser.browserStartTimeTicks,
+          },
+    );
+    if (groupError !== undefined) {
+      failures.push(groupError);
+    } else if (!gone) {
+      failures.push(
+        new Error(
+          `Chrome process group (pid ${browser?.browserPid ?? "unknown"}) could not be verified as gone`,
+        ),
+      );
+    }
+
+    const desktop = record.desktop;
+    if (desktop?.vncPid !== undefined && gone) {
+      try {
+        await stopOwnedSessionVnc(id, desktop);
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    } else if (desktop?.vncPid !== undefined) {
+      failures.push(
+        new Error(
+          `Refusing to stop x11vnc for ${id}: Chrome process group is not confirmed gone`,
+        ),
+      );
+    }
+
+    const xvfbPid = desktop?.xvfbPid;
+    const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
+    if (xvfbPid !== undefined && gone) {
+      if (xvfbStartTimeTicks === undefined) {
+        if (isPidAlive(xvfbPid)) {
+          failures.push(
+            new Error(
+              `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
+            ),
+          );
+        }
+      } else {
+        const stopped = await stopBrowserGroup({
+          pid: xvfbPid,
+          startTicks: xvfbStartTimeTicks,
+        });
+        if (!stopped.gone) {
+          failures.push(
+            stopped.error ??
+              new Error(
+                `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+              ),
+          );
+        }
+      }
+    } else if (xvfbPid !== undefined) {
+      failures.push(
+        new Error(
+          `Refusing to stop Xvfb for ${id}: Chrome process group is not confirmed gone`,
+        ),
+      );
+    }
+
+    const sessionDir = browserSessionLogDir(id, registryEnv);
+    const layout = browserRuntimeLayout(sessionDir);
+    const profileDir = browser?.profileDir ?? layout.profileDir;
+    // Confinement guard: never delete a profile path a tampered record points
+    // outside the session directory.
+    const confined = await isProfileConfined(sessionDir, profileDir);
+    if (!confined) {
+      failures.push(
+        new Error(
+          `Refusing to delete profile outside the session directory: ${profileDir}`,
+        ),
+      );
+    } else if (gone) {
+      failures.push(...(await removeRuntimeData(layout, profileDir)));
+      if (failures.length === 0) {
+        try {
+          await fs.promises.rm(sessionDir, { recursive: true, force: true });
+        } catch (error) {
+          failures.push(asError(error));
+        }
       }
     } else {
-      const stopped = await stopBrowserGroup({
-        pid: xvfbPid,
-        startTicks: xvfbStartTimeTicks,
-      });
-      if (!stopped.gone) {
-        failures.push(
-          stopped.error ??
-            new Error(
-              `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
-            ),
-        );
-      }
+      failures.push(
+        new Error(
+          `Refusing to delete profile for ${id}: Chrome process group is still alive`,
+        ),
+      );
     }
-  } else if (xvfbPid !== undefined) {
-    failures.push(
-      new Error(
-        `Refusing to stop Xvfb for ${id}: Chrome process group is not confirmed gone`,
-      ),
-    );
-  }
 
-  const sessionDir = browserSessionLogDir(id, registryEnv);
-  const layout = browserRuntimeLayout(sessionDir);
-  const profileDir = browser?.profileDir ?? layout.profileDir;
-  // Confinement guard: never delete a profile path a tampered record points
-  // outside the session directory.
-  const confined = await isProfileConfined(sessionDir, profileDir);
-  if (!confined) {
-    failures.push(
-      new Error(
-        `Refusing to delete profile outside the session directory: ${profileDir}`,
-      ),
-    );
-  } else if (gone) {
-    failures.push(...(await removeRuntimeData(layout, profileDir)));
-    if (failures.length === 0) {
-      try {
-        await fs.promises.rm(sessionDir, { recursive: true, force: true });
-      } catch (error) {
-        failures.push(asError(error));
-      }
-    }
-  } else {
-    failures.push(
-      new Error(
-        `Refusing to delete profile for ${id}: Chrome process group is still alive`,
-      ),
-    );
-  }
-
-  if (failures.length > 0) {
-    await updateSession(
-      id,
-      {
-        status: "error",
-        meta: {
-          ...record.meta,
-          [REAPER_CLEANUP_PENDING_META_KEY]: true,
+    if (failures.length > 0) {
+      await updateSession(
+        id,
+        {
+          status: "error",
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
         },
-      },
-      registryEnv,
-    ).catch(() => {});
-    throw new AggregateError(
-      failures,
-      `Failed to fully destroy browser session ${id}`,
-    );
-  }
-  await destroySessionRecord(id, registryEnv);
+        registryEnv,
+      ).catch(() => {});
+      throw new AggregateError(
+        failures,
+        `Failed to fully destroy browser session ${id}`,
+      );
+    }
+    await destroySessionRecord(id, registryEnv);
+  });
 }

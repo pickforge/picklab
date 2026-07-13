@@ -21,6 +21,7 @@ export {
   saveProjectConfig,
   type PicklabConfig,
   type PicklabProfile,
+  type ViewerMode,
 } from "./config.js";
 
 export {
@@ -60,9 +61,11 @@ export {
 export {
   captureToTarget,
   requireDisplay,
+  resolveDesktopCapableSession,
   resolveRunnableSession,
   resolveScreenshotTarget,
   sessionHasCapability,
+  type ResolveDesktopCapableSessionOptions,
   type ResolveRunnableSessionOptions,
   type ResolveScreenshotTargetOptions,
   type RunnableSessionType,

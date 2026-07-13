@@ -25,6 +25,7 @@ import {
   runReported,
   type BaseCliOptions,
 } from "./shared.js";
+import { watchDesktopSession } from "./watch.js";
 
 export interface SessionCreateOptions extends BaseCliOptions {
   type: string;
@@ -33,6 +34,7 @@ export interface SessionCreateOptions extends BaseCliOptions {
   vnc?: boolean;
   vncControl?: boolean;
   avdName?: string;
+  viewer?: boolean;
 }
 
 interface SessionSummary extends Record<string, unknown> {
@@ -124,6 +126,39 @@ export async function runSessionCreate(
   opts: SessionCreateOptions,
 ): Promise<number> {
   return runReported(opts, async () => {
+    const projectDir = resolveProjectDir(opts);
+    const config = await loadConfig(projectDir);
+    const viewerMode = config.viewer?.mode ?? "manual";
+    if (viewerMode !== "manual" && viewerMode !== "auto") {
+      throw new Error(
+        `Invalid viewer.mode "${String(viewerMode)}": expected "manual" or "auto"`,
+      );
+    }
+    if (opts.viewer === true && opts.vncControl === true) {
+      throw new Error(
+        "--viewer cannot be combined with --vnc-control because watch is read-only",
+      );
+    }
+    if (opts.viewer === true && opts.type === "android") {
+      throw new Error("--viewer requires a desktop-capable session type");
+    }
+    const createsWatchable =
+      opts.type === "desktop" ||
+      opts.type === "desktop+android" ||
+      opts.type === "browser";
+    const createsWritableDesktop =
+      opts.type === "desktop" || opts.type === "desktop+android";
+    const autoViewerSuppressed =
+      createsWritableDesktop &&
+      opts.viewer === undefined &&
+      viewerMode === "auto" &&
+      opts.vncControl === true;
+    const wantsViewer =
+      createsWatchable &&
+      (opts.viewer ??
+        (viewerMode === "auto" &&
+          (!createsWritableDesktop || opts.vncControl !== true)));
+
     const sessions: SessionSummary[] = [];
     if (opts.type === "desktop" || opts.type === "desktop+android") {
       sessions.push(await createDesktopLeg(opts));
@@ -142,7 +177,38 @@ export async function runSessionCreate(
         throw error;
       }
     }
-    return { data: { sessions }, lines: sessions.map(describeCreated) };
+
+    const lines = sessions.map(describeCreated);
+    const data: Record<string, unknown> = { sessions };
+    const errors: string[] = [];
+    const watchable = sessions.find((session) => session.type !== "android");
+    if (autoViewerSuppressed) {
+      const reason =
+        "viewer.mode=auto was suppressed because --vnc-control creates writable VNC";
+      data.viewer = { opened: false, suppressed: true, reason };
+      lines.push(reason);
+    } else if (wantsViewer && watchable !== undefined) {
+      try {
+        const watched = await watchDesktopSession({
+          session: watchable.id,
+          projectDir,
+          waitForViewerExit: false,
+        });
+        data.viewer = watched.data;
+        lines.push(...(watched.lines ?? []));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const viewerError =
+          `Viewer failed after creating session ${watchable.id}: ${message}`;
+        data.viewer = {
+          sessionId: watchable.id,
+          opened: false,
+          error: message,
+        };
+        errors.push(viewerError);
+      }
+    }
+    return { data, lines, errors };
   });
 }
 
@@ -156,7 +222,31 @@ async function sessionStatusEntry(
     createdAt: record.createdAt,
     projectDir: record.projectDir,
   };
-  if (record.type === "desktop") {
+  if (record.type === "browser") {
+    const browserStatus = await getBrowserSessionStatus(record.id);
+    const desktopStatus = await getDesktopSessionStatus(record.id);
+    if (record.status === "running" && !browserStatus.alive) {
+      entry.status = "dead";
+    }
+    entry.desktop = {
+      ...record.desktop,
+      xvfbAlive: browserStatus.xvfbAlive,
+      vncAlive: desktopStatus.vncAlive,
+      displayAlive: browserStatus.displayAlive,
+    };
+    entry.browser = {
+      ...record.browser,
+      browserAlive: browserStatus.browserAlive,
+    };
+    entry.viewer = {
+      endpoint:
+        record.desktop?.vncPort === undefined
+          ? null
+          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
+      ready: desktopStatus.vncAlive,
+      readOnly: record.desktop?.vncViewOnly === true,
+    };
+  } else if (record.desktop !== undefined) {
     const status = await getDesktopSessionStatus(record.id);
     if (record.status === "running" && !status.xvfbAlive) {
       entry.status = "dead";
@@ -167,21 +257,16 @@ async function sessionStatusEntry(
       vncAlive: status.vncAlive,
       displayAlive: status.displayAlive,
     };
-  } else if (record.type === "browser") {
-    const status = await getBrowserSessionStatus(record.id);
-    if (record.status === "running" && !status.alive) {
-      entry.status = "dead";
-    }
-    entry.desktop = {
-      ...record.desktop,
-      xvfbAlive: status.xvfbAlive,
-      displayAlive: status.displayAlive,
+    entry.viewer = {
+      endpoint:
+        record.desktop.vncPort === undefined
+          ? null
+          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
+      ready: status.vncAlive,
+      readOnly: record.desktop.vncViewOnly === true,
     };
-    entry.browser = {
-      ...record.browser,
-      browserAlive: status.browserAlive,
-    };
-  } else if (record.type === "android") {
+  }
+  if (record.android !== undefined) {
     const status = await getAndroidSessionStatus(record.id);
     if (record.status === "running" && !status.emulatorAlive) {
       entry.status = "dead";

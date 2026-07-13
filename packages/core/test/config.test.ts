@@ -30,6 +30,7 @@ describe("loadConfig", () => {
     expect(config.android?.avdName).toBe("picklab-avd");
     expect(config.labUser?.name).toBe("picklab-lab");
     expect(config.labUser?.home).toBe("/var/lib/picklab/lab-home");
+    expect(config.viewer?.mode).toBe("manual");
   });
 
   it("applies global config over defaults", async () => {
@@ -51,6 +52,13 @@ describe("loadConfig", () => {
     await saveProjectConfig(project, { android: { avdName: "project-avd" } });
     const config = await loadConfig(project, env);
     expect(config.android?.avdName).toBe("project-avd");
+  });
+
+  it("lets project viewer mode override the global mode", async () => {
+    await saveGlobalConfig({ viewer: { mode: "auto" } }, env);
+    await saveProjectConfig(project, { viewer: { mode: "manual" } });
+    const config = await loadConfig(project, env);
+    expect(config.viewer?.mode).toBe("manual");
   });
 
   it("deep-merges nested objects across layers", async () => {
@@ -112,5 +120,6 @@ describe("resolvedDefaults", () => {
     expect(resolvedDefaults.android.avdName).toBe("picklab-avd");
     expect(resolvedDefaults.labUser.name).toBe("picklab-lab");
     expect(resolvedDefaults.labUser.home).toBe("/var/lib/picklab/lab-home");
+    expect(resolvedDefaults.viewer.mode).toBe("manual");
   });
 });

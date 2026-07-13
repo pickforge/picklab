@@ -22,6 +22,7 @@ export interface DesktopSessionInfo {
   xvfbPid?: number;
   xvfbStartTimeTicks?: number;
   vncPid?: number;
+  vncStartTimeTicks?: number;
   vncPort?: number;
   vncViewOnly?: boolean;
   width?: number;
@@ -351,26 +352,35 @@ async function stopRecordedPids(
     return false;
   }
 
-
-  const pids = new Set(
-    [record.desktop?.vncPid, record.android?.emulatorPid].filter(
-      (pid): pid is number => pid !== undefined,
-    ),
-  );
-  for (const pid of pids) {
-    if (!isPidAlive(pid)) {
-      continue;
+  const desktop = record.desktop;
+  const vncPid = desktop?.vncPid;
+  const vncStartTimeTicks = desktop?.vncStartTimeTicks;
+  if (vncPid !== undefined && isPidAlive(vncPid)) {
+    if (
+      vncStartTimeTicks === undefined ||
+      !processIdentityMatches({
+        pid: vncPid,
+        startTicks: vncStartTimeTicks,
+      })
+    ) {
+      return false;
     }
     try {
-      if (!(await stopPid(pid))) {
-        return false;
-      }
+      if (!(await stopPid(vncPid))) return false;
     } catch {
       return false;
     }
   }
 
-  const desktop = record.desktop;
+  const emulatorPid = record.android?.emulatorPid;
+  if (emulatorPid !== undefined && isPidAlive(emulatorPid)) {
+    try {
+      if (!(await stopPid(emulatorPid))) return false;
+    } catch {
+      return false;
+    }
+  }
+
   if (desktop?.xvfbPid !== undefined) {
     if (desktop.xvfbStartTimeTicks === undefined) {
       if (isPidAlive(desktop.xvfbPid)) return false;

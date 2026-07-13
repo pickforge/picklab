@@ -136,6 +136,12 @@ describe("resource reads", () => {
     expect(status.id).toBe(sessionId);
     expect(status.type).toBe("desktop");
     expect(status.desktop.xvfbAlive).toBe(false);
+    expect(status.viewer).toEqual({
+      endpoint: null,
+      ready: false,
+      readOnly: false,
+      hostGuiLaunchSupported: false,
+    });
   });
 });
 

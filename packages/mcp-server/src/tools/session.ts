@@ -184,7 +184,32 @@ export async function sessionStatusEntry(
     createdAt: record.createdAt,
     projectDir: record.projectDir,
   };
-  if (record.type === "desktop") {
+  if (record.type === "browser") {
+    const browserStatus = await getBrowserSessionStatus(record.id, ctx.env);
+    const desktopStatus = await getDesktopSessionStatus(record.id, ctx.env);
+    if (record.status === "running" && !browserStatus.alive) {
+      entry.status = "dead";
+    }
+    entry.desktop = {
+      ...record.desktop,
+      xvfbAlive: browserStatus.xvfbAlive,
+      vncAlive: desktopStatus.vncAlive,
+      displayAlive: browserStatus.displayAlive,
+    };
+    entry.browser = {
+      ...record.browser,
+      browserAlive: browserStatus.browserAlive,
+    };
+    entry.viewer = {
+      endpoint:
+        record.desktop?.vncPort === undefined
+          ? null
+          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
+      ready: desktopStatus.vncAlive,
+      readOnly: record.desktop?.vncViewOnly === true,
+      hostGuiLaunchSupported: false,
+    };
+  } else if (record.desktop !== undefined) {
     const status = await getDesktopSessionStatus(record.id, ctx.env);
     if (record.status === "running" && !status.xvfbAlive) {
       entry.status = "dead";
@@ -195,21 +220,17 @@ export async function sessionStatusEntry(
       vncAlive: status.vncAlive,
       displayAlive: status.displayAlive,
     };
-  } else if (record.type === "browser") {
-    const status = await getBrowserSessionStatus(record.id, ctx.env);
-    if (record.status === "running" && !status.alive) {
-      entry.status = "dead";
-    }
-    entry.desktop = {
-      ...record.desktop,
-      xvfbAlive: status.xvfbAlive,
-      displayAlive: status.displayAlive,
+    entry.viewer = {
+      endpoint:
+        record.desktop.vncPort === undefined
+          ? null
+          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
+      ready: status.vncAlive,
+      readOnly: record.desktop.vncViewOnly === true,
+      hostGuiLaunchSupported: false,
     };
-    entry.browser = {
-      ...record.browser,
-      browserAlive: status.browserAlive,
-    };
-  } else if (record.type === "android") {
+  }
+  if (record.android !== undefined) {
     const status = await getAndroidSessionStatus(record.id, ctx.env, {
       env: ctx.env,
     });

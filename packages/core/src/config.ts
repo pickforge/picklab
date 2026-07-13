@@ -13,16 +13,20 @@ export type PicklabProfile =
   | "desktop+android"
   | "generic";
 
+export type ViewerMode = "manual" | "auto";
+
 export interface PicklabConfig {
   profile?: PicklabProfile;
   android?: { avdName?: string; [key: string]: unknown };
   labUser?: { name?: string; home?: string; [key: string]: unknown };
+  viewer?: { mode?: ViewerMode; [key: string]: unknown };
   [key: string]: unknown;
 }
 
 export const resolvedDefaults = {
   android: { avdName: "picklab-avd" },
   labUser: { name: "picklab-lab", home: "/var/lib/picklab/lab-home" },
+  viewer: { mode: "manual" },
 } as const satisfies PicklabConfig;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

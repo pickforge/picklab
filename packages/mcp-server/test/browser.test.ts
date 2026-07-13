@@ -79,6 +79,12 @@ describe.skipIf(!hasXvfb)("MCP browser lifecycle", () => {
       expect(status.desktop.displayAlive).toBe(true);
       expect(status.browser.browserAlive).toBe(true);
       expect(status.browser.cdpPort).toBe(first.cdpPort);
+      expect(status.viewer).toEqual({
+        endpoint: null,
+        ready: false,
+        readOnly: false,
+        hostGuiLaunchSupported: false,
+      });
 
       const second = parseToolJson(
         await lab.client.callTool({

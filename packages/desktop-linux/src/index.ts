@@ -26,6 +26,16 @@ export {
 } from "./vnc.js";
 
 export {
+  buildVncViewerArgs,
+  detectVncViewer,
+  openVncViewer,
+  type DetectedVncViewer,
+  type OpenVncViewerOptions,
+  type OpenVncViewerResult,
+  type VncViewerName,
+} from "./viewer.js";
+
+export {
   launchApp,
   listWindows,
   waitForWindow,
@@ -80,10 +90,15 @@ export {
   createDesktopSession,
   desktopSessionLogDir,
   destroyDesktopSession,
+  ensureSessionVnc,
   getDesktopSessionStatus,
+  stopOwnedSessionVnc,
+  withSessionVncLock,
   type CreateDesktopSessionOptions,
   type DesktopSessionHandle,
   type DesktopSessionStatus,
+  type EnsureSessionVncOptions,
+  type EnsuredSessionVnc,
 } from "./session.js";
 
 export { findOnPath } from "./util.js";

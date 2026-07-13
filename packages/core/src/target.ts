@@ -82,6 +82,29 @@ export async function resolveRunnableSession(
   return candidates[0] as SessionRecord;
 }
 
+export interface ResolveDesktopCapableSessionOptions {
+  env?: EnvLike;
+  projectDir?: string;
+}
+
+
+export async function resolveDesktopCapableSession(
+  id: string | undefined,
+  opts: ResolveDesktopCapableSessionOptions = {},
+): Promise<SessionRecord> {
+  const record = await resolveRunnableSession("desktop", id, {
+    env: opts.env,
+    projectDir: opts.projectDir,
+    consumerLabel: "watch",
+    createHint: "create one with: picklab session create --type desktop",
+    selectHint: "pick one with --session <id>",
+  });
+  if (record.status !== "running") {
+    throw new Error(`Session ${record.id} is not running`);
+  }
+  return record;
+}
+
 export function requireDisplay(record: SessionRecord): string {
   const display = record.desktop?.display;
   if (display === undefined) {

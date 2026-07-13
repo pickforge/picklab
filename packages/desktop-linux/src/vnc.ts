@@ -1,6 +1,7 @@
 import net from "node:net";
 import {
   isPidAlive,
+  readProcessIdentity,
   startDaemon,
   stopPid,
   type EnvLike,
@@ -28,6 +29,7 @@ export interface StartVncOptions {
 
 export interface VncHandle {
   pid: number;
+  startTimeTicks: number;
   port: number;
   logPath: string;
 }
@@ -89,6 +91,11 @@ export async function startVnc(opts: StartVncOptions): Promise<VncHandle> {
       "x11vnc was not found on PATH; install x11vnc to enable VNC",
     );
   }
+  if (await isPortListening(port)) {
+    throw new Error(
+      `VNC endpoint 127.0.0.1:${port} is already in use; refusing to claim ownership`,
+    );
+  }
   const daemon = await startDaemon(binary, args, {
     logDir: opts.logDir,
     name: "x11vnc",
@@ -104,7 +111,28 @@ export async function startVnc(opts: StartVncOptions): Promise<VncHandle> {
       );
     }
     if (await isPortListening(port)) {
-      return { pid: daemon.pid, port, logPath: daemon.logPath };
+      await sleep(STARTUP_POLL_INTERVAL_MS);
+      if (!isPidAlive(daemon.pid)) {
+        throw new Error(
+          `x11vnc exited while claiming 127.0.0.1:${port}; ` +
+            `check the log at ${daemon.logPath}`,
+        );
+      }
+      if (await isPortListening(port)) {
+        const identity = readProcessIdentity(daemon.pid);
+        if (identity === undefined) {
+          await stopPid(daemon.pid);
+          throw new Error(
+            `Could not verify x11vnc process identity for pid ${daemon.pid}`,
+          );
+        }
+        return {
+          pid: daemon.pid,
+          startTimeTicks: identity.startTicks,
+          port,
+          logPath: daemon.logPath,
+        };
+      }
     }
     await sleep(STARTUP_POLL_INTERVAL_MS);
   }
