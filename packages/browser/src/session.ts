@@ -566,6 +566,13 @@ export async function destroyBrowserSession(
     );
   } else if (gone) {
     failures.push(...(await removeRuntimeData(layout, profileDir)));
+    if (failures.length === 0) {
+      try {
+        await fs.promises.rm(sessionDir, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
   } else {
     failures.push(
       new Error(

@@ -317,7 +317,7 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
     expect(isPidAlive(browserPid)).toBe(false);
     expect(isPidAlive(xvfbPid)).toBe(false);
     expect(fs.existsSync(profileDir)).toBe(false);
-    expect(fs.existsSync(path.join(logDir, "home"))).toBe(false);
+    expect(fs.existsSync(logDir)).toBe(false);
     expect(await getSession(session.id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
