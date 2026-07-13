@@ -338,7 +338,7 @@ describe("session registry", () => {
     }
   });
 
-  it("requires the recorded Xvfb identity for desktop liveness", async () => {
+  it("uses the recorded Xvfb identity for desktop liveness when available", async () => {
     const helper = spawn(
       process.execPath,
       ["-e", "setInterval(() => {}, 1000)"],
@@ -385,6 +385,49 @@ describe("session registry", () => {
     } finally {
       await stopPid(pid, { timeoutMs: 1000 });
       await waitForExit(helper);
+    }
+  });
+
+  it("keeps a live legacy no-identity desktop running without signaling helpers", async () => {
+    const xvfb = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const vnc = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    if (xvfb.pid === undefined || vnc.pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const legacy = await createSession(
+        {
+          type: "desktop",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":118",
+            xvfbPid: xvfb.pid,
+            vncPid: vnc.pid,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(legacy)).toBe(true);
+      expect(await reapDeadRunningSessions(env)).toEqual([]);
+      expect((await getSession(legacy.id, env))?.status).toBe("running");
+      expect(isPidAlive(xvfb.pid)).toBe(true);
+      expect(isPidAlive(vnc.pid)).toBe(true);
+    } finally {
+      for (const child of [xvfb, vnc]) {
+        if (child.pid !== undefined && isPidAlive(child.pid)) {
+          await stopPid(child.pid, { timeoutMs: 1000 });
+          await waitForExit(child);
+        }
+      }
     }
   });
 

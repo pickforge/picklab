@@ -217,14 +217,13 @@ export function isDisplaySocketAlive(display: string): boolean {
 export function isSessionProcessAlive(record: SessionRecord): boolean {
   if (record.type === "desktop") {
     const desktop = record.desktop;
-    return (
-      desktop?.xvfbPid !== undefined &&
-      desktop.xvfbStartTimeTicks !== undefined &&
-      processIdentityMatches({
-        pid: desktop.xvfbPid,
-        startTicks: desktop.xvfbStartTimeTicks,
-      })
-    );
+    if (desktop?.xvfbPid === undefined) return false;
+    return desktop.xvfbStartTimeTicks === undefined
+      ? isPidAlive(desktop.xvfbPid)
+      : processIdentityMatches({
+          pid: desktop.xvfbPid,
+          startTicks: desktop.xvfbStartTimeTicks,
+        });
   }
   if (record.type === "android") {
     return (

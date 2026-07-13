@@ -5,9 +5,9 @@ import {
   createSession,
   destroySessionRecord,
   getSession,
+  isDisplaySocketAlive,
   isPidAlive,
   isProfileConfined,
-  isSessionProcessAlive,
   processIdentityMatches,
   reapDeadRunningSessions,
   readProcessIdentity,
@@ -21,11 +21,7 @@ import {
   type ProcessIdentity,
   type SessionRecord,
 } from "@pickforge/picklab-core";
-import {
-  isDisplayAlive,
-  startXvfb,
-  type XvfbHandle,
-} from "@pickforge/picklab-desktop-linux";
+import { startXvfb, type XvfbHandle } from "@pickforge/picklab-desktop-linux";
 import { buildChromeArgs } from "./args.js";
 import { requireChromeBinary } from "./detect.js";
 import {
@@ -161,27 +157,6 @@ async function stopBrowserGroup(
   }
 }
 
-function isBrowserReaperRecordAlive(record: SessionRecord): boolean {
-  if (record.type !== "browser") {
-    return isSessionProcessAlive(record);
-  }
-  const desktop = record.desktop;
-  const browser = record.browser;
-  return (
-    desktop?.xvfbPid !== undefined &&
-    desktop.xvfbStartTimeTicks !== undefined &&
-    processIdentityMatches({
-      pid: desktop.xvfbPid,
-      startTicks: desktop.xvfbStartTimeTicks,
-    }) &&
-    isDisplayAlive(desktop.display) &&
-    browser !== undefined &&
-    processIdentityMatches({
-      pid: browser.browserPid,
-      startTicks: browser.browserStartTimeTicks,
-    })
-  );
-}
 
 /**
  * Create an isolated headed-Chrome session: a private Xvfb display plus headed
@@ -201,7 +176,7 @@ export async function createBrowserSession(
     ...(opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : {}),
   });
 
-  await reapDeadRunningSessions(registryEnv, isBrowserReaperRecordAlive);
+  await reapDeadRunningSessions(registryEnv);
   const record = await createSession(
     { type: "browser", projectDir: opts.projectDir },
     registryEnv,
@@ -395,7 +370,7 @@ export async function getBrowserSessionStatus(
       startTicks: desktop.xvfbStartTimeTicks,
     });
   const displayAlive =
-    desktop !== undefined && isDisplayAlive(desktop.display);
+    desktop !== undefined && isDisplaySocketAlive(desktop.display);
   const browserAlive =
     browser !== undefined &&
     processIdentityMatches({

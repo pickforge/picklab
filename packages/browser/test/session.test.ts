@@ -750,6 +750,21 @@ describe("browser record inspection (no live processes)", () => {
     expect(status.cdpPort).toBeUndefined();
   });
 
+  it("treats a malformed recorded display as unavailable", async () => {
+    const rec = await craftBrowserRecord({
+      type: "browser",
+      projectDir,
+      status: "running",
+      desktop: { display: "not-a-display", xvfbPid: 4_194_301 },
+    });
+    await expect(
+      getBrowserSessionStatus(rec.id, registryEnv),
+    ).resolves.toMatchObject({
+      displayAlive: false,
+      alive: false,
+    });
+  });
+
   it("refuses to delete a profile that escapes the session directory", async () => {
     const outside = path.join(tmp, "evil-profile");
     fs.mkdirSync(outside, { recursive: true });
