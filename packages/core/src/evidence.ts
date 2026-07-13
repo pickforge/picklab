@@ -948,7 +948,14 @@ export async function appendAction(
 
   const journalPath = path.join(runDir, EVIDENCE_ACTION_LOG);
   return withJournalLock(runDir, async () => {
-    const handle = await fs.promises.open(journalPath, "a+");
+    const handle = await fs.promises.open(
+      journalPath,
+      fs.constants.O_RDWR |
+        fs.constants.O_CREAT |
+        fs.constants.O_APPEND |
+        fs.constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
       await repairTornJournalTail(handle);
       // Derive current usage from the run directory's real on-disk bytes (journal
@@ -1297,23 +1304,11 @@ async function writeTruncationMarkerOnce(
   return false;
 }
 
-/**
- * Read the run's action journal deterministically. Records are returned in file
- * (append) order. A missing/empty journal yields `[]`. Only a torn final line
- * (an unterminated last record from an interrupted write) is tolerated and
- * dropped; any malformed or blank line before the end is rejected.
- */
-export async function readActions(runDir: string): Promise<EvidenceRecord[]> {
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(
-      path.join(runDir, EVIDENCE_ACTION_LOG),
-      "utf8",
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
+/** Parse an action journal using the same torn-tail and corruption rules as reads. */
+export function parseActionsJournal(
+  raw: string,
+  journalLabel: string,
+): EvidenceRecord[] {
   if (raw === "") return [];
 
   const segments = raw.split("\n");
@@ -1326,7 +1321,7 @@ export async function readActions(runDir: string): Promise<EvidenceRecord[]> {
     const segment = segments[index]!;
     if (segment === "") {
       throw new Error(
-        `Corrupt evidence journal in ${runDir}: blank record at line ${index + 1}`,
+        `Corrupt evidence journal in ${journalLabel}: blank record at line ${index + 1}`,
       );
     }
     let parsed: unknown;
@@ -1334,7 +1329,7 @@ export async function readActions(runDir: string): Promise<EvidenceRecord[]> {
       parsed = JSON.parse(segment);
     } catch (error) {
       throw new Error(
-        `Corrupt evidence journal in ${runDir} at line ${index + 1}: ` +
+        `Corrupt evidence journal in ${journalLabel} at line ${index + 1}: ` +
           `${(error as Error).message}`,
       );
     }
@@ -1344,13 +1339,44 @@ export async function readActions(runDir: string): Promise<EvidenceRecord[]> {
       typeof (parsed as EvidenceAction).actionId !== "string"
     ) {
       throw new Error(
-        `Corrupt evidence journal in ${runDir} at line ${index + 1}: ` +
+        `Corrupt evidence journal in ${journalLabel} at line ${index + 1}: ` +
           `record is not a valid evidence record`,
       );
     }
     records.push(parsed as EvidenceRecord);
   }
   return records;
+}
+
+/**
+ * Read the run's action journal deterministically. Records are returned in file
+ * (append) order. A missing/empty journal yields `[]`. Only a torn final line
+ * (an unterminated last record from an interrupted write) is tolerated and
+ * dropped; any malformed or blank line before the end is rejected.
+ */
+export async function readActions(runDir: string): Promise<EvidenceRecord[]> {
+  const journalPath = path.join(runDir, EVIDENCE_ACTION_LOG);
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(
+      journalPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  let raw: string;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Unsafe evidence journal in ${runDir}: not a regular file`);
+    }
+    raw = await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+  return parseActionsJournal(raw, runDir);
 }
 
 export function isEvidenceRun(manifest: RunManifest): boolean {

@@ -49,6 +49,7 @@ export {
   isEvidenceRun,
   isEvidenceTruncated,
   isTruncationRecord,
+  parseActionsJournal,
   pruneFinalizedEvidenceRuns,
   readActions,
   resolveActivePointer,
@@ -66,6 +67,14 @@ export {
   type PointerResolution,
   type PruneEvidenceOptions,
 } from "./evidence.js";
+
+export {
+  EVIDENCE_REPORT,
+  renderEvidenceHtml,
+  renderRunReport,
+  sortEvidenceRecords,
+  writeEvidenceReport,
+} from "./evidence-render.js";
 
 export { isSecretKey, redactEnv, redactSecrets } from "./redact.js";
 

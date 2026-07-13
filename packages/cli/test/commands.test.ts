@@ -1406,7 +1406,36 @@ describe("picklab artifacts", () => {
     });
     writeSyntheticRun(projectDir, "20260609-120000-synthetic", {
       sessionId: "desk-12345678",
+      evidenceVersion: 1,
+      actionLog: "actions.jsonl",
     });
+    fs.writeFileSync(
+      path.join(
+        projectDir,
+        ".picklab",
+        "runs",
+        "20260609-120000-synthetic",
+        "actions.jsonl",
+      ),
+      [
+        JSON.stringify({
+          actionId: "second",
+          source: "mcp",
+          tool: "desktop_type",
+          startedAt: "2026-06-09T12:00:04.000Z",
+          status: "error",
+          error: `Authorization: Bearer ${PLANTED_TOKEN}`,
+        }),
+        JSON.stringify({
+          actionId: "first",
+          source: "mcp",
+          tool: "desktop_click",
+          startedAt: "2026-06-09T12:00:03.000Z",
+          status: "ok",
+        }),
+        "",
+      ].join("\n"),
+    );
 
     const result = await runCli(
       ["artifacts", "report", "--project-dir", projectDir],
@@ -1419,6 +1448,11 @@ describe("picklab artifacts", () => {
     expect(result.stdout).toContain(
       "- [screenshot] screenshot.png — screenshots/screenshot.png",
     );
+    expect(result.stdout.indexOf("Step 1 — mcp / desktop_click")).toBeLessThan(
+      result.stdout.indexOf("Step 2 — mcp / desktop_type"),
+    );
+    expect(result.stdout).toContain("[REDACTED]");
+    expect(result.stdout).not.toContain(PLANTED_TOKEN);
 
     const specific = await runCli(
       [
@@ -1437,6 +1471,41 @@ describe("picklab artifacts", () => {
     expect(report.dir).toBe(
       path.join(projectDir, ".picklab", "runs", "20260609-110000-synthetic"),
     );
+
+    const legacy = await runCli(
+      [
+        "artifacts",
+        "report",
+        "20260609-110000-synthetic",
+        "--project-dir",
+        projectDir,
+      ],
+      env,
+    );
+    expect(legacy.code).toBe(0);
+    expect(legacy.stdout).not.toContain("## Actions");
+  });
+
+  it("fails actionably for a corrupt evidence journal", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    const runId = "20260609-120000-corrupt";
+    writeSyntheticRun(projectDir, runId, {
+      evidenceVersion: 1,
+      actionLog: "actions.jsonl",
+    });
+    fs.writeFileSync(
+      path.join(projectDir, ".picklab", "runs", runId, "actions.jsonl"),
+      '{"actionId":"ok"}\nnot-json\n',
+    );
+
+    const result = await runCli(
+      ["artifacts", "report", runId, "--project-dir", projectDir, "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.errors[0]).toContain("Corrupt evidence journal");
   });
 
   it("fails for unknown run ids", async () => {

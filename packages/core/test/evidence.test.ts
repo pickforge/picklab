@@ -457,6 +457,22 @@ describe("appendAction and readActions", () => {
     const plain = await createRun(project, "plain");
     expect(await readActions(plain.dir)).toEqual([]);
   });
+
+  it("never follows a symlinked action journal", async () => {
+    const { run } = await beginEvidenceRun(project, "desk-link00");
+    const journal = path.join(run.dir, "actions.jsonl");
+    const outside = path.join(project, "outside-actions.jsonl");
+    const outsideBody = `${JSON.stringify(action({ actionId: "outside" }))}\n`;
+    await fs.promises.writeFile(outside, outsideBody);
+    await fs.promises.rm(journal);
+    await fs.promises.symlink(outside, journal);
+
+    await expect(readActions(run.dir)).rejects.toThrow();
+    await expect(
+      appendAction(run.dir, action({ actionId: "blocked" })),
+    ).rejects.toThrow();
+    expect(await fs.promises.readFile(outside, "utf8")).toBe(outsideBody);
+  });
 });
 
 describe("readActions corruption handling", () => {
