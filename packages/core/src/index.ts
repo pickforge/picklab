@@ -46,6 +46,7 @@ export {
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MAX_LINE_BYTES,
   EVIDENCE_RETENTION_KEEP,
+  finalizeActiveEvidenceRun,
   isEvidenceRun,
   isEvidenceTruncated,
   isTruncationRecord,

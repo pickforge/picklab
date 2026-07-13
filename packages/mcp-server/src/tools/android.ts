@@ -23,7 +23,12 @@ import {
   runTool,
   type ServerContext,
 } from "../context.js";
-import { createSessions, progressReporter } from "./session.js";
+import { withMcpEvidence } from "../evidence.js";
+import {
+  createSessions,
+  progressReporter,
+  recordCreatedSessionsEvidence,
+} from "./session.js";
 
 const targetArgs = {
   session: z
@@ -84,15 +89,15 @@ export function registerAndroidTools(
       },
     },
     (args, extra) =>
-      runTool(async () => ({
-        data: {
-          sessions: await createSessions(
-            ctx,
-            { type: "android", avdName: args.avdName },
-            { onProgress: progressReporter(extra), signal: extra.signal },
-          ),
-        },
-      })),
+      runTool(async () => {
+        const sessions = await createSessions(
+          ctx,
+          { type: "android", avdName: args.avdName },
+          { onProgress: progressReporter(extra), signal: extra.signal },
+        );
+        await recordCreatedSessionsEvidence(ctx, sessions, "android_start");
+        return { data: { sessions } };
+      }),
   );
 
   server.registerTool(
@@ -110,8 +115,18 @@ export function registerAndroidTools(
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
         const apkPath = path.resolve(ctx.projectDir, args.apkPath);
-        await installApk({ serial: target.serial, apkPath, env: ctx.env });
-        return { data: { ...targetData(target), apkPath } };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target.sessionId,
+            tool: "android_install_apk",
+            target: { name: path.basename(apkPath) },
+          },
+          async () => {
+            await installApk({ serial: target.serial, apkPath, env: ctx.env });
+            return { data: { ...targetData(target), apkPath } };
+          },
+        );
       }),
   );
 
@@ -136,15 +151,25 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        await launchApp({
-          serial: target.serial,
-          packageName: args.packageName,
-          activity: args.activity,
-          env: ctx.env,
-        });
-        return {
-          data: { ...targetData(target), packageName: args.packageName },
-        };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target.sessionId,
+            tool: "android_launch_app",
+            target: { name: args.packageName },
+          },
+          async () => {
+            await launchApp({
+              serial: target.serial,
+              packageName: args.packageName,
+              activity: args.activity,
+              env: ctx.env,
+            });
+            return {
+              data: { ...targetData(target), packageName: args.packageName },
+            };
+          },
+        );
       }),
   );
 
@@ -153,9 +178,9 @@ export function registerAndroidTools(
     {
       title: "Android screenshot",
       description:
-        "Capture the device screen as PNG. By default the image is recorded " +
-        "as an artifact of a new run under .picklab/runs and returned inline " +
-        "when small enough.",
+        "Capture the device screen as PNG. By default the image joins the " +
+        "session's active evidence run, or creates a one-shot run when evidence " +
+        "is disabled or no session is selected. Small images return inline.",
       inputSchema: {
         ...targetArgs,
         out: z
@@ -173,23 +198,49 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        const destination = await resolveScreenshotTarget(
+        return withMcpEvidence(
           ctx,
-          args,
-          "android",
-          target.sessionId,
+          {
+            sessionId: target.sessionId,
+            tool: "android_screenshot",
+            artifacts: (result) =>
+              typeof result.data?.path === "string" ? [result.data.path] : [],
+          },
+          async ({ actionId, run }) => {
+            const destination =
+              run !== undefined &&
+              args.out === undefined &&
+              args.runSlug === undefined
+                ? {
+                    outPath: path.join(
+                      run.dir,
+                      "screenshots",
+                      `${actionId}.png`,
+                    ),
+                  }
+                : await resolveScreenshotTarget(
+                    ctx,
+                    args,
+                    "android",
+                    target.sessionId,
+                  );
+            const data = await captureToTarget(destination, async () => {
+              await screenshot({
+                serial: target.serial,
+                outPath: destination.outPath,
+                env: ctx.env,
+              });
+            });
+            Object.assign(data, targetData(target));
+            if (run !== undefined && destination.run === undefined) {
+              data.runId = run.runId;
+              data.runDir = run.dir;
+            }
+            const image = await imageContent(destination.outPath);
+            Object.assign(data, image.meta);
+            return { data, extraContent: image.content };
+          },
         );
-        const data = await captureToTarget(destination, async () => {
-          await screenshot({
-            serial: target.serial,
-            outPath: destination.outPath,
-            env: ctx.env,
-          });
-        });
-        Object.assign(data, targetData(target));
-        const image = await imageContent(destination.outPath);
-        Object.assign(data, image.meta);
-        return { data, extraContent: image.content };
       }),
   );
 
@@ -207,8 +258,23 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        await tap({ serial: target.serial, x: args.x, y: args.y, env: ctx.env });
-        return { data: { ...targetData(target), x: args.x, y: args.y } };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target.sessionId,
+            tool: "android_tap",
+            target: { x: args.x, y: args.y },
+          },
+          async () => {
+            await tap({
+              serial: target.serial,
+              x: args.x,
+              y: args.y,
+              env: ctx.env,
+            });
+            return { data: { ...targetData(target), x: args.x, y: args.y } };
+          },
+        );
       }),
   );
 
@@ -225,8 +291,22 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        await typeText({ serial: target.serial, text: args.text, env: ctx.env });
-        return { data: { ...targetData(target), length: args.text.length } };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target.sessionId,
+            tool: "android_type",
+            typedValue: { value: args.text, inputType: "text" },
+          },
+          async () => {
+            await typeText({
+              serial: target.serial,
+              text: args.text,
+              env: ctx.env,
+            });
+            return { data: { ...targetData(target), length: args.text.length } };
+          },
+        );
       }),
   );
 
@@ -240,8 +320,14 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        await back({ serial: target.serial, env: ctx.env });
-        return { data: targetData(target) };
+        return withMcpEvidence(
+          ctx,
+          { sessionId: target.sessionId, tool: "android_back" },
+          async () => {
+            await back({ serial: target.serial, env: ctx.env });
+            return { data: targetData(target) };
+          },
+        );
       }),
   );
 
@@ -255,8 +341,14 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        await home({ serial: target.serial, env: ctx.env });
-        return { data: targetData(target) };
+        return withMcpEvidence(
+          ctx,
+          { sessionId: target.sessionId, tool: "android_home" },
+          async () => {
+            await home({ serial: target.serial, env: ctx.env });
+            return { data: targetData(target) };
+          },
+        );
       }),
   );
 
@@ -272,10 +364,16 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        const xml = redactSecrets(
-          await getUiTree({ serial: target.serial, env: ctx.env }),
+        return withMcpEvidence(
+          ctx,
+          { sessionId: target.sessionId, tool: "android_get_ui_tree" },
+          async () => {
+            const xml = redactSecrets(
+              await getUiTree({ serial: target.serial, env: ctx.env }),
+            );
+            return { data: { ...targetData(target), xml } };
+          },
         );
-        return { data: { ...targetData(target), xml } };
       }),
   );
 
@@ -308,19 +406,29 @@ export function registerAndroidTools(
     (args) =>
       runTool(async () => {
         const target = await resolveAndroidTarget(ctx, args);
-        if (args.clear === true) {
-          await clearLogcat({ serial: target.serial, env: ctx.env });
-          return { data: { ...targetData(target), cleared: true } };
-        }
-        const output = redactSecrets(
-          await logcat({
-            serial: target.serial,
-            lines: args.lines,
-            filter: args.filter,
-            env: ctx.env,
-          }),
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target.sessionId,
+            tool: "android_logcat",
+            target: args.filter === undefined ? undefined : { name: args.filter },
+          },
+          async () => {
+            if (args.clear === true) {
+              await clearLogcat({ serial: target.serial, env: ctx.env });
+              return { data: { ...targetData(target), cleared: true } };
+            }
+            const output = redactSecrets(
+              await logcat({
+                serial: target.serial,
+                lines: args.lines,
+                filter: args.filter,
+                env: ctx.env,
+              }),
+            );
+            return { data: { ...targetData(target), output } };
+          },
         );
-        return { data: { ...targetData(target), output } };
       }),
   );
 
@@ -362,22 +470,32 @@ export function registerAndroidTools(
             target = undefined;
           }
         }
-        const result = await runAdb({
-          args: args.args,
-          serial: target?.serial,
-          env: ctx.env,
-          timeoutMs: args.timeoutMs,
-        });
-        const data: Record<string, unknown> = {
-          ...(target === undefined ? {} : targetData(target)),
-          code: result.code,
-          stdout: redactSecrets(result.stdout),
-          stderr: redactSecrets(result.stderr),
-        };
-        return {
-          data,
-          errors: result.ok ? [] : [`adb exited with code ${result.code}`],
-        };
+        return withMcpEvidence(
+          ctx,
+          {
+            sessionId: target?.sessionId,
+            tool: "android_run_adb",
+            target: { name: args.args[0] },
+          },
+          async () => {
+            const result = await runAdb({
+              args: args.args,
+              serial: target?.serial,
+              env: ctx.env,
+              timeoutMs: args.timeoutMs,
+            });
+            const data: Record<string, unknown> = {
+              ...(target === undefined ? {} : targetData(target)),
+              code: result.code,
+              stdout: redactSecrets(result.stdout),
+              stderr: redactSecrets(result.stderr),
+            };
+            return {
+              data,
+              errors: result.ok ? [] : [`adb exited with code ${result.code}`],
+            };
+          },
+        );
       }),
   );
 }

@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   activePointerPath,
   appendAction,
   beginEvidenceRun,
   clearActivePointer,
+  finalizeActiveEvidenceRun,
   isEvidenceRun,
   isEvidenceTruncated,
   isTruncationRecord,
@@ -184,6 +186,31 @@ describe("beginEvidenceRun and the active pointer", () => {
     expect(resolution.status).toBe("active");
     if (resolution.status !== "active") throw new Error("expected active");
     expect(resolution.pointer.runId).toBe(winner.run.runId);
+  });
+
+  it("waits for an in-flight claim before finalizing the published run", async () => {
+    const sessionId = "desk-finalize-claim";
+    const beginning = beginEvidenceRun(project, sessionId, {
+      _afterClaim: async () => {
+        await delay(75);
+      },
+    });
+    while (
+      (await resolveActivePointer(project, sessionId)).status !== "claiming"
+    ) {
+      await delay(1);
+    }
+
+    const finalized = finalizeActiveEvidenceRun(project, sessionId, "failed");
+    const [begun, manifest] = await Promise.all([beginning, finalized]);
+
+    expect(manifest).toMatchObject({
+      runId: begun.run.runId,
+      status: "failed",
+    });
+    expect(await resolveActivePointer(project, sessionId)).toEqual({
+      status: "absent",
+    });
   });
 });
 

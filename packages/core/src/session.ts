@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { finalizeActiveEvidenceRun } from "./evidence.js";
 import {
   ensureDir,
   isProfileConfined,
@@ -303,7 +304,7 @@ export async function reapDeadRunningSessions(
       continue;
     }
     try {
-      await destroySessionRecord(record.id, env);
+      await destroySessionRecord(record.id, env, "failed");
     } catch {
       await updateSession(
         record.id,
@@ -438,9 +439,18 @@ export async function updateSession(
 export async function destroySessionRecord(
   id: string,
   env: EnvLike = process.env,
+  evidenceStatus: "completed" | "failed" = "completed",
 ): Promise<void> {
   if (!isValidSessionId(id)) {
     throw invalidSessionIdError(id);
+  }
+  const record = await getSession(id, env);
+  if (record !== undefined) {
+    await finalizeActiveEvidenceRun(
+      record.projectDir,
+      record.id,
+      evidenceStatus,
+    ).catch(() => {});
   }
   await fs.promises.rm(sessionPath(id, env), { force: true });
 }

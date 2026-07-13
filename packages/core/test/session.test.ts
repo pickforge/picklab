@@ -7,6 +7,12 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { isPidAlive, readProcessIdentity, stopPid } from "../src/proc.js";
 import {
+  activePointerPath,
+  appendAction,
+  beginEvidenceRun,
+  readActions,
+} from "../src/evidence.js";
+import {
   createSession,
   destroySessionRecord,
   getSession,
@@ -237,6 +243,67 @@ describe("session registry", () => {
     expect(reaped.map((record) => record.id)).toEqual([stale.id]);
     expect(await getSession(stale.id, env)).toBeUndefined();
     expect(await getSession(stopped.id, env)).toBeDefined();
+  });
+
+  it("finalizes active evidence through shared session destruction", async () => {
+    const projectDir = path.join(home, "project");
+    await fs.promises.mkdir(projectDir);
+    const session = await createSession(
+      { type: "desktop", projectDir, status: "running" },
+      env,
+    );
+    const { run } = await beginEvidenceRun(projectDir, session.id);
+
+    await destroySessionRecord(session.id, env);
+
+    expect(await getSession(session.id, env)).toBeUndefined();
+    expect(
+      JSON.parse(
+        await fs.promises.readFile(
+          path.join(run.dir, "manifest.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ status: "completed" });
+    expect(fs.existsSync(activePointerPath(projectDir, session.id))).toBe(false);
+  });
+
+  it("finalizes active evidence when reaping a dead session", async () => {
+    const projectDir = path.join(home, "project");
+    await fs.promises.mkdir(projectDir);
+    const stale = await createSession(
+      {
+        type: "desktop",
+        projectDir,
+        status: "running",
+        desktop: { display: ":92", xvfbPid: 4_194_306 },
+      },
+      env,
+    );
+    const { run } = await beginEvidenceRun(projectDir, stale.id);
+    await appendAction(run.dir, {
+      actionId: "before-reap",
+      source: "mcp",
+      tool: "desktop_click",
+      sessionId: stale.id,
+      startedAt: new Date().toISOString(),
+      status: "ok",
+    });
+
+    expect(
+      (await reapDeadRunningSessions(env)).map((record) => record.id),
+    ).toEqual([stale.id]);
+
+    expect(
+      JSON.parse(
+        await fs.promises.readFile(
+          path.join(run.dir, "manifest.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ status: "failed", evidenceTruncated: false });
+    expect(await readActions(run.dir)).toHaveLength(1);
+    expect(fs.existsSync(activePointerPath(projectDir, stale.id))).toBe(false);
   });
 
   it("stops recorded helper pids before deleting dead running records", async () => {
