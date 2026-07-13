@@ -74,6 +74,45 @@ then reset this file.
   (method/origin-path/status/resource type/timing/sanitized error only —
   never headers, bodies, or query). No runtime consumers yet beyond the
   strengthened redaction.
+- Added a dormant computer-use evidence storage foundation to
+  `@pickforge/picklab-core` (no producers wired yet). New `evidence.ts` provides
+  a session-scoped active-run pointer claimed with an atomic `wx` protocol. The
+  winner stamps a claim carrying its verifiable owner identity (PID +
+  `/proc` start ticks) at creation time, then creates the run and atomically
+  publishes (temp + rename) the full pointer over its own claim, confirming it is
+  the published owner before returning; racing peers adopt the single winner's
+  run and never steal a claim from a live owner (only a provably dead owner, or
+  an owner-unknown empty claim past a short grace, is reclaimed), so no orphan
+  run dirs result. If run creation succeeds but publication/verification fails,
+  the just-created run is finalized (`failed`) so no permanent running orphan is
+  left. Pointer resolution classifies a `running` run whose recorded owner is
+  dead or PID-reused as stale/recoverable rather than active. The append-only
+  `actions.jsonl` journal uses a recoverable owner-stamped cross-process lock to
+  serialize torn-tail repair, cap accounting, and one verified `O_APPEND` write
+  per bounded record (never rewriting the manifest); reads are deterministic and
+  tolerate only a torn final line, which the next append removes before writing.
+  A 100 MiB per-run cap is enforced cumulatively
+  from the run's real on-disk bytes (journal + artifacts, symlinks never
+  followed), so it holds across many appends and processes; it emits exactly one
+  truncation marker after which bounded metadata-only actions continue. That
+  marker uses the same recoverable-claim protocol as the pointer: the atomic
+  `wx` sentinel winner stamps its owner identity, appends the marker, then
+  atomically commits the sentinel (temp + rename). A crash or append failure
+  between claim and commit no longer blocks truncation forever — a provably dead
+  or owner-unknown claim is re-raced (checking the journal first so a marker a
+  prior writer already committed is never duplicated), and an append error clears
+  its own claim; a committed sentinel stays idempotent. A retention primitive
+  keeps the latest 20
+  finalized evidence runs, binding every removal to the directory a manifest
+  physically lives in and re-verifying that manifest immediately before `rm`, so
+  a spoofed or corrupt `runId` can never redirect a deletion at a running or
+  another run's directory; running/active and legacy runs are never pruned.
+  `RunManifest` gained optional, backward-compatible `evidenceVersion`,
+  `actionLog`, and `evidenceTruncated` fields; `createRun({ evidence: true })`
+  stamps them and seeds the empty journal, so plain screenshot runs are
+  unaffected. Config resolution gained `evidence.enabled` (product
+  configuration, default true) via `isEvidenceEnabled`. No MCP or DevTools relay
+  instrumentation is included.
 - Hosted CI now installs `x11vnc` alongside the other desktop test
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
@@ -193,6 +232,30 @@ then reset this file.
   browser + desktop-linux suite iterations pass with a deliberately split
   fake startup-marker publication; the browser session suite (25 tests) and
   `bun run typecheck` pass.
+
+- Evidence storage foundation: `bun run typecheck`, `bun run build`, and the
+  full suite pass (73 files, 895 passed / 2 skipped). New core coverage
+  (`evidence.ts` 90.97% lines / 83.03% branches / 97.43%
+  functions) includes real separate-process concurrent appenders losing zero
+  actions, a real separate-process begin race resolving to one run with no orphan
+  dirs, an in-process pointer race, a deliberately slow live-winner race proving
+  a live claimer is never stolen, stale/corrupt/dead-owner pointer recovery,
+  empty- and dead-claim reclaim, injected pointer-publication failure finalizing
+  the just-created run, bounded-line rejection, verified full-write behavior,
+  dead-owner journal-lock recovery, and torn-tail repair before the next append,
+  cumulative on-disk cap/truncation determinism with injected limits (no 100 MiB
+  allocation), and — for the durable truncation marker — injected marker-append
+  failure preserving the committed action without inviting a duplicate retry,
+  then clearing its claim and recovering; dead-owner and owner-unknown
+  (empty) sentinel reclaim, no-duplicate recovery when a prior claim already
+  committed the marker, sentinel-commit failure keeping the marker durable,
+  committed-sentinel idempotency, a live marker-claim never stolen by a racing
+  peer, and separate-process coverage proving exactly one marker across four
+  contending processes plus recovery after a process crashes mid-claim.
+  Retention of 20 finalized runs while preserving running/active/legacy and
+  resisting spoofed-`runId`/fake-inflation manifests, and old-manifest list/read
+  compatibility, are also covered. `bun run test:coverage` passes global
+  thresholds.
 
 ### Not tested yet
 

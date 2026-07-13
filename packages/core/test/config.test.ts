@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  isEvidenceEnabled,
   loadConfig,
   resolvedDefaults,
   saveGlobalConfig,
@@ -31,6 +32,7 @@ describe("loadConfig", () => {
     expect(config.labUser?.name).toBe("picklab-lab");
     expect(config.labUser?.home).toBe("/var/lib/picklab/lab-home");
     expect(config.viewer?.mode).toBe("manual");
+    expect(config.evidence?.enabled).toBe(true);
   });
 
   it("applies global config over defaults", async () => {
@@ -121,5 +123,25 @@ describe("resolvedDefaults", () => {
     expect(resolvedDefaults.labUser.name).toBe("picklab-lab");
     expect(resolvedDefaults.labUser.home).toBe("/var/lib/picklab/lab-home");
     expect(resolvedDefaults.viewer.mode).toBe("manual");
+    expect(resolvedDefaults.evidence.enabled).toBe(true);
+  });
+});
+
+describe("isEvidenceEnabled", () => {
+  it("defaults to enabled", async () => {
+    expect(isEvidenceEnabled(await loadConfig(project, env))).toBe(true);
+    expect(isEvidenceEnabled({})).toBe(true);
+  });
+
+  it("honors an explicit disable from config", async () => {
+    await saveProjectConfig(project, { evidence: { enabled: false } });
+    const config = await loadConfig(project, env);
+    expect(config.evidence?.enabled).toBe(false);
+    expect(isEvidenceEnabled(config)).toBe(false);
+  });
+
+  it("stays enabled for non-boolean or partial evidence config", () => {
+    expect(isEvidenceEnabled({ evidence: {} })).toBe(true);
+    expect(isEvidenceEnabled({ evidence: { retentionKeep: 5 } })).toBe(true);
   });
 });

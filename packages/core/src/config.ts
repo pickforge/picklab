@@ -20,6 +20,7 @@ export interface PicklabConfig {
   android?: { avdName?: string; [key: string]: unknown };
   labUser?: { name?: string; home?: string; [key: string]: unknown };
   viewer?: { mode?: ViewerMode; [key: string]: unknown };
+  evidence?: { enabled?: boolean; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -27,7 +28,18 @@ export const resolvedDefaults = {
   android: { avdName: "picklab-avd" },
   labUser: { name: "picklab-lab", home: "/var/lib/picklab/lab-home" },
   viewer: { mode: "manual" },
+  evidence: { enabled: true },
 } as const satisfies PicklabConfig;
+
+/**
+ * Whether computer-use evidence capture is enabled. This is product
+ * configuration (default on), not a feature flag: it stays a documented knob so
+ * a user can turn off evidence recording (e.g. because screenshot pixels cannot
+ * be redacted). Only an explicit `false` disables it.
+ */
+export function isEvidenceEnabled(config: PicklabConfig): boolean {
+  return config.evidence?.enabled !== false;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return (
