@@ -85,6 +85,8 @@ then reset this file.
   are capped at 16 MiB and diagnostic lines at 64 KiB. The implementation uses
   a local typed deferred helper rather than newer runtime Promise APIs, keeping
   the upstream-compatible Node 20.19 floor.
+- CI and release workflows pin Node `20.19.0`, the advertised minimum that
+  exercises the relay and upstream package contract.
 - CI installs a supported browser and requires the real headed-Chrome integration
   suite to execute rather than silently skip.
 - SECURITY.md documents the residual same-UID and local-process risks.
@@ -142,14 +144,15 @@ then reset this file.
 - Real x11vnc + TigerVNC proof attached a host viewer to the isolated display,
   confirmed server-enforced `-viewonly`, and verified that closing the viewer
   left the PickLab session, VNC server, and Xvfb running.
-- Relay slice: `bun run typecheck` and `bun run build` pass. The initial
-  focused browser relay, CLI, and installer command passed 15 files / 143
-  tests; the post-review relay regression run passed 2 files / 26 tests.
+- Relay slice: `bun run typecheck` and `bun run build` pass. The final focused
+  browser relay, CLI, and installer command passed 16 files / 154 tests.
   Coverage includes exact package/bin/spawn validation, bounded NDJSON and
   diagnostic fragmentation, transformations, protocol fail-closed behavior,
-  IDs/order/cancellation, backpressure, clean/forced exit races,
-  EOF/signals/hung cleanup, stderr purity, session scoping, static agent
-  entries, and operation without native `Promise.withResolvers`.
+  IDs/order/cancellation, backpressure, clean/forced exit races, child-process
+  errors with held stdin, EOF/signals/hung cleanup, controlled exit 137 after
+  SIGKILL escalation, stderr purity, session scoping, static agent entries,
+  required-browser CI prerequisite enforcement, and operation without native
+  `Promise.withResolvers`.
 - A real headed-Chrome + exact upstream `chrome-devtools-mcp@1.5.0` smoke
   navigated a local page and verified accessibility snapshot, console, and
   network metadata through the built `picklab browser devtools-mcp` command.

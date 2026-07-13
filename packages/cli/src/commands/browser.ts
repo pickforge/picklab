@@ -6,15 +6,27 @@ export interface BrowserDevtoolsMcpOptions {
   projectDir?: string;
 }
 
+export interface BrowserDevtoolsMcpDependencies {
+  runRelay?: typeof runProjectDevtoolsMcp;
+  signalCurrentProcess?: (signal: NodeJS.Signals) => void;
+}
+
 export async function runBrowserDevtoolsMcp(
   opts: BrowserDevtoolsMcpOptions,
+  dependencies: BrowserDevtoolsMcpDependencies = {},
 ): Promise<number> {
   try {
-    const exit = await runProjectDevtoolsMcp({
+    const exit = await (dependencies.runRelay ?? runProjectDevtoolsMcp)({
       projectDir: resolveProjectDir(opts),
     });
+    if (exit.signal === "SIGKILL") {
+      return 137;
+    }
     if (exit.signal !== null) {
-      process.kill(process.pid, exit.signal);
+      (dependencies.signalCurrentProcess ??
+        ((signal) => {
+          process.kill(process.pid, signal);
+        }))(exit.signal);
       return 128;
     }
     return exit.code ?? 1;

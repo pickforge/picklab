@@ -389,9 +389,24 @@ export async function runDevtoolsMcpRelay(
       pendingAfterSuccess(diagnosticsPump),
     ]);
     const outcome = await Promise.race([
-      exit.then((value) => ({ kind: "exit" as const, value })),
+      exit.then(
+        (value) => ({ kind: "exit" as const, value }),
+        (error: unknown) => ({ kind: "child-error" as const, error }),
+      ),
       failedPump.catch((error: unknown) => ({ kind: "error" as const, error })),
     ]);
+    if (outcome.kind === "child-error") {
+      terminationRequested = true;
+      inputAbort.abort();
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.kill("SIGTERM");
+      await Promise.allSettled([inputPump, outputPump, diagnosticsPump]);
+      throw new Error(
+        `Chrome DevTools MCP relay failed: child process error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`,
+      );
+    }
     if (outcome.kind === "error") {
       if (terminationRequested) {
         const observed = await exit;

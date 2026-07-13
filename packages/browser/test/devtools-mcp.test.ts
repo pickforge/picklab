@@ -320,6 +320,31 @@ describe("runDevtoolsMcpRelay", () => {
     ).resolves.toEqual({ code: 7, signal: null });
   });
 
+  it("aborts held stdin and all pumps when the child emits error", async () => {
+    const dir = temporaryDirectory();
+    const script = path.join(dir, "child-error-upstream.mjs");
+    fs.writeFileSync(script, "process.stdin.resume();\n");
+    const input = new PassThrough();
+    await expect(
+      runDevtoolsMcpRelay({
+        session: fakeSession(),
+        executable: fakeExecutable(script),
+        input,
+        output: collect([]),
+        diagnostics: collect([]),
+        signalSource: new Signals(),
+        shutdownTimeoutMs: 20,
+        spawnProcess: (command, args, options) => {
+          const child = spawn(command, args, options);
+          queueMicrotask(() => {
+            child.emit("error", new Error("synthetic child failure"));
+          });
+          return child;
+        },
+      }),
+    ).rejects.toThrow("child process error: synthetic child failure");
+  });
+
   it("drains a pending response write and ignores stdin abort after clean exit", async () => {
     const dir = temporaryDirectory();
     const script = path.join(dir, "pending-write-upstream.mjs");

@@ -16,7 +16,9 @@ import {
 import { ensureCliBuilt } from "./build-once.js";
 
 const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
-const ready = findOnPath("Xvfb") !== null && detectChromeBinary() !== null;
+const hasXvfb = findOnPath("Xvfb") !== null;
+const hasChrome = detectChromeBinary() !== null;
+const ready = hasXvfb && hasChrome;
 const temporaryDirectories: string[] = [];
 
 beforeAll(async () => {
@@ -27,6 +29,19 @@ afterEach(() => {
   for (const dir of temporaryDirectories.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("real DevTools relay prerequisites", () => {
+  it("fails closed in required-browser environments when prerequisites are missing", () => {
+    if (process.env.PICKLAB_REQUIRE_BROWSER === "1") {
+      expect({ hasXvfb, hasChrome }).toEqual({
+        hasXvfb: true,
+        hasChrome: true,
+      });
+    } else {
+      expect(true).toBe(true);
+    }
+  });
 });
 
 describe.skipIf(!ready)("real Chrome through the exact upstream relay", () => {
