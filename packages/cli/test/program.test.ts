@@ -7,4 +7,16 @@ describe("@pickforge/picklab", () => {
     expect(program.name()).toBe("picklab");
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+$/);
   });
+
+  it("exposes only project scope on the static browser relay command", () => {
+    const program = buildProgram();
+    const browser = program.commands.find((command) => command.name() === "browser");
+    const relay = browser?.commands.find(
+      (command) => command.name() === "devtools-mcp",
+    );
+    expect(relay).toBeDefined();
+    expect(relay?.options.map((option) => option.long)).toEqual([
+      "--project-dir",
+    ]);
+  });
 });

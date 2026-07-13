@@ -8,7 +8,7 @@ export const TOML_MARKER_BEGIN = "# >>> picklab >>>";
 export const TOML_MARKER_END = "# <<< picklab <<<";
 
 const SECTION_PATTERN =
-  /^[ \t]*\[mcp_servers\.(?:picklab|"picklab")(?:\.[^\]\r\n]*)?\][ \t]*\r?$/m;
+  /^[ \t]*\[mcp_servers\.(?:picklab|picklab-browser|"picklab"|"picklab-browser")(?:\.[^\]\r\n]*)?\][ \t]*\r?$/m;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -159,7 +159,7 @@ export async function inspectTomlFile(
     exists: true,
     markersPresent: split.block !== undefined,
     markersHaveSection:
-      split.block !== undefined && SECTION_PATTERN.test(split.block),
+      split.block !== undefined && split.block === markerBlock(),
     foreignSection:
       SECTION_PATTERN.test(split.before) || SECTION_PATTERN.test(split.after),
   };
@@ -180,7 +180,7 @@ export async function tomlFileHasMcpServer(
     } catch {
       return false;
     }
-    return split.block === markerBlock(expected);
+    return split.block?.includes(renderTomlSnippet(expected)) === true;
   }
   const inspection = await inspectTomlFile(filePath);
   return inspection.markersHaveSection || inspection.foreignSection;

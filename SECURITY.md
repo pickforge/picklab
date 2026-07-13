@@ -75,6 +75,9 @@ What PickLab does do:
 - The DevTools websocket path is a capability URL: whoever holds it controls the
   browser. PickLab reads only the port from `DevToolsActivePort` and **never**
   persists the websocket path/GUID in session records or diagnostics.
+- `picklab browser devtools-mcp` resolves only a live browser session owned by the current project and derives `http://127.0.0.1:<port>` in memory. It accepts no arbitrary browser URL and stores no CDP endpoint or websocket GUID.
+- The relay validates the installed `chrome-devtools-mcp` package name, exact `1.5.0` version, declared bin, and confined real path before starting it directly with Node (`shell: false`). Runtime `npx`, upstream update checks, and upstream usage statistics are disabled.
+- Relay stdout contains only validated LF-delimited JSON-RPC records, with pending records capped at 16 MiB. Upstream stderr lines are capped at 64 KiB, redacted, and forwarded only to stderr; over-limit lines are dropped with a safe notice. Malformed or incomplete protocol input fails closed and terminates the upstream process.
 - On destroy or reap, the whole Chrome **process group** is terminated and
   verified dead (PID plus `/proc` start-time identity, so a reused PID is never
   signalled) **before** the profile is deleted — no orphaned renderers, no
@@ -88,6 +91,7 @@ What it does not do, and you must account for:
   binding only keeps the network out, not other local processes.
 - There is **no uid sandbox** for the browser yet (same limitation as SEC-02).
   Launch only content you trust; prefer a throwaway user or VM otherwise.
+- The official Chrome DevTools MCP runs with the same user privileges as PickLab and exposes its upstream tool surface without method filtering. An agent with access to `picklab-browser` can inspect and control the isolated browser; grant that MCP entry only to agents you trust.
 
 Planned hardening tracked separately: per-session uid isolation, and moving CDP
 off a TCP port onto `--remote-debugging-pipe`.

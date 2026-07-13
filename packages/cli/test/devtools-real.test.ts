@@ -1,0 +1,126 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { findOnPath } from "@pickforge/picklab-desktop-linux";
+import {
+  createBrowserSession,
+  destroyBrowserSession,
+  detectChromeBinary,
+} from "@pickforge/picklab-browser";
+import { ensureCliBuilt } from "./build-once.js";
+
+const cliPath = fileURLToPath(new URL("../dist/picklab.js", import.meta.url));
+const ready = findOnPath("Xvfb") !== null && detectChromeBinary() !== null;
+const temporaryDirectories: string[] = [];
+
+beforeAll(async () => {
+  await ensureCliBuilt();
+}, 300_000);
+
+afterEach(() => {
+  for (const dir of temporaryDirectories.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe.skipIf(!ready)("real Chrome through the exact upstream relay", () => {
+  it(
+    "navigates and exposes accessibility, console, and network metadata",
+    { timeout: 60_000, retry: 1 },
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-relay-real-"));
+      temporaryDirectories.push(root);
+      const projectDir = path.join(root, "project");
+      const home = path.join(root, "home");
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.mkdirSync(home, { recursive: true });
+
+      const server = createServer((request, response) => {
+        if (request.url === "/data") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end('{"ok":true}');
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end(
+          '<!doctype html><title>PickLab Relay</title><button>Relay Ready</button>' +
+            '<script>console.log("picklab-relay-console");fetch("/data")</script>',
+        );
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("Test HTTP server did not bind a TCP port");
+      }
+
+      const registryEnv = { PICKLAB_HOME: home };
+      const session = await createBrowserSession({
+        projectDir,
+        registryEnv,
+        env: process.env,
+      });
+      const cliEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          cliEnv[key] = value;
+        }
+      }
+      cliEnv.PICKLAB_HOME = home;
+
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [cliPath, "browser", "devtools-mcp"],
+        cwd: projectDir,
+        env: cliEnv,
+        stderr: "pipe",
+      });
+      const client = new Client({
+        name: "picklab-real-devtools-smoke",
+        version: "0.0.0",
+      });
+      try {
+        await client.connect(transport);
+        const navigation = await client.callTool({
+          name: "navigate_page",
+          arguments: {
+            type: "url",
+            url: `http://127.0.0.1:${address.port}/`,
+          },
+        });
+        expect(navigation.isError).not.toBe(true);
+
+        const snapshot = await client.callTool({
+          name: "take_snapshot",
+          arguments: {},
+        });
+        expect(JSON.stringify(snapshot)).toContain("Relay Ready");
+
+        const consoleMessages = await client.callTool({
+          name: "list_console_messages",
+          arguments: {},
+        });
+        expect(JSON.stringify(consoleMessages)).toContain(
+          "picklab-relay-console",
+        );
+
+        const networkRequests = await client.callTool({
+          name: "list_network_requests",
+          arguments: {},
+        });
+        expect(JSON.stringify(networkRequests)).toContain("/data");
+      } finally {
+        await client.close().catch(() => {});
+        await destroyBrowserSession(session.id, registryEnv).catch(() => {});
+        server.close();
+        await once(server, "close");
+      }
+    },
+  );
+});
