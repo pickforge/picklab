@@ -11,10 +11,15 @@ import type { Readable, Writable } from "node:stream";
 import {
   listSessions,
   redactSecrets,
+  sanitizeErrorText,
   type EnvLike,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import { createDeferred } from "./deferred.js";
+import {
+  createDevtoolsEvidenceRecorder,
+  type DevtoolsEvidenceRecorder,
+} from "./devtools-evidence.js";
 import { getBrowserSessionStatus, type BrowserSessionStatus } from "./session.js";
 import {
   JsonRpcProtocolError,
@@ -175,6 +180,24 @@ export async function resolveLiveBrowserSession(
 export interface RelayHooks {
   beforeForward?: JsonRpcHook;
   afterResponse?: JsonRpcHook;
+}
+
+function composeEvidenceHooks(
+  hooks: RelayHooks | undefined,
+  evidence: DevtoolsEvidenceRecorder | undefined,
+): RelayHooks | undefined {
+  if (evidence === undefined) return hooks;
+  return {
+    beforeForward: async (message) => {
+      const transformed = await hooks?.beforeForward?.(message);
+      await evidence.beforeForward(transformed ?? message);
+      return transformed;
+    },
+    afterResponse: async (message) => {
+      await evidence.afterResponse(message);
+      return hooks?.afterResponse?.(message);
+    },
+  };
 }
 
 export interface RelayExit {
@@ -485,6 +508,19 @@ export interface RunProjectDevtoolsMcpOptions {
   maxDiagnosticLineBytes?: number;
 }
 
+function reportProjectEvidenceFailure(
+  destination: Writable,
+  error: unknown,
+): void {
+  const detail = sanitizeErrorText(
+    error instanceof Error ? error.message : String(error),
+  );
+  void writeWithBackpressure(
+    destination,
+    Buffer.from(`[picklab evidence] chrome-devtools: ${detail}\n`),
+  ).catch(() => {});
+}
+
 export async function runProjectDevtoolsMcp(
   opts: RunProjectDevtoolsMcpOptions,
 ): Promise<RelayExit> {
@@ -492,17 +528,39 @@ export async function runProjectDevtoolsMcp(
     resolveLiveBrowserSession({ projectDir: opts.projectDir, env: opts.env }),
     resolveDevtoolsMcpExecutable(),
   ]);
-  return runDevtoolsMcpRelay({
-    session,
-    executable,
-    input: opts.input,
-    output: opts.output,
-    diagnostics: opts.diagnostics,
-    env: opts.env,
-    cwd: path.resolve(opts.projectDir),
-    hooks: opts.hooks,
-    shutdownTimeoutMs: opts.shutdownTimeoutMs,
-    maxRecordBytes: opts.maxRecordBytes,
-    maxDiagnosticLineBytes: opts.maxDiagnosticLineBytes,
-  });
+  const diagnostics = opts.diagnostics ?? process.stderr;
+  let evidenceFailureReported = false;
+  const reportEvidenceFailure = (error: unknown): void => {
+    if (evidenceFailureReported) return;
+    evidenceFailureReported = true;
+    reportProjectEvidenceFailure(diagnostics, error);
+  };
+  let evidence: DevtoolsEvidenceRecorder | undefined;
+  try {
+    evidence = await createDevtoolsEvidenceRecorder({
+      projectDir: opts.projectDir,
+      sessionId: session.record.id,
+      env: opts.env,
+      reportFailure: reportEvidenceFailure,
+    });
+  } catch (error) {
+    reportEvidenceFailure(error);
+  }
+  try {
+    return await runDevtoolsMcpRelay({
+      session,
+      executable,
+      input: opts.input,
+      output: opts.output,
+      diagnostics,
+      env: opts.env,
+      cwd: path.resolve(opts.projectDir),
+      hooks: composeEvidenceHooks(opts.hooks, evidence),
+      shutdownTimeoutMs: opts.shutdownTimeoutMs,
+      maxRecordBytes: opts.maxRecordBytes,
+      maxDiagnosticLineBytes: opts.maxDiagnosticLineBytes,
+    });
+  } finally {
+    await evidence?.flushPending();
+  }
 }
