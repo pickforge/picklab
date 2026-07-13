@@ -147,12 +147,15 @@ then reset this file.
   confirmed server-enforced `-viewonly`, and verified that closing the viewer
   left the PickLab session, VNC server, and Xvfb running.
 - Relay slice: `bun run typecheck` and `bun run build` pass. The final focused
-  browser relay, CLI, and installer command passed 17 files / 161 tests.
+  browser relay, CLI, and installer command passed 17 files / 161 tests. After
+  rebasing onto live watch and applying the final review fix, the integrated
+  full suite passes 70 files / 780 tests with 2 skipped.
   Coverage includes exact package/bin/spawn validation, bounded NDJSON and
   diagnostic fragmentation, transformations, protocol fail-closed behavior,
   IDs/order/cancellation, backpressure, clean/forced exit races, stubborn
-  child-process errors with held stdin and verified SIGKILL cleanup,
-  EOF/signals/hung cleanup, real open-stdin CLI exit 137 after escalation,
+  child-process errors with held stdin and verified SIGKILL cleanup, genuine
+  spawn failures with no `exit` event, EOF/signals/hung cleanup, real open-stdin
+  CLI exit 137 after escalation,
   stderr purity, session scoping, static agent entries, installer Node-version
   boundaries, required-browser CI prerequisite enforcement, and operation
   without native `Promise.withResolvers`.
