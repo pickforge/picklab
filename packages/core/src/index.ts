@@ -38,6 +38,21 @@ export {
 export { isSecretKey, redactEnv, redactSecrets } from "./redact.js";
 
 export {
+  MAX_ERROR_TEXT_LENGTH,
+  sanitizeActionTarget,
+  sanitizeErrorText,
+  sanitizeNetworkFailure,
+  sanitizeTypedValue,
+  sanitizeUrlForEvidence,
+  type SanitizedActionTarget,
+  type SanitizedHttpMethod,
+  type SanitizedNetworkFailure,
+  type SanitizedResourceType,
+  type SanitizedTypedValue,
+  type TypedInputType,
+} from "./evidence-sanitize.js";
+
+export {
   CommandError,
   isPidAlive,
   listProcessGroupMembers,

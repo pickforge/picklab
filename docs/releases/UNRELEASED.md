@@ -48,6 +48,28 @@ then reset this file.
 
 ## Internal/release changes
 
+- Strengthened `redactSecrets` (pickforge/picklab#20): Cookie/Set-Cookie
+  values pair by pair, including balanced double/single-quoted values and
+  apostrophes in unquoted values, while cookie attributes like
+  `Path`/`SameSite` and XML/JSON embedding delimiters survive; complete
+  `Authorization:` header credentials for any scheme (Basic, Bearer, and
+  Digest with quoted parameters); bare JWTs; credential-bearing URL query
+  values (`token`/`session`/`code`/`auth`-like names); semicolon path
+  parameters such as `;jsessionid=...`; bare `session`/`sessionId`
+  assignments and JSON fields (session-adjacent metadata like `sessionCount`
+  untouched); OTP/CSRF assignments; and Chrome DevTools websocket capability
+  URLs/GUID paths. Existing consumers (logcat, ui-tree, MCP resources, relay
+  diagnostics, telemetry) pick this up automatically.
+- Added fail-closed structured evidence sanitizers to
+  `@pickforge/picklab-core` (`evidence-sanitize.ts`) for the upcoming
+  computer-use evidence journal: `sanitizeUrlForEvidence` (origin + path
+  only, semicolon path parameters stripped, `blob:` URLs reduced to
+  `blob:` + inner origin), `sanitizeErrorText` (redacted then bounded), `sanitizeTypedValue`
+  (length + allowlisted input type only), `sanitizeActionTarget` (per-field
+  allowlist; unknown fields dropped), and `sanitizeNetworkFailure`
+  (method/origin-path/status/resource type/timing/sanitized error only —
+  never headers, bodies, or query). No runtime consumers yet beyond the
+  strengthened redaction.
 - Hosted CI now installs `x11vnc` alongside the other desktop test
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
