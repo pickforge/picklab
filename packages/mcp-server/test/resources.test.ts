@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import os from "node:os";
+import {
+  appendAction,
+  writeEvidenceReport,
+  type RunManifest,
+} from "@pickforge/picklab-core";
 import {
   connectLab,
   makeLabDirs,
@@ -21,6 +26,36 @@ function first(contents: unknown): Record<string, any> {
   return (contents as Array<Record<string, any>>)[0] as Record<string, any>;
 }
 
+async function seedEvidenceRun(projectDir: string): Promise<string> {
+  const runDir = path.join(projectDir, ".picklab", "runs", RUN_ID);
+  const manifestPath = path.join(runDir, "manifest.json");
+  const manifest = JSON.parse(
+    fs.readFileSync(manifestPath, "utf8"),
+  ) as RunManifest;
+  manifest.evidenceVersion = 1;
+  manifest.actionLog = "actions.jsonl";
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(runDir, "actions.jsonl"), "");
+  await appendAction(runDir, {
+    actionId: "second",
+    source: '<img src="https://evil.invalid/leak">',
+    tool: "desktop_type",
+    startedAt: "2026-06-09T12:00:04.000Z",
+    status: "error",
+    target: { label: "</dd><script>alert(1)</script>" },
+    error: `Authorization: Bearer ${PLANTED_TOKEN}`,
+  });
+  await appendAction(runDir, {
+    actionId: "first",
+    source: "mcp",
+    tool: "desktop_click",
+    startedAt: "2026-06-09T12:00:03.000Z",
+    status: "ok",
+  });
+  await writeEvidenceReport(runDir, manifest);
+  return runDir;
+}
+
 let dirs: LabDirs;
 let lab: ConnectedLab;
 let sessionId: string;
@@ -28,6 +63,7 @@ let sessionId: string;
 beforeEach(async () => {
   dirs = makeLabDirs();
   writeSyntheticRun(dirs.projectDir, RUN_ID);
+  await seedEvidenceRun(dirs.projectDir);
   sessionId = writeDesktopSessionRecord(dirs.home, dirs.projectDir);
   lab = await connectLab({
     projectDir: dirs.projectDir,
@@ -41,11 +77,13 @@ afterEach(async () => {
 });
 
 describe("resource listing", () => {
-  it("lists runs, manifests, screenshots, logs, and session statuses", async () => {
+  it("lists run evidence, artifacts, and session statuses", async () => {
     const { resources } = await lab.client.listResources();
     const uris = resources.map((resource) => resource.uri);
     expect(uris).toContain("picklab://runs");
     expect(uris).toContain(`picklab://runs/${RUN_ID}/manifest`);
+    expect(uris).toContain(`picklab://runs/${RUN_ID}/actions`);
+    expect(uris).toContain(`picklab://runs/${RUN_ID}/report`);
     expect(uris).toContain(
       `picklab://runs/${RUN_ID}/screenshots/screenshot.png`,
     );
@@ -61,6 +99,8 @@ describe("resource listing", () => {
     expect(templates).toEqual(
       expect.arrayContaining([
         "picklab://runs/{runId}/manifest",
+        "picklab://runs/{runId}/actions",
+        "picklab://runs/{runId}/report",
         "picklab://runs/{runId}/screenshots/{name}",
         "picklab://runs/{runId}/logs/{name}",
         "picklab://sessions/{sessionId}/status",
@@ -86,6 +126,83 @@ describe("resource reads", () => {
     const manifest = JSON.parse(first(contents).text as string);
     expect(manifest.runId).toBe(RUN_ID);
     expect(manifest.artifacts).toHaveLength(2);
+  });
+
+  it("reads deterministically ordered actions with secrets redacted", async () => {
+    const { contents } = await lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/actions`,
+    });
+    expect(first(contents).mimeType).toBe("application/json");
+    const text = first(contents).text as string;
+    const actions = JSON.parse(text) as Array<Record<string, unknown>>;
+    expect(actions.map((action) => action.actionId)).toEqual(["first", "second"]);
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain(PLANTED_TOKEN);
+  });
+
+  it("reads the escaped static HTML report without planted secrets", async () => {
+    const { contents } = await lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/report`,
+    });
+    expect(first(contents).mimeType).toBe("text/html");
+    const html = first(contents).text as string;
+    expect(html).toContain("Content-Security-Policy");
+    expect(html).toContain("&lt;/dd&gt;&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<script");
+    expect(html).not.toMatch(/(?:src|href)="https:\/\/evil\.invalid/);
+    expect(html).not.toContain(PLANTED_TOKEN);
+  });
+
+  it("omits evidence resources for legacy runs", async () => {
+    const legacyId = "20260609-110000-legacy";
+    writeSyntheticRun(dirs.projectDir, legacyId);
+
+    const { resources } = await lab.client.listResources();
+    const uris = resources.map((resource) => resource.uri);
+    expect(uris).not.toContain(`picklab://runs/${legacyId}/actions`);
+    expect(uris).not.toContain(`picklab://runs/${legacyId}/report`);
+    await expect(
+      lab.client.readResource({ uri: `picklab://runs/${legacyId}/actions` }),
+    ).rejects.toThrow(/not found/i);
+    await expect(
+      lab.client.readResource({ uri: `picklab://runs/${legacyId}/report` }),
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it("reports a missing evidence journal as not found", async () => {
+    const actionsPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "actions.jsonl",
+    );
+    fs.rmSync(actionsPath);
+
+    await expect(
+      lab.client.readResource({ uri: `picklab://runs/${RUN_ID}/actions` }),
+    ).rejects.toThrow(/not found/i);
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((resource) => resource.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/actions`,
+    );
+  });
+
+  it("reports malformed evidence journals without returning partial data", async () => {
+    const actionsPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "actions.jsonl",
+    );
+    fs.writeFileSync(actionsPath, '{"actionId":"ok"}\nnot-json\n');
+
+    const result = lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/actions`,
+    });
+    await expect(result).rejects.toThrow(/Corrupt evidence journal/);
+    await expect(result).rejects.not.toThrow(dirs.projectDir);
   });
 
   it("reads a screenshot as a base64 blob", async () => {
@@ -164,6 +281,87 @@ describe("traversal protection", () => {
 });
 
 describe("symlink protection", () => {
+  it.each([
+    ["actions", "actions.jsonl"],
+    ["report", "report.html"],
+  ])("rejects a symlinked %s evidence file", async (resource, fileName) => {
+    const outside = path.join(dirs.root, `outside-${fileName}`);
+    fs.writeFileSync(outside, `token=${PLANTED_TOKEN}\n`);
+    const filePath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      fileName,
+    );
+    fs.rmSync(filePath, { force: true });
+    fs.symlinkSync(outside, filePath);
+
+    await expect(
+      lab.client.readResource({
+        uri: `picklab://runs/${RUN_ID}/${resource}`,
+      }),
+    ).rejects.toThrow(/not found/i);
+
+    const { resources } = await lab.client.listResources();
+    expect(resources.map((entry) => entry.uri)).not.toContain(
+      `picklab://runs/${RUN_ID}/${resource}`,
+    );
+  });
+
+  it.each([
+    ["actions", "actions.jsonl"],
+    ["report", "report.html"],
+  ])(
+    "rejects a parent-directory swap before opening %s",
+    async (resource, fileName) => {
+      const runDir = path.join(
+        dirs.projectDir,
+        ".picklab",
+        "runs",
+        RUN_ID,
+      );
+      const backupRun = `${runDir}-backup`;
+      const outsideRun = path.join(dirs.root, `outside-${resource}-run`);
+      fs.mkdirSync(outsideRun, { recursive: true });
+      fs.writeFileSync(
+        path.join(outsideRun, fileName),
+        resource === "actions"
+          ? `${JSON.stringify({ actionId: PLANTED_TOKEN })}\n`
+          : `<html>${PLANTED_TOKEN}</html>`,
+      );
+
+      const target = path.join(runDir, fileName);
+      const realOpen = fs.promises.open.bind(fs.promises);
+      let swapped = false;
+      const openSpy = vi
+        .spyOn(fs.promises, "open")
+        .mockImplementation(async (...args) => {
+          if (!swapped && path.resolve(String(args[0])) === target) {
+            swapped = true;
+            fs.renameSync(runDir, backupRun);
+            fs.symlinkSync(outsideRun, runDir);
+          }
+          return realOpen(...args);
+        });
+
+      try {
+        const result = lab.client.readResource({
+          uri: `picklab://runs/${RUN_ID}/${resource}`,
+        });
+        await expect(result).rejects.toThrow(/not found/i);
+        await expect(result).rejects.not.toThrow(PLANTED_TOKEN);
+        expect(swapped).toBe(true);
+      } finally {
+        openSpy.mockRestore();
+        if (fs.existsSync(runDir) && fs.lstatSync(runDir).isSymbolicLink()) {
+          fs.unlinkSync(runDir);
+        }
+        if (fs.existsSync(backupRun)) fs.renameSync(backupRun, runDir);
+      }
+    },
+  );
+
   it("rejects a screenshot symlink pointing outside the run dir", async () => {
     const secret = path.join(dirs.root, "outside-secret.png");
     fs.writeFileSync(secret, Buffer.concat([PNG_MAGIC, Buffer.from([9])]));

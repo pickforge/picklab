@@ -1,7 +1,14 @@
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listRuns, runsDir, type RunManifest } from "@pickforge/picklab-core";
+import {
+  isEvidenceRun,
+  listRuns,
+  readActions,
+  renderRunReport,
+  runsDir,
+  type RunManifest,
+} from "@pickforge/picklab-core";
 import { runTool, type ServerContext } from "../context.js";
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -39,34 +46,6 @@ export async function findRun(
   return { manifest, dir: path.join(runsDir(projectDir), manifest.runId) };
 }
 
-function renderRunReport(manifest: RunManifest, dir: string): string {
-  const lines = [
-    `# PickLab run ${manifest.runId}`,
-    "",
-    `- Slug: ${manifest.slug}`,
-    `- Status: ${manifest.status}`,
-    `- Created: ${manifest.createdAt}`,
-  ];
-  if (manifest.sessionId !== undefined) {
-    lines.push(`- Session: ${manifest.sessionId}`);
-  }
-  lines.push(
-    `- Directory: ${dir}`,
-    "",
-    `## Artifacts (${manifest.artifacts.length})`,
-    "",
-  );
-  if (manifest.artifacts.length === 0) {
-    lines.push("(none)");
-  }
-  for (const artifact of manifest.artifacts) {
-    lines.push(
-      `- [${artifact.type}] ${artifact.name} — ${artifact.path} (${artifact.createdAt})`,
-    );
-  }
-  return lines.join("\n");
-}
-
 export function registerArtifactTools(
   server: McpServer,
   ctx: ServerContext,
@@ -100,7 +79,7 @@ export function registerArtifactTools(
       title: "Run report",
       description:
         "Render a report for one run (default: the most recent run), " +
-        "including its artifact inventory.",
+        "including its artifact inventory and evidence action timeline.",
       inputSchema: {
         runId: z.string().min(1).optional().describe("Run id"),
       },
@@ -108,12 +87,13 @@ export function registerArtifactTools(
     (args) =>
       runTool(async () => {
         const { manifest, dir } = await findRun(ctx.projectDir, args.runId);
+        const records = isEvidenceRun(manifest) ? await readActions(dir) : [];
         return {
           data: {
             runId: manifest.runId,
             dir,
             manifest,
-            report: renderRunReport(manifest, dir),
+            report: renderRunReport(manifest, dir, records).join("\n"),
           },
         };
       }),

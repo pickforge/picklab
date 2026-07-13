@@ -6,11 +6,16 @@ import {
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Variables } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import {
+  EVIDENCE_ACTION_LOG,
+  EVIDENCE_REPORT,
   getSession,
+  isEvidenceRun,
   listRuns,
   listSessions,
+  parseActionsJournal,
   redactSecrets,
   runsDir,
+  sortEvidenceRecords,
 } from "@pickforge/picklab-core";
 import type { ServerContext } from "./context.js";
 import { isSafeRunId } from "./tools/artifacts.js";
@@ -131,16 +136,28 @@ async function assertWithinSubdir(
   }
 }
 
-// Reject a manifest whose real location escapes the run dir via symlinks. When
-// the file (or run dir) does not exist, return so the caller's read produces
-// its usual not-found error.
-async function assertManifestWithinRun(
+// Reject a missing fixed run file, a symlink, or a real location that escapes
+// the run directory.
+async function assertRootFileWithinRun(
   ctx: ServerContext,
   runId: string,
-  manifestPath: string,
+  fileName: string,
+  filePath: string,
   notFound: () => Error,
-): Promise<void> {
+): Promise<fs.Stats> {
   if (!(await isRunDirSafe(ctx, runId))) {
+    throw notFound();
+  }
+  let expectedEntry: fs.Stats;
+  try {
+    expectedEntry = await fs.promises.lstat(filePath);
+    if (expectedEntry.isSymbolicLink() || !expectedEntry.isFile()) {
+      throw notFound();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === undefined) {
+      throw error;
+    }
     throw notFound();
   }
   const runDir = path.join(runsDir(ctx.projectDir), runId);
@@ -148,30 +165,72 @@ async function assertManifestWithinRun(
   let realFile: string;
   try {
     realRunDir = await fs.promises.realpath(runDir);
-    realFile = await fs.promises.realpath(manifestPath);
+    realFile = await fs.promises.realpath(filePath);
   } catch {
-    return;
-  }
-  if (realFile !== path.join(realRunDir, "manifest.json")) {
     throw notFound();
+  }
+  if (realFile !== path.join(realRunDir, fileName)) {
+    throw notFound();
+  }
+  return expectedEntry;
+}
+
+function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+// Open the validated file without following its final component, bind the
+// descriptor to the validated inode, and reject a pathname swap during read.
+async function readTextFileNoFollow(
+  filePath: string,
+  expected: fs.Stats,
+  notFound: () => Error,
+): Promise<string> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(
+      filePath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch {
+    throw notFound();
+  }
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || !sameFileIdentity(opened, expected)) {
+      throw notFound();
+    }
+    const raw = await handle.readFile("utf8");
+    const current = await fs.promises.lstat(filePath);
+    if (
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      !sameFileIdentity(opened, current)
+    ) {
+      throw notFound();
+    }
+    return raw;
+  } catch {
+    throw notFound();
+  } finally {
+    await handle.close();
   }
 }
 
-// Return true when a run's manifest.json passes the same realpath confinement
-// as direct manifest reads (run dir not a symlink, manifest not a symlink
-// escaping the run dir). Runs that fail this are excluded from listings so a
-// symlinked manifest cannot leak data via resource enumeration.
-async function isManifestSafe(
+async function isRootFileSafe(
   ctx: ServerContext,
   runId: string,
+  fileName: string,
 ): Promise<boolean> {
   if (!(await isRunDirSafe(ctx, runId))) return false;
   const runDir = path.join(runsDir(ctx.projectDir), runId);
-  const manifestPath = path.join(runDir, "manifest.json");
+  const filePath = path.join(runDir, fileName);
   try {
+    const entry = await fs.promises.lstat(filePath);
+    if (entry.isSymbolicLink() || !entry.isFile()) return false;
     const realRunDir = await fs.promises.realpath(runDir);
-    const realFile = await fs.promises.realpath(manifestPath);
-    return realFile === path.join(realRunDir, "manifest.json");
+    const realFile = await fs.promises.realpath(filePath);
+    return realFile === path.join(realRunDir, fileName);
   } catch {
     return false;
   }
@@ -185,10 +244,23 @@ async function listSafeRuns(
   const safe: Awaited<ReturnType<typeof listRuns>> = [];
   for (const manifest of await listRuns(ctx.projectDir)) {
     if (!isSafeRunId(manifest.runId)) continue;
-    if (!(await isManifestSafe(ctx, manifest.runId))) continue;
+    if (!(await isRootFileSafe(ctx, manifest.runId, "manifest.json"))) continue;
     safe.push(manifest);
   }
   return safe;
+}
+
+async function listEvidenceRunFiles(
+  ctx: ServerContext,
+  fileName: typeof EVIDENCE_ACTION_LOG | typeof EVIDENCE_REPORT,
+): Promise<string[]> {
+  const runIds: string[] = [];
+  for (const manifest of await listSafeRuns(ctx)) {
+    if (!isEvidenceRun(manifest)) continue;
+    if (!(await isRootFileSafe(ctx, manifest.runId, fileName))) continue;
+    runIds.push(manifest.runId);
+  }
+  return runIds;
 }
 
 async function listRunFiles(
@@ -280,21 +352,138 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
         runId,
         "manifest.json",
       );
-      await assertManifestWithinRun(
+      const expected = await assertRootFileWithinRun(
         ctx,
         runId,
+        "manifest.json",
         manifestPath,
         () => new Error(`Run not found: ${runId}`),
       );
-      let raw: string;
-      try {
-        raw = await fs.promises.readFile(manifestPath, "utf8");
-      } catch {
-        throw new Error(`Run not found: ${runId}`);
-      }
+      const raw = await readTextFileNoFollow(
+        manifestPath,
+        expected,
+        () => new Error(`Run not found: ${runId}`),
+      );
       return {
         contents: [
           { uri: uri.href, mimeType: "application/json", text: raw },
+        ],
+      };
+    },
+  );
+
+  server.registerResource(
+    "run-actions",
+    new ResourceTemplate("picklab://runs/{runId}/actions", {
+      list: async () => ({
+        resources: (await listEvidenceRunFiles(ctx, EVIDENCE_ACTION_LOG)).map(
+          (runId) => ({
+            uri: `picklab://runs/${runId}/actions`,
+            name: `Run ${runId} actions`,
+            mimeType: "application/json",
+          }),
+        ),
+      }),
+    }),
+    {
+      title: "Run actions",
+      description: "Deterministically ordered evidence actions for a run",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const runId = decodeVariable(variables, "runId");
+      const manifest = (await listSafeRuns(ctx)).find(
+        (candidate) => candidate.runId === runId,
+      );
+      if (manifest === undefined || !isEvidenceRun(manifest)) {
+        throw new Error(`Actions not found: ${runId}`);
+      }
+      const runDir = path.join(runsDir(ctx.projectDir), runId);
+      const actionsPath = path.join(runDir, EVIDENCE_ACTION_LOG);
+      const expected = await assertRootFileWithinRun(
+        ctx,
+        runId,
+        EVIDENCE_ACTION_LOG,
+        actionsPath,
+        () => new Error(`Actions not found: ${runId}`),
+      );
+      let records;
+      try {
+        const raw = await readTextFileNoFollow(
+          actionsPath,
+          expected,
+          () => new Error(`Actions not found: ${runId}`),
+        );
+        records = parseActionsJournal(raw, `run ${runId}`);
+      } catch (error) {
+        throw new Error(
+          `Could not read actions for ${runId}: ${(error as Error).message}`,
+        );
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: redactSecrets(
+              JSON.stringify(sortEvidenceRecords(records), null, 2),
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerResource(
+    "run-report",
+    new ResourceTemplate("picklab://runs/{runId}/report", {
+      list: async () => ({
+        resources: (await listEvidenceRunFiles(ctx, EVIDENCE_REPORT)).map(
+          (runId) => ({
+            uri: `picklab://runs/${runId}/report`,
+            name: `Run ${runId} HTML report`,
+            mimeType: "text/html",
+          }),
+        ),
+      }),
+    }),
+    {
+      title: "Run HTML report",
+      description: "Static evidence filmstrip for a recorded run",
+      mimeType: "text/html",
+    },
+    async (uri, variables) => {
+      const runId = decodeVariable(variables, "runId");
+      const manifest = (await listSafeRuns(ctx)).find(
+        (candidate) => candidate.runId === runId,
+      );
+      if (manifest === undefined || !isEvidenceRun(manifest)) {
+        throw new Error(`Report not found: ${runId}`);
+      }
+      const reportPath = path.join(
+        runsDir(ctx.projectDir),
+        runId,
+        EVIDENCE_REPORT,
+      );
+      const expected = await assertRootFileWithinRun(
+        ctx,
+        runId,
+        EVIDENCE_REPORT,
+        reportPath,
+        () => new Error(`Report not found: ${runId}`),
+      );
+      const html = await readTextFileNoFollow(
+        reportPath,
+        expected,
+        () => new Error(`Report not found: ${runId}`),
+      );
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/html",
+            text: redactSecrets(html),
+          },
         ],
       };
     },

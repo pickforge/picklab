@@ -9,7 +9,9 @@ import {
   connectLab,
   makeLabDirs,
   parseToolJson,
+  PLANTED_TOKEN,
   removeLabDirs,
+  writeSyntheticRun,
   type ConnectedLab,
   type LabDirs,
 } from "./helpers.js";
@@ -214,6 +216,51 @@ describe("input validation", () => {
       arguments: { args: [] },
     });
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("artifact report", () => {
+  it("includes a deterministic redacted evidence timeline", async () => {
+    const runId = "20260609-120000-evidence";
+    const { dir } = writeSyntheticRun(dirs.projectDir, runId);
+    const manifestPath = path.join(dir, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.evidenceVersion = 1;
+    manifest.actionLog = "actions.jsonl";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.writeFileSync(
+      path.join(dir, "actions.jsonl"),
+      [
+        JSON.stringify({
+          actionId: "second",
+          source: "mcp",
+          tool: "desktop_type",
+          startedAt: "2026-06-09T12:00:04.000Z",
+          status: "error",
+          error: `Authorization: Bearer ${PLANTED_TOKEN}`,
+        }),
+        JSON.stringify({
+          actionId: "first",
+          source: "mcp",
+          tool: "desktop_click",
+          startedAt: "2026-06-09T12:00:03.000Z",
+          status: "ok",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const result = await lab.client.callTool({
+      name: "artifact_report",
+      arguments: { runId },
+    });
+    expect(result.isError).toBeFalsy();
+    const report = parseToolJson(result).report as string;
+    expect(report.indexOf("Step 1 — mcp / desktop_click")).toBeLessThan(
+      report.indexOf("Step 2 — mcp / desktop_type"),
+    );
+    expect(report).toContain("[REDACTED]");
+    expect(report).not.toContain(PLANTED_TOKEN);
   });
 });
 

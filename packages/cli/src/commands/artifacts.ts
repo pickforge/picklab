@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { listRuns, runsDir, type RunManifest } from "@pickforge/picklab-core";
+import {
+  isEvidenceRun,
+  listRuns,
+  readActions,
+  renderRunReport,
+  runsDir,
+  type RunManifest,
+} from "@pickforge/picklab-core";
 import { findOnPath } from "@pickforge/picklab-desktop-linux";
 import {
   resolveProjectDir,
@@ -88,34 +95,6 @@ export async function runArtifactsOpen(
   });
 }
 
-export function renderRunReport(manifest: RunManifest, dir: string): string[] {
-  const lines = [
-    `# PickLab run ${manifest.runId}`,
-    "",
-    `- Slug: ${manifest.slug}`,
-    `- Status: ${manifest.status}`,
-    `- Created: ${manifest.createdAt}`,
-  ];
-  if (manifest.sessionId !== undefined) {
-    lines.push(`- Session: ${manifest.sessionId}`);
-  }
-  lines.push(
-    `- Directory: ${dir}`,
-    "",
-    `## Artifacts (${manifest.artifacts.length})`,
-    "",
-  );
-  if (manifest.artifacts.length === 0) {
-    lines.push("(none)");
-  }
-  for (const artifact of manifest.artifacts) {
-    lines.push(
-      `- [${artifact.type}] ${artifact.name} — ${artifact.path} (${artifact.createdAt})`,
-    );
-  }
-  return lines;
-}
-
 export async function runArtifactsReport(
   runId: string | undefined,
   opts: BaseCliOptions,
@@ -123,9 +102,10 @@ export async function runArtifactsReport(
   return runReported(opts, async () => {
     const projectDir = resolveProjectDir(opts);
     const { manifest, dir } = await findRun(projectDir, runId);
+    const records = isEvidenceRun(manifest) ? await readActions(dir) : [];
     return {
       data: { runId: manifest.runId, dir, manifest },
-      lines: renderRunReport(manifest, dir),
+      lines: renderRunReport(manifest, dir, records),
     };
   });
 }

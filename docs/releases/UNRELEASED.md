@@ -113,6 +113,18 @@ then reset this file.
   unaffected. Config resolution gained `evidence.enabled` (product
   configuration, default true) via `isEvidenceEnabled`. No MCP or DevTools relay
   instrumentation is included.
+- Added backward-compatible evidence rendering for recorded runs: CLI and MCP
+  artifact reports now include a deterministically ordered, defensively redacted
+  action timeline, while legacy runs remain artifact inventories. Evidence runs
+  can publish an escaped, no-script `report.html` filmstrip with a restrictive
+  CSP and only confined regular screenshot files. MCP resources expose sorted
+  action JSON and the static HTML report while rejecting legacy, malformed,
+  missing, symlinked, swapped, or out-of-run evidence files. Fixed-file resource
+  reads bind no-follow descriptors to the validated file identity and re-check
+  the pathname after reading; journal reads/appends also use no-follow opens.
+  Report publication uses an exclusive temporary file plus atomic rename so
+  planted symlinks are never followed. No action producers
+  or DevTools/MCP instrumentation are included in this slice.
 - Hosted CI now installs `x11vnc` alongside the other desktop test
   dependencies, and the desktop-linux integration suite asserts `x11vnc` is
   present when `CI=true` so VNC tests fail loudly instead of silently
@@ -256,6 +268,13 @@ then reset this file.
   resisting spoofed-`runId`/fake-inflation manifests, and old-manifest list/read
   compatibility, are also covered. `bun run test:coverage` passes global
   thresholds.
+- Evidence rendering/resources: `bun run typecheck` and `bun run build` pass;
+  the full and coverage suites pass 74 files / 916 passed / 2 skipped. Focused
+  tests cover deterministic ordering and post-sort step numbers, legacy reports,
+  corrupt/torn journals, planted secrets, HTML/XSS escaping and CSP, confined
+  screenshot embedding, action/report resource MIME and listings, and rejection
+  of symlinked journals, reports, screenshots, run directories, planted report
+  publication targets, and parent-directory swaps between validation and open.
 
 ### Not tested yet
 
