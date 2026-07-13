@@ -288,7 +288,7 @@ describe("runDevtoolsMcpRelay", () => {
       output: collect(output),
       diagnostics: collect([]),
       signalSource: new Signals(),
-      shutdownTimeoutMs: 100,
+      shutdownTimeoutMs: 5_000,
       hooks: {
         beforeForward: (message) => ({ ...message, params: { before: true } }),
         afterResponse: (message) => ({ ...message, observed: true }),
