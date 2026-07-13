@@ -378,6 +378,25 @@ describe("runDevtoolsMcpRelay", () => {
     expect(() => process.kill(observedChildPid, 0)).toThrow();
   });
 
+  it("rejects a genuine spawn failure without hanging or retaining signal handlers", async () => {
+    const signals = new Signals();
+    await expect(
+      runDevtoolsMcpRelay({
+        session: fakeSession(),
+        executable: fakeExecutable("/unreachable/upstream.mjs"),
+        input: new PassThrough(),
+        output: collect([]),
+        diagnostics: collect([]),
+        cwd: path.join(temporaryDirectory(), "missing"),
+        signalSource: signals,
+        shutdownTimeoutMs: 20,
+      }),
+    ).rejects.toThrow("child process error");
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      expect(signals.listenerCount(signal)).toBe(0);
+    }
+  });
+
   it("drains a pending response write and ignores stdin abort after clean exit", async () => {
     const dir = temporaryDirectory();
     const script = path.join(dir, "pending-write-upstream.mjs");

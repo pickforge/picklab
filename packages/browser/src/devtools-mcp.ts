@@ -235,6 +235,9 @@ function observeChildExit(child: ChildProcess): ChildObservation {
     outcome.resolve(observed);
     exited.resolve(observed);
   });
+  child.once("close", (code, signal) => {
+    exited.resolve({ code, signal });
+  });
   return { outcome: outcome.promise, exited: exited.promise };
 }
 
