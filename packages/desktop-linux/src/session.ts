@@ -1,18 +1,27 @@
 import path from "node:path";
 import {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
   getSession,
   isPidAlive,
+  processIdentityMatches,
   reapDeadRunningSessions,
   sessionsDir,
   stopPid,
+  stopProcessGroupVerified,
   updateSession,
   type DesktopSessionInfo,
   type EnvLike,
   type SessionRecord,
 } from "@pickforge/picklab-core";
-import { isDisplayAlive, startXvfb, type XvfbHandle } from "./display.js";
+import {
+  XvfbStartError,
+  isDisplayAlive,
+  startXvfb,
+  type XvfbHandle,
+  type XvfbPartialStart,
+} from "./display.js";
 import { detectVncBinary, startVnc, type VncHandle } from "./vnc.js";
 
 export interface CreateDesktopSessionOptions {
@@ -70,14 +79,40 @@ export async function createDesktopSession(
   const logDir = desktopSessionLogDir(record.id, registryEnv);
 
   let xvfb: XvfbHandle | undefined;
+  let xvfbPartial: XvfbPartialStart | undefined;
+  let xvfbStartTimeTicks: number | undefined;
   let vnc: VncHandle | undefined;
   try {
-    xvfb = await startXvfb({
-      width: opts.width,
-      height: opts.height,
-      logDir,
-      env: opts.env,
-    });
+    try {
+      xvfb = await startXvfb({
+        width: opts.width,
+        height: opts.height,
+        logDir,
+        env: opts.env,
+        onSpawn: async (partial) => {
+          xvfbPartial = partial;
+          await updateSession(
+            record.id,
+            {
+              desktop: {
+                display: partial.display,
+                xvfbPid: partial.pid,
+                xvfbStartTimeTicks: partial.startTimeTicks,
+                width: partial.width,
+                height: partial.height,
+              },
+            },
+            registryEnv,
+          );
+        },
+      });
+    } catch (error) {
+      if (error instanceof XvfbStartError && error.partial !== undefined) {
+        xvfbPartial = error.partial;
+      }
+      throw error;
+    }
+    xvfbStartTimeTicks = xvfb.startTimeTicks;
     if (wantsVnc) {
       vnc = await startVnc({
         display: xvfb.display,
@@ -90,6 +125,7 @@ export async function createDesktopSession(
     const desktop: DesktopSessionInfo = {
       display: xvfb.display,
       xvfbPid: xvfb.pid,
+      xvfbStartTimeTicks,
       width: xvfb.width,
       height: xvfb.height,
     };
@@ -113,15 +149,61 @@ export async function createDesktopSession(
     }
     return handle;
   } catch (error) {
+    let vncGone = vnc === undefined;
     if (vnc !== undefined) {
-      await stopPid(vnc.pid).catch(() => {});
+      vncGone = await stopPid(vnc.pid).catch(() => false);
     }
-    if (xvfb !== undefined) {
-      await stopPid(xvfb.pid).catch(() => {});
+    let xvfbGone =
+      xvfb === undefined
+        ? (xvfbPartial?.cleanupConfirmed ?? true)
+        : false;
+    if (xvfb !== undefined && xvfbStartTimeTicks !== undefined) {
+      try {
+        const result = await stopProcessGroupVerified({
+          pid: xvfb.pid,
+          startTicks: xvfbStartTimeTicks,
+        });
+        xvfbGone =
+          result.outcome === "terminated" || result.outcome === "already-dead";
+      } catch {
+        xvfbGone = false;
+      }
     }
-    await updateSession(record.id, { status: "error" }, registryEnv).catch(
-      () => {},
-    );
+    const cleanupComplete = vncGone && xvfbGone;
+    const knownXvfb = xvfb ?? xvfbPartial;
+    const knownXvfbStartTimeTicks =
+      knownXvfb !== undefined && xvfbPartial?.pid === knownXvfb.pid
+        ? xvfbPartial.startTimeTicks
+        : xvfbStartTimeTicks;
+    const clearedMeta = { ...record.meta };
+    delete clearedMeta[REAPER_CLEANUP_PENDING_META_KEY];
+    await updateSession(
+      record.id,
+      cleanupComplete
+        ? { status: "error", desktop: undefined, meta: clearedMeta }
+        : {
+            status: "error",
+            meta: {
+              ...record.meta,
+              [REAPER_CLEANUP_PENDING_META_KEY]: true,
+            },
+            ...(knownXvfb === undefined
+              ? {}
+              : {
+                  desktop: {
+                    display: knownXvfb.display,
+                    xvfbPid: knownXvfb.pid,
+                    ...(knownXvfbStartTimeTicks === undefined
+                      ? {}
+                      : { xvfbStartTimeTicks: knownXvfbStartTimeTicks }),
+                    ...(vnc === undefined ? {} : { vncPid: vnc.pid }),
+                    width: knownXvfb.width,
+                    height: knownXvfb.height,
+                  },
+                }),
+          },
+      registryEnv,
+    ).catch(() => {});
     throw error;
   }
 }
@@ -140,9 +222,6 @@ export async function destroyDesktopSession(
   if (desktop?.vncPid !== undefined) {
     stops.push(["x11vnc", desktop.vncPid]);
   }
-  if (desktop?.xvfbPid !== undefined) {
-    stops.push(["Xvfb", desktop.xvfbPid]);
-  }
   for (const [label, pid] of stops) {
     try {
       const stopped = await stopPid(pid);
@@ -159,8 +238,52 @@ export async function destroyDesktopSession(
       );
     }
   }
+  const xvfbPid = desktop?.xvfbPid;
+  const xvfbStartTimeTicks = desktop?.xvfbStartTimeTicks;
+  if (xvfbPid !== undefined) {
+    if (xvfbStartTimeTicks === undefined) {
+      if (isPidAlive(xvfbPid)) {
+        failures.push(
+          new Error(
+            `Refusing to stop Xvfb (pid ${xvfbPid}): process identity is unavailable`,
+          ),
+        );
+      }
+    } else {
+      try {
+        const result = await stopProcessGroupVerified({
+          pid: xvfbPid,
+          startTicks: xvfbStartTimeTicks,
+        });
+        if (
+          result.outcome !== "terminated" &&
+          result.outcome !== "already-dead"
+        ) {
+          failures.push(
+            new Error(
+              `Xvfb process group (pid ${xvfbPid}) could not be verified as gone`,
+            ),
+          );
+        }
+      } catch (error) {
+        failures.push(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }
+  }
   if (failures.length > 0) {
-    await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+    await updateSession(
+      id,
+      {
+        status: "error",
+        meta: {
+          ...record.meta,
+          [REAPER_CLEANUP_PENDING_META_KEY]: true,
+        },
+      },
+      registryEnv,
+    ).catch(() => {});
     throw new AggregateError(
       failures,
       `Failed to stop ${failures.length} process(es) of desktop session ${id}`,
@@ -180,7 +303,14 @@ export async function getDesktopSessionStatus(
   const desktop = record.desktop;
   return {
     record,
-    xvfbAlive: desktop?.xvfbPid !== undefined && isPidAlive(desktop.xvfbPid),
+    xvfbAlive:
+      desktop?.xvfbPid !== undefined &&
+      (desktop.xvfbStartTimeTicks === undefined
+        ? isPidAlive(desktop.xvfbPid)
+        : processIdentityMatches({
+            pid: desktop.xvfbPid,
+            startTicks: desktop.xvfbStartTimeTicks,
+          })),
     vncAlive: desktop?.vncPid !== undefined && isPidAlive(desktop.vncPid),
     displayAlive: desktop !== undefined && isDisplayAlive(desktop.display),
   };

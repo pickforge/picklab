@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -224,11 +224,27 @@ export interface DaemonHandle {
   logPath: string;
 }
 
-export async function startDaemon(
+export interface OwnedDaemonHandle extends DaemonHandle {
+  child: ChildProcess;
+  release(): void;
+}
+
+export function startDaemon(
+  cmd: string,
+  args: readonly string[],
+  opts: StartDaemonOptions & { owned: true },
+): Promise<OwnedDaemonHandle>;
+export function startDaemon(
   cmd: string,
   args: readonly string[],
   opts: StartDaemonOptions,
-): Promise<DaemonHandle> {
+): Promise<DaemonHandle>;
+
+export async function startDaemon(
+  cmd: string,
+  args: readonly string[],
+  opts: StartDaemonOptions & { owned?: boolean },
+): Promise<DaemonHandle | OwnedDaemonHandle> {
   await fs.promises.mkdir(opts.logDir, { recursive: true });
   const name = opts.name ?? path.basename(cmd);
   const logPath = path.join(opts.logDir, `${name}.log`);
@@ -248,15 +264,29 @@ export async function startDaemon(
     throw error;
   }
 
-  return new Promise<DaemonHandle>((resolve, reject) => {
+  return new Promise<DaemonHandle | OwnedDaemonHandle>((resolve, reject) => {
     const onSpawn = (): void => {
       cleanup();
       if (child.pid === undefined) {
         reject(new Error(`Failed to start daemon: ${cmd}`));
         return;
       }
-      child.unref();
-      resolve({ pid: child.pid, logPath });
+      if (opts.owned === true) {
+        let released = false;
+        resolve({
+          pid: child.pid,
+          logPath,
+          child,
+          release: () => {
+            if (released) return;
+            released = true;
+            child.unref();
+          },
+        });
+      } else {
+        child.unref();
+        resolve({ pid: child.pid, logPath });
+      }
     };
     const onError = (error: Error): void => {
       cleanup();
@@ -436,8 +466,9 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * with SIGTERM then SIGKILL escalation. Before the first signal, the recorded
  * process must still exist with its recorded start identity and lead the
  * recorded group. This remains verifiable while the leader is a zombie.
- * Before escalation, a reused PID leading that group is rejected so an
- * unrelated group is never killed.
+ * After that verified group receives SIGTERM, a missing leader does not make
+ * its surviving same-pgid members unsafe: the pgid cannot be reused while they
+ * remain, so SIGKILL escalation is valid. A reused live leader is still refused.
  *
  * The leader must have been spawned as a process-group leader (e.g. `spawn`
  * with `detached: true`), so its PID doubles as the group id.
@@ -476,13 +507,20 @@ export async function stopProcessGroupVerified(
     await sleep(POLL_INTERVAL_MS);
   }
 
+  const members = listProcessGroupMembers(identity.pid);
   const currentLeader = readProcStat(identity.pid);
   if (
     currentLeader !== undefined &&
-    currentLeader.startTicks !== identity.startTicks &&
-    currentLeader.pgrp === identity.pid
+    (currentLeader.startTicks !== identity.startTicks ||
+      currentLeader.pgrp !== identity.pid)
   ) {
     return { outcome: "reused", signaled: true };
+  }
+  if (
+    members.length === 0 &&
+    (currentLeader === undefined || currentLeader.state === "Z")
+  ) {
+    return { outcome: "terminated", signaled: true };
   }
   signalGroup(identity.pid, "SIGKILL");
   const killDeadline = Date.now() + 1_000;

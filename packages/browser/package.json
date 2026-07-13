@@ -1,8 +1,8 @@
 {
-  "name": "@pickforge/picklab-mcp-server",
-  "version": "0.1.4",
+  "name": "@pickforge/picklab-browser",
+  "version": "0.1.0",
   "private": true,
-  "description": "MCP server implementation for PickLab",
+  "description": "Isolated headed Chrome/Chromium browser sessions for PickLab",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -17,11 +17,7 @@
     "build": "tsup src/index.ts --format esm --dts --clean"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0",
-    "@pickforge/picklab-android": "*",
-    "@pickforge/picklab-browser": "*",
     "@pickforge/picklab-core": "*",
-    "@pickforge/picklab-desktop-linux": "*",
-    "zod": "^4.0.0"
+    "@pickforge/picklab-desktop-linux": "*"
   }
 }

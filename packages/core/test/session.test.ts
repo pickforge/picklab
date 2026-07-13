@@ -283,7 +283,7 @@ describe("session registry", () => {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", xvfbPid: helperPid },
+        desktop: { display: ":90", vncPid: helperPid },
       },
       env,
     );
@@ -310,7 +310,7 @@ describe("session registry", () => {
         type: "desktop",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":90", xvfbPid: helperPid },
+        desktop: { display: ":90", vncPid: helperPid },
       },
       env,
     );
@@ -338,7 +338,7 @@ describe("session registry", () => {
     }
   });
 
-  it("treats a browser session as alive only when the recorded start identity matches", async () => {
+  it("uses the recorded Xvfb identity for desktop liveness when available", async () => {
     const helper = spawn(
       process.execPath,
       ["-e", "setInterval(() => {}, 1000)"],
@@ -353,6 +353,104 @@ describe("session registry", () => {
       if (identity === undefined) {
         throw new Error("could not read child identity");
       }
+      const live = await createSession(
+        {
+          type: "desktop",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":119",
+            xvfbPid: pid,
+            xvfbStartTimeTicks: identity.startTicks,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(live)).toBe(true);
+      if (live.desktop === undefined) {
+        throw new Error("desktop record lost its desktop leg");
+      }
+
+      const reused = await updateSession(
+        live.id,
+        {
+          desktop: {
+            ...live.desktop,
+            xvfbStartTimeTicks: identity.startTicks + 1,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(reused)).toBe(false);
+    } finally {
+      await stopPid(pid, { timeoutMs: 1000 });
+      await waitForExit(helper);
+    }
+  });
+
+  it("keeps a live legacy no-identity desktop running without signaling helpers", async () => {
+    const xvfb = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const vnc = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    if (xvfb.pid === undefined || vnc.pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const legacy = await createSession(
+        {
+          type: "desktop",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":118",
+            xvfbPid: xvfb.pid,
+            vncPid: vnc.pid,
+          },
+        },
+        env,
+      );
+      expect(isSessionProcessAlive(legacy)).toBe(true);
+      expect(await reapDeadRunningSessions(env)).toEqual([]);
+      expect((await getSession(legacy.id, env))?.status).toBe("running");
+      expect(isPidAlive(xvfb.pid)).toBe(true);
+      expect(isPidAlive(vnc.pid)).toBe(true);
+    } finally {
+      for (const child of [xvfb, vnc]) {
+        if (child.pid !== undefined && isPidAlive(child.pid)) {
+          await stopPid(child.pid, { timeoutMs: 1000 });
+          await waitForExit(child);
+        }
+      }
+    }
+  });
+
+  it("treats a browser session as alive only when the recorded start identity matches", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const pid = helper.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    const displayNumber = 30_000 + (pid % 10_000);
+    const display = `:${displayNumber}`;
+    const displaySocket = `/tmp/.X11-unix/X${displayNumber}`;
+    fs.mkdirSync(path.dirname(displaySocket), { recursive: true });
+    fs.writeFileSync(displaySocket, "");
+    try {
+      const identity = readProcessIdentity(pid);
+      if (identity === undefined) {
+        throw new Error("could not read child identity");
+      }
       const makeBrowser = (
         browserStartTimeTicks: number,
         xvfbPid: number = pid,
@@ -362,7 +460,11 @@ describe("session registry", () => {
             type: "browser",
             projectDir: "/proj",
             status: "running",
-            desktop: { display: ":120", xvfbPid },
+            desktop: {
+              display,
+              xvfbPid,
+              xvfbStartTimeTicks: identity.startTicks,
+            },
             browser: {
               browserPid: pid,
               browserStartTimeTicks,
@@ -384,10 +486,91 @@ describe("session registry", () => {
 
       const deadDisplay = await makeBrowser(identity.startTicks, 4_194_307);
       expect(isSessionProcessAlive(deadDisplay)).toBe(false);
+
+      fs.rmSync(displaySocket, { force: true });
+      const missingDisplay = await makeBrowser(identity.startTicks);
+      expect(isSessionProcessAlive(missingDisplay)).toBe(false);
     } finally {
+      fs.rmSync(displaySocket, { force: true });
       if (isPidAlive(pid)) {
         await stopPid(pid, { timeoutMs: 1000 });
         await waitForExit(helper);
+      }
+    }
+  });
+
+  it("default reaper removes a browser session whose display socket is missing", async () => {
+    const browser = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    const xvfb = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    if (browser.pid === undefined || xvfb.pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const browserIdentity = readProcessIdentity(browser.pid);
+      const xvfbIdentity = readProcessIdentity(xvfb.pid);
+      if (browserIdentity === undefined || xvfbIdentity === undefined) {
+        throw new Error("could not read process identity");
+      }
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          desktop: {
+            display: ":39999",
+            xvfbPid: xvfb.pid,
+            xvfbStartTimeTicks: xvfbIdentity.startTicks,
+          },
+          browser: {
+            browserPid: browser.pid,
+            browserStartTimeTicks: browserIdentity.startTicks,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir: path.join(home, "sessions", "placeholder", "profile"),
+          },
+        },
+        env,
+      );
+      if (stale.browser === undefined) {
+        throw new Error("browser record lost its browser leg");
+      }
+      const sessionDir = path.join(home, "sessions", stale.id);
+      const profileDir = path.join(sessionDir, "profile");
+      await fs.promises.mkdir(profileDir, { recursive: true });
+      await updateSession(
+        stale.id,
+        {
+          browser: {
+            ...stale.browser,
+            profileDir,
+          },
+        },
+        env,
+      );
+
+      expect(
+        (await reapDeadRunningSessions(env)).map((record) => record.id),
+      ).toEqual([stale.id]);
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      expect(isPidAlive(browser.pid)).toBe(false);
+      expect(isPidAlive(xvfb.pid)).toBe(false);
+    } finally {
+      for (const child of [browser, xvfb]) {
+        if (child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // group already gone
+          }
+        }
       }
     }
   });
@@ -396,25 +579,45 @@ describe("session registry", () => {
     const helper = spawn(
       process.execPath,
       ["-e", "setInterval(() => {}, 1000)"],
-      { stdio: "ignore" },
+      { detached: true, stdio: "ignore" },
     );
     const xvfbPid = helper.pid;
     if (xvfbPid === undefined) {
       throw new Error("child process did not expose a pid");
+    }
+    const xvfbIdentity = readProcessIdentity(xvfbPid);
+    if (xvfbIdentity === undefined) {
+      throw new Error("desktop helper identity was unavailable");
     }
     const stale = await createSession(
       {
         type: "browser",
         projectDir: "/proj",
         status: "running",
-        desktop: { display: ":121", xvfbPid },
+        desktop: {
+          display: ":121",
+          xvfbPid,
+          xvfbStartTimeTicks: xvfbIdentity.startTicks,
+        },
         browser: {
           browserPid: 4_194_306,
           browserStartTimeTicks: 1,
           binaryPath: "/usr/bin/chromium",
           profileMode: "ephemeral",
-          profileDir: "/tmp/picklab-profile",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
           cdpPort: 1,
+        },
+      },
+      env,
+    );
+    const profileDir = path.join(home, "sessions", stale.id, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          ...stale.browser!,
+          profileDir,
         },
       },
       env,
@@ -437,6 +640,221 @@ describe("session registry", () => {
     }
   });
 
+  it("refuses to signal a reused Xvfb pid while reaping", async () => {
+    const helper = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    const xvfbPid = helper.pid;
+    if (xvfbPid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    const identity = readProcessIdentity(xvfbPid);
+    if (identity === undefined) {
+      throw new Error("desktop helper identity was unavailable");
+    }
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: {
+          display: ":124",
+          xvfbPid,
+          xvfbStartTimeTicks: identity.startTicks + 1,
+        },
+      },
+      env,
+    );
+    try {
+      expect(await reapDeadRunningSessions(env, () => false)).toEqual([]);
+      expect(isPidAlive(xvfbPid)).toBe(true);
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+    } finally {
+      await stopPid(xvfbPid, { timeoutMs: 1000 });
+      await waitForExit(helper);
+    }
+  });
+
+  it("deletes the ephemeral profile under the session dir when reaping", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        desktop: { display: ":122", xvfbPid: 4_194_308 },
+        browser: {
+          browserPid: 4_194_309,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
+          cdpPort: 1,
+        },
+      },
+      env,
+    );
+    // Point the profile at the real per-session directory and plant data in it.
+    const profileDir = path.join(home, "sessions", stale.id, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await fs.promises.writeFile(path.join(profileDir, "Cookies"), "secret");
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          browserPid: 4_194_309,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir,
+          cdpPort: 1,
+        },
+      },
+      env,
+    );
+
+    const reaped = await reapDeadRunningSessions(env);
+
+    expect(reaped.map((record) => record.id)).toEqual([stale.id]);
+    expect(await getSession(stale.id, env)).toBeUndefined();
+    expect(fs.existsSync(profileDir)).toBe(false);
+  });
+
+  it("preserves a retryable error record when reaper profile removal fails", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "running",
+        browser: {
+          browserPid: 4_194_312,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir: path.join(home, "sessions", "placeholder", "profile"),
+        },
+      },
+      env,
+    );
+    const sessionDir = path.join(home, "sessions", stale.id);
+    const profileDir = path.join(sessionDir, "profile");
+    await fs.promises.mkdir(profileDir, { recursive: true });
+    await fs.promises.writeFile(path.join(profileDir, "Cookies"), "secret");
+    await updateSession(
+      stale.id,
+      {
+        browser: {
+          browserPid: 4_194_312,
+          browserStartTimeTicks: 1,
+          binaryPath: "/usr/bin/chromium",
+          profileMode: "ephemeral",
+          profileDir,
+        },
+      },
+      env,
+    );
+
+    const realRm = fs.promises.rm.bind(fs.promises);
+    let failRemoval = true;
+    const rm = vi
+      .spyOn(fs.promises, "rm")
+      .mockImplementation(async (target, options) => {
+        if (failRemoval && path.resolve(String(target)) === sessionDir) {
+          const error = new Error("simulated removal failure");
+          Object.assign(error, { code: "EACCES" });
+          throw error;
+        }
+        return realRm(target, options);
+      });
+    try {
+      expect(await reapDeadRunningSessions(env)).toEqual([]);
+      const failed = await getSession(stale.id, env);
+      expect(failed?.status).toBe("error");
+      expect(failed?.meta?.reaperCleanupPending).toBe(true);
+      expect(fs.existsSync(profileDir)).toBe(true);
+
+      failRemoval = false;
+      expect(
+        (await reapDeadRunningSessions(env)).map((record) => record.id),
+      ).toEqual([stale.id]);
+      expect(await getSession(stale.id, env)).toBeUndefined();
+      expect(fs.existsSync(profileDir)).toBe(false);
+    } finally {
+      rm.mockRestore();
+    }
+  });
+
+  it("removes pending browser runtime without a browser leg", async () => {
+    const stale = await createSession(
+      {
+        type: "browser",
+        projectDir: "/proj",
+        status: "error",
+        desktop: { display: ":125", xvfbPid: 4_194_313 },
+        meta: { reaperCleanupPending: true },
+      },
+      env,
+    );
+    const sessionDir = path.join(home, "sessions", stale.id);
+    const runtimePaths = [
+      path.join(sessionDir, "profile"),
+      path.join(sessionDir, "home", ".config"),
+      path.join(sessionDir, "home", ".cache"),
+      path.join(sessionDir, "home", ".local", "share"),
+      path.join(sessionDir, "home", ".local", "state"),
+      path.join(sessionDir, "tmp"),
+      path.join(sessionDir, "xdg-runtime"),
+    ];
+    for (const runtimePath of runtimePaths) {
+      await fs.promises.mkdir(runtimePath, { recursive: true });
+      await fs.promises.writeFile(path.join(runtimePath, "data"), "secret");
+    }
+
+    expect(
+      (await reapDeadRunningSessions(env)).map((record) => record.id),
+    ).toEqual([stale.id]);
+    expect(await getSession(stale.id, env)).toBeUndefined();
+    for (const runtimePath of runtimePaths) {
+      expect(fs.existsSync(runtimePath)).toBe(false);
+    }
+    expect(fs.existsSync(sessionDir)).toBe(false);
+  });
+
+  it("does not delete a profile that escapes the session dir when reaping", async () => {
+    const outside = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-outside-"),
+    );
+    try {
+      const stale = await createSession(
+        {
+          type: "browser",
+          projectDir: "/proj",
+          status: "running",
+          desktop: { display: ":123", xvfbPid: 4_194_310 },
+          browser: {
+            browserPid: 4_194_311,
+            browserStartTimeTicks: 1,
+            binaryPath: "/usr/bin/chromium",
+            profileMode: "ephemeral",
+            profileDir: outside,
+            cdpPort: 1,
+          },
+        },
+        env,
+      );
+
+      await reapDeadRunningSessions(env);
+
+      expect((await getSession(stale.id, env))?.status).toBe("error");
+      // The confinement guard must leave the record for inspection and the
+      // out-of-tree path untouched.
+      expect(fs.existsSync(outside)).toBe(true);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("stops the browser group before VNC and Xvfb when reaping", async () => {
     const orderFile = path.join(home, "stop-order.txt");
     const stopLogger = (label: string) =>
@@ -449,6 +867,7 @@ describe("session registry", () => {
       stdio: "ignore",
     });
     const xvfb = spawn(process.execPath, ["-e", stopLogger("xvfb")], {
+      detached: true,
       stdio: "ignore",
     });
     if (
@@ -464,6 +883,10 @@ describe("session registry", () => {
       if (identity === undefined) {
         throw new Error("could not read browser identity");
       }
+      const xvfbIdentity = readProcessIdentity(xvfb.pid);
+      if (xvfbIdentity === undefined) {
+        throw new Error("could not read Xvfb identity");
+      }
       const stale = await createSession(
         {
           type: "browser",
@@ -473,14 +896,27 @@ describe("session registry", () => {
             display: ":124",
             vncPid: vnc.pid,
             xvfbPid: xvfb.pid,
+            xvfbStartTimeTicks: xvfbIdentity.startTicks,
           },
           browser: {
             browserPid: identity.pid,
             browserStartTimeTicks: identity.startTicks,
             binaryPath: "/usr/bin/chromium",
             profileMode: "ephemeral",
-            profileDir: "/tmp/picklab-profile",
+            profileDir: path.join(home, "sessions", "placeholder", "profile"),
             cdpPort: 1,
+          },
+        },
+        env,
+      );
+      const profileDir = path.join(home, "sessions", stale.id, "profile");
+      await fs.promises.mkdir(profileDir, { recursive: true });
+      await updateSession(
+        stale.id,
+        {
+          browser: {
+            ...stale.browser!,
+            profileDir,
           },
         },
         env,
@@ -498,7 +934,10 @@ describe("session registry", () => {
       for (const child of [browser, vnc, xvfb]) {
         if (child.pid !== undefined && isPidAlive(child.pid)) {
           try {
-            process.kill(child === browser ? -child.pid : child.pid, "SIGKILL");
+            process.kill(
+              child === browser || child === xvfb ? -child.pid : child.pid,
+              "SIGKILL",
+            );
           } catch {
             // already gone
           }

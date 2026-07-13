@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 const order = [
   "core",
   "desktop-linux",
+  "browser",
   "android",
   "agent-installers",
   "mcp-server",

@@ -4,6 +4,7 @@ export {
   agentsDir,
   ensureDir,
   globalConfigPath,
+  isProfileConfined,
   picklabHome,
   projectConfigPath,
   runsDir,
@@ -47,6 +48,7 @@ export {
   stopPid,
   stopProcessGroupVerified,
   type DaemonHandle,
+  type OwnedDaemonHandle,
   type ProcessIdentity,
   type RunCommandOptions,
   type RunCommandResult,
@@ -69,9 +71,11 @@ export {
 } from "./target.js";
 
 export {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
   getSession,
+  isDisplaySocketAlive,
   isSessionProcessAlive,
   listSessions,
   reapDeadRunningSessions,

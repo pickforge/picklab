@@ -1,6 +1,7 @@
 export const packageName = "@pickforge/picklab-desktop-linux";
 
 export {
+  XvfbStartError,
   allocateDisplay,
   buildXvfbArgs,
   isDisplayAlive,
@@ -9,6 +10,8 @@ export {
   stopXvfb,
   type AllocateDisplayOptions,
   type StartXvfbOptions,
+  type XvfbPartialStart,
+  type XvfbStartFailureReason,
   type XvfbArgsOptions,
   type XvfbHandle,
 } from "./display.js";

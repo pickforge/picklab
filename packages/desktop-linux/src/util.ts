@@ -1,9 +1,10 @@
+import { setTimeout as delay } from "node:timers/promises";
 import fs from "node:fs";
 import path from "node:path";
 import type { EnvLike } from "@pickforge/picklab-core";
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return delay(ms, undefined, { signal });
 }
 
 export function findOnPath(

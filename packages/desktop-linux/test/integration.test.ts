@@ -7,12 +7,14 @@ import {
   createRun,
   getSession,
   isPidAlive,
+  processIdentityMatches,
   runCommand,
   stopPid,
   updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
 import {
+  XvfbStartError,
   allocateDisplay,
   click,
   createDesktopSession,
@@ -64,6 +66,76 @@ function writeExecutable(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, { mode: 0o755 });
 }
+
+describe("Xvfb startup failure ownership", () => {
+  const fakeBin = path.join(tmpRoot, "fake-xvfb-bin");
+  const fakeEnv: EnvLike = {
+    ...env,
+    PATH: `${fakeBin}${path.delimiter}${env.PATH ?? ""}`,
+  };
+
+  beforeAll(() => {
+    writeExecutable(
+      path.join(fakeBin, "Xvfb"),
+      [
+        "#!/usr/bin/env node",
+        'if (process.env.FAKE_XVFB_MODE === "exit") process.exit(7);',
+        'if (process.env.FAKE_XVFB_MODE === "stubborn") {',
+        '  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {',
+        "    process.on(signal, () => {});",
+        "  }",
+        "}",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+  });
+
+  it("reports an exited child with its partial ownership state", async () => {
+    const error = await startXvfb({
+      display: ":240",
+      logDir: path.join(tmpRoot, "xvfb-exit"),
+      env: { ...fakeEnv, FAKE_XVFB_MODE: "exit" },
+      waitTimeoutMs: 1000,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(XvfbStartError);
+    expect(error).toMatchObject({
+      reason: "exited",
+      partial: {
+        display: ":240",
+        cleanupConfirmed: true,
+      },
+    });
+    expect((error as XvfbStartError).partial?.pid).toBeGreaterThan(0);
+  });
+
+  it("reports abort only after the spawned group is confirmed gone", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const error = await startXvfb({
+      display: ":241",
+      logDir: path.join(tmpRoot, "xvfb-abort"),
+      env: { ...fakeEnv, FAKE_XVFB_MODE: "stall" },
+      signal: controller.signal,
+      waitTimeoutMs: 10_000,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(XvfbStartError);
+    expect(error).toMatchObject({
+      reason: "aborted",
+      partial: {
+        display: ":241",
+        cleanupConfirmed: true,
+      },
+    });
+    const partial = (error as XvfbStartError).partial;
+    expect(partial?.pid).toBeGreaterThan(0);
+    expect(
+      processIdentityMatches({
+        pid: partial?.pid ?? -1,
+        startTicks: partial?.startTimeTicks ?? -1,
+      }),
+    ).toBe(false);
+  });
+});
 
 async function pointerLocation(
   display: string,

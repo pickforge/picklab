@@ -12,6 +12,9 @@ export default defineConfig({
       "@pickforge/picklab-desktop-linux": fileURLToPath(
         new URL("packages/desktop-linux/src/index.ts", import.meta.url),
       ),
+      "@pickforge/picklab-browser": fileURLToPath(
+        new URL("packages/browser/src/index.ts", import.meta.url),
+      ),
       "@pickforge/picklab-android": fileURLToPath(
         new URL("packages/android/src/index.ts", import.meta.url),
       ),

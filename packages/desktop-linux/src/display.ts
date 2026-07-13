@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import {
+  isDisplaySocketAlive,
   isPidAlive,
+  processIdentityMatches,
+  readProcessIdentity,
   startDaemon,
   stopPid,
+  stopProcessGroupVerified,
   type EnvLike,
+  type OwnedDaemonHandle,
 } from "@pickforge/picklab-core";
 import { sleep } from "./util.js";
 
@@ -16,6 +21,7 @@ const DEFAULT_MAX_ATTEMPTS = 200;
 const SOCKET_POLL_INTERVAL_MS = 100;
 const DEFAULT_WAIT_TIMEOUT_MS = 10_000;
 const ALLOCATION_RETRY_LIMIT = 5;
+const IDENTITY_WAIT_TIMEOUT_MS = 1_000;
 
 export interface XvfbArgsOptions {
   display: string;
@@ -28,11 +34,20 @@ export interface StartXvfbOptions extends Partial<XvfbArgsOptions> {
   logDir: string;
   waitTimeoutMs?: number;
   env?: EnvLike;
+  signal?: AbortSignal;
+  onSpawn?: (partial: XvfbPartialStart) => void | Promise<void>;
+  /**
+   * First display number to try when no explicit `display` is given. Lets
+   * different session kinds carve out separate display ranges so they never
+   * contend for the same numbers (e.g. browser sessions vs. desktop sessions).
+   */
+  displayStart?: number;
 }
 
 export interface XvfbHandle {
   display: string;
   pid: number;
+  startTimeTicks: number;
   logPath: string;
   width: number;
   height: number;
@@ -112,17 +127,202 @@ export function allocateDisplay(opts: AllocateDisplayOptions = {}): string {
 }
 
 export function isDisplayAlive(display: string): boolean {
-  return fs.existsSync(displaySocketPath(parseDisplayNumber(display)));
+  parseDisplayNumber(display);
+  return isDisplaySocketAlive(display);
+}
+
+export type XvfbStartFailureReason =
+  | "aborted"
+  | "exited"
+  | "handoff"
+  | "identity"
+  | "startup"
+  | "lost-race"
+  | "timeout";
+
+export interface XvfbPartialStart {
+  display: string;
+  pid: number;
+  startTimeTicks: number;
+  logPath: string;
+  width: number;
+  height: number;
+  cleanupConfirmed: boolean;
+}
+
+export class XvfbStartError extends Error {
+  readonly reason: XvfbStartFailureReason;
+  readonly partial?: XvfbPartialStart;
+
+  constructor(
+    reason: XvfbStartFailureReason,
+    message: string,
+    partial?: XvfbPartialStart,
+    cause?: unknown,
+  ) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "XvfbStartError";
+    this.reason = reason;
+    this.partial = partial;
+  }
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function abortedBeforeSpawn(): XvfbStartError {
+  return new XvfbStartError(
+    "aborted",
+    "Xvfb startup aborted by the client",
+  );
+}
+
+function childHasExited(daemon: OwnedDaemonHandle): boolean {
+  return daemon.child.exitCode !== null || daemon.child.signalCode !== null;
+}
+
+function waitForOwnedExit(
+  daemon: OwnedDaemonHandle,
+  timeoutMs?: number,
+): Promise<boolean> {
+  if (childHasExited(daemon)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (exited: boolean): void => {
+      clearTimeout(timer);
+      daemon.child.off("close", onClose);
+      resolve(exited);
+    };
+    const onClose = (): void => finish(true);
+    daemon.child.once("close", onClose);
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => finish(childHasExited(daemon)), timeoutMs);
+    }
+  });
+}
+
+async function stopOwnedDaemon(daemon: OwnedDaemonHandle): Promise<void> {
+  try {
+    if (!childHasExited(daemon)) {
+      daemon.child.kill("SIGTERM");
+      if (!(await waitForOwnedExit(daemon, 2_000))) {
+        daemon.child.kill("SIGKILL");
+        await waitForOwnedExit(daemon);
+      }
+    }
+  } finally {
+    daemon.release();
+  }
+}
+
+async function waitForOwnedIdentity(
+  daemon: OwnedDaemonHandle,
+): Promise<{ pid: number; startTicks: number } | undefined> {
+  const deadline = Date.now() + IDENTITY_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const identity = readProcessIdentity(daemon.pid);
+    if (identity !== undefined) return identity;
+    if (childHasExited(daemon) || Date.now() >= deadline) return undefined;
+    await sleep(10);
+  }
+}
+
+async function cleanupPartialStart(
+  partial: XvfbPartialStart,
+  daemon: OwnedDaemonHandle,
+): Promise<XvfbPartialStart> {
+  let cleanupConfirmed = false;
+  try {
+    const result = await stopProcessGroupVerified({
+      pid: partial.pid,
+      startTicks: partial.startTimeTicks,
+    });
+    cleanupConfirmed =
+      result.outcome === "terminated" || result.outcome === "already-dead";
+  } catch {
+    cleanupConfirmed = false;
+  }
+  if (!cleanupConfirmed) {
+    await stopOwnedDaemon(daemon);
+    cleanupConfirmed = true;
+  } else {
+    daemon.release();
+  }
+  return { ...partial, cleanupConfirmed };
+}
+
+function failureMessage(
+  reason: XvfbStartFailureReason,
+  display: string,
+  logPath: string,
+  timeoutMs: number,
+  cleanupConfirmed: boolean,
+): string {
+  const cleanup = cleanupConfirmed
+    ? ""
+    : `; spawned Xvfb cleanup could not be verified`;
+  switch (reason) {
+    case "aborted":
+      return `Xvfb startup aborted by the client${cleanup}`;
+    case "exited":
+      return (
+        `Xvfb exited during startup on ${display}; ` +
+        `check the log at ${logPath}${cleanup}`
+      );
+    case "handoff":
+      return `Xvfb ownership handoff failed on ${display}${cleanup}`;
+    case "identity":
+      return `Xvfb identity could not be verified on ${display}${cleanup}`;
+    case "lost-race":
+      return (
+        `Xvfb could not claim ${display}: another X server owns it; ` +
+        `check the log at ${logPath}${cleanup}`
+      );
+    case "startup":
+      return `Xvfb startup failed on ${display}; check the log at ${logPath}${cleanup}`;
+    case "timeout":
+      return (
+        `Xvfb did not come up on ${display} within ${timeoutMs}ms; ` +
+        `check the log at ${logPath}${cleanup}`
+      );
+  }
 }
 
 type XvfbAttempt =
   | { outcome: "ready"; handle: XvfbHandle }
-  | { outcome: "exited" | "lost-race" | "timeout"; logPath: string };
+  | { outcome: "failed"; error: XvfbStartError };
+
+async function failedAttempt(
+  reason: XvfbStartFailureReason,
+  partial: XvfbPartialStart,
+  daemon: OwnedDaemonHandle,
+  timeoutMs: number,
+  cause?: unknown,
+): Promise<XvfbAttempt> {
+  const cleaned = await cleanupPartialStart(partial, daemon);
+  return {
+    outcome: "failed",
+    error: new XvfbStartError(
+      reason,
+      failureMessage(
+        reason,
+        partial.display,
+        partial.logPath,
+        timeoutMs,
+        cleaned.cleanupConfirmed,
+      ),
+      cleaned,
+      cause,
+    ),
+  };
+}
 
 async function attemptStartXvfb(
   display: string,
   opts: StartXvfbOptions,
 ): Promise<XvfbAttempt> {
+  if (isAborted(opts.signal)) throw abortedBeforeSpawn();
   const displayNumber = parseDisplayNumber(display);
   const width = opts.width ?? DEFAULT_WIDTH;
   const height = opts.height ?? DEFAULT_HEIGHT;
@@ -136,90 +336,124 @@ async function attemptStartXvfb(
     logDir: opts.logDir,
     name: "xvfb",
     env: opts.env,
+    owned: true,
   });
-
+  const identity = await waitForOwnedIdentity(daemon);
   const timeoutMs = opts.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const alive = isPidAlive(daemon.pid);
-    if (fs.existsSync(displaySocketPath(displayNumber))) {
-      const lockPid = readLockPid(displayNumber);
-      if (
-        lockPid !== null &&
-        lockPid !== daemon.pid &&
-        isPidAlive(lockPid)
-      ) {
-        await stopPid(daemon.pid);
-        return { outcome: "lost-race", logPath: daemon.logPath };
-      }
-      if (alive && (lockPid === null || lockPid === daemon.pid)) {
-        return {
-          outcome: "ready",
-          handle: { display, pid: daemon.pid, logPath: daemon.logPath, width, height },
-        };
-      }
-    }
-    if (!alive) {
-      return { outcome: "exited", logPath: daemon.logPath };
-    }
-    await sleep(SOCKET_POLL_INTERVAL_MS);
+  if (identity === undefined) {
+    await stopOwnedDaemon(daemon);
+    return {
+      outcome: "failed",
+      error: new XvfbStartError(
+        "identity",
+        failureMessage(
+          "identity",
+          display,
+          daemon.logPath,
+          timeoutMs,
+          true,
+        ),
+      ),
+    };
+  }
+  const partial: XvfbPartialStart = {
+    display,
+    pid: daemon.pid,
+    startTimeTicks: identity.startTicks,
+    logPath: daemon.logPath,
+    width,
+    height,
+    cleanupConfirmed: false,
+  };
+  try {
+    await opts.onSpawn?.(partial);
+  } catch (error) {
+    return failedAttempt("handoff", partial, daemon, timeoutMs, error);
+  }
+  daemon.release();
+  if (isAborted(opts.signal)) {
+    return failedAttempt("aborted", partial, daemon, timeoutMs);
   }
 
-  await stopPid(daemon.pid);
-  return { outcome: "timeout", logPath: daemon.logPath };
-}
-
-function describeXvfbFailure(
-  attempt: Exclude<XvfbAttempt, { outcome: "ready" }>,
-  display: string,
-  timeoutMs: number,
-): string {
-  switch (attempt.outcome) {
-    case "exited":
-      return (
-        `Xvfb exited during startup on ${display}; ` +
-        `check the log at ${attempt.logPath}`
-      );
-    case "lost-race":
-      return (
-        `Xvfb could not claim ${display}: another X server owns it; ` +
-        `check the log at ${attempt.logPath}`
-      );
-    case "timeout":
-      return (
-        `Xvfb did not come up on ${display} within ${timeoutMs}ms; ` +
-        `check the log at ${attempt.logPath}`
-      );
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const alive = processIdentityMatches(identity);
+      if (fs.existsSync(displaySocketPath(displayNumber))) {
+        const lockPid = readLockPid(displayNumber);
+        if (
+          lockPid !== null &&
+          lockPid !== daemon.pid &&
+          isPidAlive(lockPid)
+        ) {
+          return failedAttempt("lost-race", partial, daemon, timeoutMs);
+        }
+        if (alive && (lockPid === null || lockPid === daemon.pid)) {
+          if (isAborted(opts.signal)) {
+            return failedAttempt("aborted", partial, daemon, timeoutMs);
+          }
+          return {
+            outcome: "ready",
+            handle: {
+              display,
+              pid: daemon.pid,
+              startTimeTicks: identity.startTicks,
+              logPath: daemon.logPath,
+              width,
+              height,
+            },
+          };
+        }
+      }
+      if (!alive) {
+        return failedAttempt("exited", partial, daemon, timeoutMs);
+      }
+      try {
+        await sleep(SOCKET_POLL_INTERVAL_MS, opts.signal);
+      } catch (error) {
+        if (isAborted(opts.signal)) {
+          return failedAttempt("aborted", partial, daemon, timeoutMs);
+        }
+        throw error;
+      }
+    }
+    return failedAttempt("timeout", partial, daemon, timeoutMs);
+  } catch (error) {
+    return failedAttempt("startup", partial, daemon, timeoutMs, error);
   }
 }
 
 export async function startXvfb(opts: StartXvfbOptions): Promise<XvfbHandle> {
-  const timeoutMs = opts.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  if (isAborted(opts.signal)) throw abortedBeforeSpawn();
   if (opts.display !== undefined) {
     const attempt = await attemptStartXvfb(opts.display, opts);
-    if (attempt.outcome === "ready") {
-      return attempt.handle;
-    }
-    throw new Error(describeXvfbFailure(attempt, opts.display, timeoutMs));
+    if (attempt.outcome === "ready") return attempt.handle;
+    throw attempt.error;
   }
 
-  let searchFrom = DEFAULT_START_DISPLAY;
-  let lastFailureMessage = "";
+  let searchFrom = opts.displayStart ?? DEFAULT_START_DISPLAY;
+  let lastError: XvfbStartError | undefined;
   for (let retry = 0; retry < ALLOCATION_RETRY_LIMIT; retry += 1) {
+    if (isAborted(opts.signal)) throw abortedBeforeSpawn();
     const display = allocateDisplay({ start: searchFrom });
     const attempt = await attemptStartXvfb(display, opts);
-    if (attempt.outcome === "ready") {
-      return attempt.handle;
-    }
-    lastFailureMessage = describeXvfbFailure(attempt, display, timeoutMs);
-    if (attempt.outcome === "timeout") {
-      throw new Error(lastFailureMessage);
+    if (attempt.outcome === "ready") return attempt.handle;
+    lastError = attempt.error;
+    if (
+      attempt.error.partial?.cleanupConfirmed !== true ||
+      attempt.error.reason === "aborted" ||
+      attempt.error.reason === "timeout"
+    ) {
+      throw attempt.error;
     }
     searchFrom = parseDisplayNumber(display) + 1;
   }
-  throw new Error(
-    `Xvfb failed to claim a free display after ${ALLOCATION_RETRY_LIMIT} attempts; ` +
-      `last failure: ${lastFailureMessage}`,
+  throw (
+    lastError ??
+    new XvfbStartError(
+      "exited",
+      `Xvfb failed to claim a free display after ${ALLOCATION_RETRY_LIMIT} attempts`,
+    )
   );
 }
 
