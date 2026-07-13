@@ -28,7 +28,7 @@ import {
   getBrowserSessionStatus,
   type BrowserSessionHandle,
 } from "../src/index.js";
-import { fakePath, writeFakeChrome } from "./fakes.js";
+import { fakePath, writeExecutable, writeFakeChrome } from "./fakes.js";
 import type { FakeChromeMode } from "./fakes.js";
 
 // The browser package owns Chrome; Xvfb is the production display server (a
@@ -571,6 +571,73 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
         ? false
         : isPidAlive(record.desktop.xvfbPid),
     ).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it("aborts during Xvfb startup only after stopping the spawned group", async () => {
+    const binDir = path.join(tmp, "abort-xvfb-bin");
+    const startedFile = path.join(tmp, "xvfb-started");
+    writeFakeChrome(binDir, "ready");
+    writeExecutable(
+      path.join(binDir, "Xvfb"),
+      [
+        "#!/usr/bin/node",
+        'const fs = require("node:fs");',
+        'fs.writeFileSync(process.env.XVFB_STARTED, `${process.pid} ${process.argv[2]}`);',
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+    const controller = new AbortController();
+    const started = waitForEntry(tmp, (name) => name === "xvfb-started");
+    const creating = createBrowserSession({
+      projectDir,
+      registryEnv,
+      env: {
+        PATH: fakePath(binDir),
+        XVFB_STARTED: startedFile,
+      },
+      xvfbWaitTimeoutMs: 5000,
+      signal: controller.signal,
+    });
+
+    await started;
+    const [pidText, display] = fs
+      .readFileSync(startedFile, "utf8")
+      .trim()
+      .split(/\s+/);
+    const xvfbPid = Number(pidText);
+    if (!Number.isSafeInteger(xvfbPid) || display === undefined) {
+      throw new Error("Fake Xvfb did not publish a valid startup marker");
+    }
+    controller.abort();
+    await expect(creating).rejects.toThrow(/aborted/);
+
+    expect(isPidAlive(xvfbPid)).toBe(false);
+    expect(display).toMatch(/^:\d+$/);
+    expect(
+      fs.existsSync(`/tmp/.X11-unix/X${display.slice(1)}`),
+    ).toBe(false);
+    const recordFile = fs
+      .readdirSync(path.join(home, "sessions"))
+      .find((name) => name.endsWith(".json"));
+    if (recordFile === undefined) {
+      throw new Error("Cancelled Xvfb create did not preserve its error record");
+    }
+    const id = recordFile.slice(0, -".json".length);
+    const record = await getSession(id, registryEnv);
+    expect(record?.status).toBe("error");
+    expect(record?.desktop).toBeUndefined();
+    expect(record?.browser).toBeUndefined();
+    const layout = browserRuntimeLayout(browserSessionLogDir(id, registryEnv));
+    for (const runtimePath of [
+      layout.profileDir,
+      layout.homeDir,
+      layout.tmpDir,
+      layout.xdgRuntimeDir,
+    ]) {
+      expect(fs.existsSync(runtimePath)).toBe(false);
+    }
+    await destroyBrowserSession(id, registryEnv);
+    expect(await getSession(id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
   it("persists partial identities when startup cleanup is unverifiable and supports retry", async () => {

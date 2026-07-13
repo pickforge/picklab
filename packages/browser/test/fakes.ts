@@ -53,7 +53,6 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       "}",
       'if (MODE === "stubborn-stall") {',
       '  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => {});',
-      '  if (sessionDir) safeWrite(path.join(sessionDir, "chrome.ready"), String(process.pid));',
       "}",
       'if (MODE === "crash") { process.exit(1); }',
       'if (MODE === "ready" || MODE === "crash-after-port") {',
@@ -68,6 +67,7 @@ export function writeFakeChrome(binDir: string, mode: FakeChromeMode): void {
       "  });",
       "}",
       "setInterval(() => {}, 1000);",
+      'if (MODE === "stubborn-stall" && sessionDir) safeWrite(path.join(sessionDir, "chrome.ready"), String(process.pid));',
     ].join("\n"),
   );
   writeExecutable(

@@ -177,6 +177,7 @@ export async function createBrowserSession(
   });
 
   await reapDeadRunningSessions(registryEnv);
+  assertNotAborted(opts.signal);
   const record = await createSession(
     { type: "browser", projectDir: opts.projectDir },
     registryEnv,
@@ -188,6 +189,7 @@ export async function createBrowserSession(
   let xvfbIdentity: ProcessIdentity | undefined;
   let browserIdentity: ProcessIdentity | undefined;
   try {
+    assertNotAborted(opts.signal);
     await makeRuntimeDirs(layout);
 
     xvfb = await startXvfb({
@@ -197,6 +199,7 @@ export async function createBrowserSession(
       env: spawnEnv,
       waitTimeoutMs: opts.xvfbWaitTimeoutMs ?? DEFAULT_XVFB_WAIT_TIMEOUT_MS,
       displayStart: BROWSER_DISPLAY_START,
+      signal: opts.signal,
     });
     xvfbIdentity = readProcessIdentity(xvfb.pid);
     if (xvfbIdentity === undefined) {

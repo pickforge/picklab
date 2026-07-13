@@ -2,9 +2,12 @@ import fs from "node:fs";
 import {
   isDisplaySocketAlive,
   isPidAlive,
+  readProcessIdentity,
   startDaemon,
   stopPid,
+  stopProcessGroupVerified,
   type EnvLike,
+  type ProcessIdentity,
 } from "@pickforge/picklab-core";
 import { sleep } from "./util.js";
 
@@ -29,6 +32,7 @@ export interface StartXvfbOptions extends Partial<XvfbArgsOptions> {
   logDir: string;
   waitTimeoutMs?: number;
   env?: EnvLike;
+  signal?: AbortSignal;
   /**
    * First display number to try when no explicit `display` is given. Lets
    * different session kinds carve out separate display ranges so they never
@@ -123,6 +127,42 @@ export function isDisplayAlive(display: string): boolean {
   return isDisplaySocketAlive(display);
 }
 
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function xvfbAbortError(detail?: string): Error {
+  return new Error(
+    detail === undefined
+      ? "Xvfb startup aborted by the client"
+      : `Xvfb startup aborted by the client; ${detail}`,
+  );
+}
+
+async function stopSpawnedXvfb(
+  pid: number,
+  identity: ProcessIdentity | undefined,
+): Promise<boolean> {
+  if (identity === undefined) return !isPidAlive(pid);
+  const result = await stopProcessGroupVerified(identity);
+  return result.outcome === "terminated" || result.outcome === "already-dead";
+}
+
+async function stopForAbort(
+  pid: number,
+  identity: ProcessIdentity | undefined,
+): Promise<never> {
+  let stopped = false;
+  try {
+    stopped = await stopSpawnedXvfb(pid, identity);
+  } catch {
+    stopped = false;
+  }
+  throw xvfbAbortError(
+    stopped ? undefined : `Xvfb process group ${pid} could not be verified as gone`,
+  );
+}
+
 type XvfbAttempt =
   | { outcome: "ready"; handle: XvfbHandle }
   | { outcome: "exited" | "lost-race" | "timeout"; logPath: string };
@@ -131,6 +171,7 @@ async function attemptStartXvfb(
   display: string,
   opts: StartXvfbOptions,
 ): Promise<XvfbAttempt> {
+  if (isAborted(opts.signal)) throw xvfbAbortError();
   const displayNumber = parseDisplayNumber(display);
   const width = opts.width ?? DEFAULT_WIDTH;
   const height = opts.height ?? DEFAULT_HEIGHT;
@@ -145,6 +186,10 @@ async function attemptStartXvfb(
     name: "xvfb",
     env: opts.env,
   });
+  const identity = readProcessIdentity(daemon.pid);
+  if (isAborted(opts.signal)) {
+    return stopForAbort(daemon.pid, identity);
+  }
 
   const timeoutMs = opts.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
@@ -157,10 +202,13 @@ async function attemptStartXvfb(
         lockPid !== daemon.pid &&
         isPidAlive(lockPid)
       ) {
-        await stopPid(daemon.pid);
+        await stopSpawnedXvfb(daemon.pid, identity);
         return { outcome: "lost-race", logPath: daemon.logPath };
       }
       if (alive && (lockPid === null || lockPid === daemon.pid)) {
+        if (isAborted(opts.signal)) {
+          return stopForAbort(daemon.pid, identity);
+        }
         return {
           outcome: "ready",
           handle: { display, pid: daemon.pid, logPath: daemon.logPath, width, height },
@@ -170,10 +218,17 @@ async function attemptStartXvfb(
     if (!alive) {
       return { outcome: "exited", logPath: daemon.logPath };
     }
-    await sleep(SOCKET_POLL_INTERVAL_MS);
+    try {
+      await sleep(SOCKET_POLL_INTERVAL_MS, opts.signal);
+    } catch (error) {
+      if (isAborted(opts.signal)) {
+        return stopForAbort(daemon.pid, identity);
+      }
+      throw error;
+    }
   }
 
-  await stopPid(daemon.pid);
+  await stopSpawnedXvfb(daemon.pid, identity);
   return { outcome: "timeout", logPath: daemon.logPath };
 }
 
@@ -202,6 +257,7 @@ function describeXvfbFailure(
 }
 
 export async function startXvfb(opts: StartXvfbOptions): Promise<XvfbHandle> {
+  if (isAborted(opts.signal)) throw xvfbAbortError();
   const timeoutMs = opts.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
   if (opts.display !== undefined) {
     const attempt = await attemptStartXvfb(opts.display, opts);
@@ -214,6 +270,7 @@ export async function startXvfb(opts: StartXvfbOptions): Promise<XvfbHandle> {
   let searchFrom = opts.displayStart ?? DEFAULT_START_DISPLAY;
   let lastFailureMessage = "";
   for (let retry = 0; retry < ALLOCATION_RETRY_LIMIT; retry += 1) {
+    if (isAborted(opts.signal)) throw xvfbAbortError();
     const display = allocateDisplay({ start: searchFrom });
     const attempt = await attemptStartXvfb(display, opts);
     if (attempt.outcome === "ready") {
