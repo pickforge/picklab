@@ -78,6 +78,19 @@ describe("waitForDevToolsPort", () => {
     expect(result).toEqual({ ok: false, reason: "aborted" });
   });
 
+  it("interrupts the inter-poll wait when creation is aborted", async () => {
+    const controller = new AbortController();
+    setImmediate(() => controller.abort());
+    const result = await waitForDevToolsPort({
+      profileDir: tmp,
+      timeoutMs: 60_000,
+      isAlive: () => true,
+      signal: controller.signal,
+      pollIntervalMs: 60_000,
+    });
+    expect(result).toEqual({ ok: false, reason: "aborted" });
+  }, 1000);
+
   it("returns aborted when cancellation happens during the endpoint probe", async () => {
     const controller = new AbortController();
     const server = createServer(() => controller.abort());

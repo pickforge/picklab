@@ -129,6 +129,13 @@ export async function waitForDevToolsPort(
     if (Date.now() >= deadline) {
       return { ok: false, reason: "timeout" };
     }
-    await sleep(poll);
+    try {
+      await sleep(poll, opts.signal);
+    } catch (error) {
+      if (creationAborted()) {
+        return { ok: false, reason: "aborted" };
+      }
+      throw error;
+    }
   }
 }

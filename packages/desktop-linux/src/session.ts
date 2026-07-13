@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
   getSession,
@@ -15,7 +16,13 @@ import {
   type EnvLike,
   type SessionRecord,
 } from "@pickforge/picklab-core";
-import { isDisplayAlive, startXvfb, type XvfbHandle } from "./display.js";
+import {
+  XvfbStartError,
+  isDisplayAlive,
+  startXvfb,
+  type XvfbHandle,
+  type XvfbPartialStart,
+} from "./display.js";
 import { detectVncBinary, startVnc, type VncHandle } from "./vnc.js";
 
 export interface CreateDesktopSessionOptions {
@@ -73,15 +80,26 @@ export async function createDesktopSession(
   const logDir = desktopSessionLogDir(record.id, registryEnv);
 
   let xvfb: XvfbHandle | undefined;
+  let xvfbPartial: XvfbPartialStart | undefined;
   let xvfbStartTimeTicks: number | undefined;
   let vnc: VncHandle | undefined;
   try {
-    xvfb = await startXvfb({
-      width: opts.width,
-      height: opts.height,
-      logDir,
-      env: opts.env,
-    });
+    try {
+      xvfb = await startXvfb({
+        width: opts.width,
+        height: opts.height,
+        logDir,
+        env: opts.env,
+        onSpawn: (partial) => {
+          xvfbPartial = partial;
+        },
+      });
+    } catch (error) {
+      if (error instanceof XvfbStartError && error.partial !== undefined) {
+        xvfbPartial = error.partial;
+      }
+      throw error;
+    }
     const xvfbIdentity = readProcessIdentity(xvfb.pid);
     if (xvfbIdentity === undefined) {
       throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
@@ -123,18 +141,59 @@ export async function createDesktopSession(
     }
     return handle;
   } catch (error) {
+    let vncGone = vnc === undefined;
     if (vnc !== undefined) {
-      await stopPid(vnc.pid).catch(() => {});
+      vncGone = await stopPid(vnc.pid).catch(() => false);
     }
+    let xvfbGone =
+      xvfb === undefined
+        ? (xvfbPartial?.cleanupConfirmed ?? true)
+        : false;
     if (xvfb !== undefined && xvfbStartTimeTicks !== undefined) {
-      await stopProcessGroupVerified({
-        pid: xvfb.pid,
-        startTicks: xvfbStartTimeTicks,
-      }).catch(() => {});
+      try {
+        const result = await stopProcessGroupVerified({
+          pid: xvfb.pid,
+          startTicks: xvfbStartTimeTicks,
+        });
+        xvfbGone =
+          result.outcome === "terminated" || result.outcome === "already-dead";
+      } catch {
+        xvfbGone = false;
+      }
     }
-    await updateSession(record.id, { status: "error" }, registryEnv).catch(
-      () => {},
-    );
+    const cleanupComplete = vncGone && xvfbGone;
+    const knownXvfb = xvfb ?? xvfbPartial;
+    const knownXvfbStartTimeTicks =
+      knownXvfb !== undefined && xvfbPartial?.pid === knownXvfb.pid
+        ? xvfbPartial.startTimeTicks
+        : xvfbStartTimeTicks;
+    await updateSession(
+      record.id,
+      cleanupComplete
+        ? { status: "error" }
+        : {
+            status: "error",
+            meta: {
+              ...record.meta,
+              [REAPER_CLEANUP_PENDING_META_KEY]: true,
+            },
+            ...(knownXvfb === undefined
+              ? {}
+              : {
+                  desktop: {
+                    display: knownXvfb.display,
+                    xvfbPid: knownXvfb.pid,
+                    ...(knownXvfbStartTimeTicks === undefined
+                      ? {}
+                      : { xvfbStartTimeTicks: knownXvfbStartTimeTicks }),
+                    ...(vnc === undefined ? {} : { vncPid: vnc.pid }),
+                    width: knownXvfb.width,
+                    height: knownXvfb.height,
+                  },
+                }),
+          },
+      registryEnv,
+    ).catch(() => {});
     throw error;
   }
 }

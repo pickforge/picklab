@@ -21,7 +21,12 @@ import {
   type ProcessIdentity,
   type SessionRecord,
 } from "@pickforge/picklab-core";
-import { startXvfb, type XvfbHandle } from "@pickforge/picklab-desktop-linux";
+import {
+  XvfbStartError,
+  startXvfb,
+  type XvfbHandle,
+  type XvfbPartialStart,
+} from "@pickforge/picklab-desktop-linux";
 import { buildChromeArgs } from "./args.js";
 import { requireChromeBinary } from "./detect.js";
 import {
@@ -186,21 +191,32 @@ export async function createBrowserSession(
   const layout = browserRuntimeLayout(logDir);
 
   let xvfb: XvfbHandle | undefined;
+  let xvfbPartial: XvfbPartialStart | undefined;
   let xvfbIdentity: ProcessIdentity | undefined;
   let browserIdentity: ProcessIdentity | undefined;
   try {
     assertNotAborted(opts.signal);
     await makeRuntimeDirs(layout);
 
-    xvfb = await startXvfb({
-      ...(opts.width !== undefined ? { width: opts.width } : {}),
-      ...(opts.height !== undefined ? { height: opts.height } : {}),
-      logDir,
-      env: spawnEnv,
-      waitTimeoutMs: opts.xvfbWaitTimeoutMs ?? DEFAULT_XVFB_WAIT_TIMEOUT_MS,
-      displayStart: BROWSER_DISPLAY_START,
-      signal: opts.signal,
-    });
+    try {
+      xvfb = await startXvfb({
+        ...(opts.width !== undefined ? { width: opts.width } : {}),
+        ...(opts.height !== undefined ? { height: opts.height } : {}),
+        logDir,
+        env: spawnEnv,
+        waitTimeoutMs: opts.xvfbWaitTimeoutMs ?? DEFAULT_XVFB_WAIT_TIMEOUT_MS,
+        displayStart: BROWSER_DISPLAY_START,
+        signal: opts.signal,
+        onSpawn: (partial) => {
+          xvfbPartial = partial;
+        },
+      });
+    } catch (error) {
+      if (error instanceof XvfbStartError && error.partial !== undefined) {
+        xvfbPartial = error.partial;
+      }
+      throw error;
+    }
     xvfbIdentity = readProcessIdentity(xvfb.pid);
     if (xvfbIdentity === undefined) {
       throw new Error(`Xvfb process ${xvfb.pid} vanished during startup`);
@@ -300,31 +316,32 @@ export async function createBrowserSession(
     };
   } catch (error) {
     const { gone: browserGone } = await stopBrowserGroup(browserIdentity);
-    let xvfbGone = xvfb === undefined;
-    if (browserGone && xvfb !== undefined) {
-      if (xvfbIdentity === undefined) {
-        xvfbGone = false;
-      } else {
-        const stopped = await stopBrowserGroup(xvfbIdentity);
-        xvfbGone = stopped.gone;
-      }
-    }
-    const runtimeFailures = browserGone
-      ? await removeRuntimeData(layout)
-      : [];
+    const xvfbGone =
+      xvfb === undefined
+        ? (xvfbPartial?.cleanupConfirmed ?? true)
+        : browserGone && xvfbIdentity !== undefined
+          ? (await stopBrowserGroup(xvfbIdentity)).gone
+          : false;
+    const runtimeFailures =
+      browserGone && xvfbGone ? await removeRuntimeData(layout) : [];
     const cleanupComplete =
       browserGone && xvfbGone && runtimeFailures.length === 0;
+    const knownXvfb = xvfb ?? xvfbPartial;
+    const knownXvfbStartTimeTicks =
+      knownXvfb !== undefined && xvfbPartial?.pid === knownXvfb.pid
+        ? xvfbPartial.startTimeTicks
+        : xvfbIdentity?.startTicks;
     const desktop =
-      xvfb === undefined
+      knownXvfb === undefined
         ? undefined
         : {
-            display: xvfb.display,
-            xvfbPid: xvfb.pid,
-            ...(xvfbIdentity === undefined
+            display: knownXvfb.display,
+            xvfbPid: knownXvfb.pid,
+            ...(knownXvfbStartTimeTicks === undefined
               ? {}
-              : { xvfbStartTimeTicks: xvfbIdentity.startTicks }),
-            width: xvfb.width,
-            height: xvfb.height,
+              : { xvfbStartTimeTicks: knownXvfbStartTimeTicks }),
+            width: knownXvfb.width,
+            height: knownXvfb.height,
           };
     const browser =
       browserIdentity === undefined
