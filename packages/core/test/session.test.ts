@@ -265,6 +265,8 @@ describe("session registry", () => {
         ),
       ),
     ).toMatchObject({ status: "completed" });
+    expect(await fs.promises.readFile(path.join(run.dir, "report.html"), "utf8"))
+      .toContain("completed");
     expect(fs.existsSync(activePointerPath(projectDir, session.id))).toBe(false);
   });
 
@@ -303,6 +305,8 @@ describe("session registry", () => {
       ),
     ).toMatchObject({ status: "failed", evidenceTruncated: false });
     expect(await readActions(run.dir)).toHaveLength(1);
+    expect(await fs.promises.readFile(path.join(run.dir, "report.html"), "utf8"))
+      .toContain("desktop_click");
     expect(fs.existsSync(activePointerPath(projectDir, stale.id))).toBe(false);
   });
 

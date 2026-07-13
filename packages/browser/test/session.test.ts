@@ -27,6 +27,7 @@ import {
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,
+  resolveLiveBrowserSession,
   type BrowserSessionHandle,
 } from "../src/index.js";
 import { fakePath, writeExecutable, writeFakeChrome } from "./fakes.js";
@@ -197,6 +198,52 @@ describe.skipIf(!hasXvfb)("createBrowserSession (fake binaries)", () => {
       }
     } finally {
       await destroyBrowserSession(session.id, registryEnv).catch(() => {});
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it("resolves a recreated session as the relay target without stale state", async () => {
+    const env = spawnEnvFor("ready");
+    let first: BrowserSessionHandle | undefined;
+    let second: BrowserSessionHandle | undefined;
+    try {
+      first = await createBrowserSession({
+        projectDir,
+        registryEnv,
+        env,
+        cdpTimeoutMs: 5000,
+      });
+      const initial = await resolveLiveBrowserSession({
+        projectDir,
+        env: registryEnv,
+      });
+      expect(initial.record.id).toBe(first.id);
+      expect(initial.cdpPort).toBe(first.cdpPort);
+
+      await destroyBrowserSession(first.id, registryEnv);
+      first = undefined;
+      second = await createBrowserSession({
+        projectDir,
+        registryEnv,
+        env,
+        cdpTimeoutMs: 5000,
+      });
+      const recreated = await resolveLiveBrowserSession({
+        projectDir,
+        env: registryEnv,
+      });
+      expect(recreated.record.id).toBe(second.id);
+      expect(recreated.cdpPort).toBe(second.cdpPort);
+      expect(recreated.browserUrl).toBe(
+        `http://127.0.0.1:${second.cdpPort}`,
+      );
+      expect(recreated.record.id).not.toBe(initial.record.id);
+    } finally {
+      if (first !== undefined) {
+        await destroyBrowserSession(first.id, registryEnv).catch(() => {});
+      }
+      if (second !== undefined) {
+        await destroyBrowserSession(second.id, registryEnv).catch(() => {});
+      }
     }
   }, TEST_TIMEOUT_MS);
 

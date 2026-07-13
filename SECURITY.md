@@ -18,6 +18,46 @@ fuller model.
   and it says so.
 - Agent config edits are atomic, with a backup of the previous config.
 
+## Recorded evidence and screenshots
+
+Computer-use evidence is stored as local project data under
+`.picklab/runs/<runId>/`. `actions.jsonl` is the authoritative sanitized
+timeline; finalization produces an escaped, no-script `report.html` with a
+restrictive content security policy and no external requests.
+
+The recorder persists only allowlisted metadata. Typed and filled text becomes
+length plus input type. Failed network records keep method, URL origin/path
+without the query, status, resource type, timing, and a sanitized error
+classification. Request/response headers and bodies are dropped. Cookie,
+authorization, session, JWT, CSRF, OTP, query-token, and CDP capability values
+are redacted or omitted before persistence.
+
+**Screenshots are different: pixels cannot be redacted.** An explicitly
+requested desktop, Android, or DevTools screenshot stores the screen exactly as
+displayed and may therefore contain passwords, tokens, personal data, or other
+secrets. PickLab never takes an implicit screenshot for typing/fill actions.
+Do not explicitly capture a sensitive screen. Files are ordinary local files,
+not encrypted storage; anyone who can read the project directory can read its
+evidence.
+
+Action evidence is enabled by default. Disable it per project when recording is
+not appropriate:
+
+```json
+{
+  "evidence": {
+    "enabled": false
+  }
+}
+```
+
+This opt-out disables the action timeline and its screenshot association; it
+does not block a screenshot command that was explicitly requested. The journal
+and associated artifacts have a 100 MiB recording threshold per run. The
+crossing record may exceed it; PickLab then writes one durable metadata-only
+truncation marker and stops appending payloads. PickLab retains the latest 20
+finalized evidence runs, while active/running and legacy runs are not pruned.
+
 ## VNC binds to loopback (SEC-01 — mitigated)
 
 The desktop VNC server (`x11vnc`) is started with `-localhost`, so it listens on
