@@ -59,6 +59,6 @@ Repo-local guide for agents working in PickLab.
   no website change needed for a normal release.
 - Only touch `landing-page` (`src/pages/products.ts`) when the install story
   or positioning changes.
-## Pickforge workspace policy
+## Workspace policy
 
-This repo is part of the Pickforge workspace. Before substantial work, read `../AGENTS.md` (or `/home/dev/Projects/Pickforge/AGENTS.md`) and use the `plan-issue` workflow: GitHub Issues are the canonical plan/progress tracker; local todos are only a mirror. Link PRs to tracking issues and file follow-up issues for valid deferred review/CI problems.
+For substantial work, read `../AGENTS.md` (workspace root) and use the `plan-issue` workflow — GitHub Issues are the canonical plan/progress tracker.
