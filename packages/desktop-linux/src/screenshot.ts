@@ -8,7 +8,7 @@ import { findOnPath } from "./util.js";
 const SCREENSHOT_TIMEOUT_MS = 20_000;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-export type ScreenshotTool = "import" | "xwd" | "scrot";
+export type ScreenshotTool = "maim" | "import" | "xwd" | "scrot";
 
 export interface ScreenshotStep {
   cmd: string;
@@ -31,6 +31,9 @@ export interface ScreenshotResult {
 export function detectScreenshotTool(
   env: EnvLike = process.env,
 ): ScreenshotTool | null {
+  if (findOnPath("maim", env) !== null) {
+    return "maim";
+  }
   if (findOnPath("import", env) !== null) {
     return "import";
   }
@@ -51,11 +54,19 @@ export function buildScreenshotCommand(
 ): ScreenshotStep[] {
   parseDisplayNumber(display);
   switch (tool) {
+    case "maim":
+      return [
+        {
+          cmd: "maim",
+          args: [outPath],
+          requiresDisplayEnv: true,
+        },
+      ];
     case "import":
       return [
         {
           cmd: "import",
-          args: ["-display", display, "-window", "root", outPath],
+          args: ["-silent", "-display", display, "-window", "root", outPath],
         },
       ];
     case "xwd": {
@@ -119,7 +130,7 @@ export async function screenshot(
   if (tool === null) {
     throw new Error(
       "No screenshot tool found on PATH. Install one of: " +
-        "imagemagick (provides `import` and `convert`), " +
+        "maim (preferred), imagemagick (provides `import` and `convert`), " +
         "xorg-xwd (`xwd`, combined with imagemagick `convert`), or scrot.",
     );
   }
