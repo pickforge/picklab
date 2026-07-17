@@ -102,11 +102,21 @@ describe("buildVncArgs", () => {
 });
 
 describe("buildScreenshotCommand", () => {
+  it("builds the maim command, which targets the display via the DISPLAY env", () => {
+    expect(buildScreenshotCommand("maim", ":92", "/tmp/out.png")).toEqual([
+      {
+        cmd: "maim",
+        args: ["/tmp/out.png"],
+        requiresDisplayEnv: true,
+      },
+    ]);
+  });
+
   it("builds the import command", () => {
     expect(buildScreenshotCommand("import", ":92", "/tmp/out.png")).toEqual([
       {
         cmd: "import",
-        args: ["-display", ":92", "-window", "root", "/tmp/out.png"],
+        args: ["-silent", "-display", ":92", "-window", "root", "/tmp/out.png"],
       },
     ]);
   });
