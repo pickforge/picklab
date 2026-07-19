@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { ensureDir, runsDir, writeFileAtomic } from "./paths.js";
+import { openRunCatalog } from "./run-catalog.js";
 import {
   isPidAlive,
   processIdentityMatches,
@@ -1604,69 +1605,6 @@ function isFinalizedStatus(status: RunStatus): boolean {
   return status === "completed" || status === "failed";
 }
 
-interface EvidenceRunEntry {
-  /** The actual directory-entry name — authoritative for what gets deleted. */
-  dirName: string;
-  manifest: RunManifest;
-}
-
-/**
- * Enumerate evidence-run directories, binding each manifest to the directory it
- * physically lives in. Applies the same runs-root confinement as `listRuns`
- * (rejecting a symlinked `.picklab` or `.picklab/runs`) and, critically, only
- * yields an entry when the manifest's declared `runId` matches its own
- * directory name. A manifest that names a *different* directory is never used to
- * decide a deletion, so a spoofed or corrupt `runId` can never redirect a
- * removal at another run's directory.
- */
-async function listEvidenceRunEntries(
-  projectDir: string,
-): Promise<EvidenceRunEntry[]> {
-  const parent = runsDir(projectDir);
-  try {
-    const realProject = await fs.promises.realpath(projectDir);
-    const realParent = await fs.promises.realpath(parent);
-    if (realParent !== path.join(realProject, ".picklab", "runs")) return [];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await fs.promises.readdir(parent, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-
-  const out: EvidenceRunEntry[] = [];
-  for (const entry of entries) {
-    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
-    const dir = path.join(parent, entry.name);
-    const manifestPath = path.join(dir, "manifest.json");
-    try {
-      const manifestStat = await fs.promises.lstat(manifestPath);
-      if (manifestStat.isSymbolicLink()) continue;
-    } catch {
-      continue;
-    }
-    const manifest = await readManifest(dir);
-    if (
-      manifest === undefined ||
-      typeof manifest.runId !== "string" ||
-      typeof manifest.createdAt !== "string" ||
-      !Array.isArray(manifest.artifacts)
-    ) {
-      continue;
-    }
-    // Bind: the manifest must declare the directory it actually lives in.
-    if (manifest.runId !== entry.name) continue;
-    out.push({ dirName: entry.name, manifest });
-  }
-  return out;
-}
-
 /** Collect run ids currently referenced by any session's active pointer. */
 async function collectActiveRunIds(parent: string): Promise<Set<string>> {
   const active = new Set<string>();
@@ -1707,30 +1645,28 @@ export async function pruneFinalizedEvidenceRuns(
   opts: PruneEvidenceOptions = {},
 ): Promise<string[]> {
   const keep = opts.keep ?? EVIDENCE_RETENTION_KEEP;
-  const parent = runsDir(projectDir);
-  // Enumerate directory entries with their bound manifests (runId === dirName),
-  // so every deletion decision targets the directory the manifest lives in — a
-  // spoofed runId can never point the removal at another run.
-  const entries = await listEvidenceRunEntries(projectDir);
-  const activeRunIds = await collectActiveRunIds(parent);
+  const catalog = await openRunCatalog(projectDir);
+  const entries = await catalog.list();
+  const activeByRoot = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    if (!activeByRoot.has(entry.rootDir)) {
+      activeByRoot.set(entry.rootDir, await collectActiveRunIds(entry.rootDir));
+    }
+  }
 
-  const finalized = entries
-    .filter(
-      (entry) =>
-        isEvidenceRun(entry.manifest) &&
-        isFinalizedStatus(entry.manifest.status) &&
-        !activeRunIds.has(entry.dirName),
-    )
-    .sort((a, b) =>
-      b.manifest.createdAt.localeCompare(a.manifest.createdAt),
-    );
+  const finalized = entries.filter(
+    (entry) =>
+      isEvidenceRun(entry.manifest) &&
+      isFinalizedStatus(entry.manifest.status) &&
+      !activeByRoot.get(entry.rootDir)?.has(entry.dirName),
+  );
 
   const removed: string[] = [];
-  for (const { dirName } of finalized.slice(keep)) {
+  for (const entry of finalized.slice(keep)) {
+    const { dirName, dir, rootDir } = entry;
     if (!isSafeRunId(dirName)) continue;
-    const dir = path.join(parent, dirName);
-    // Confinement: only a real, non-symlink directory directly under the runs
-    // root is a removal candidate.
+    // Confinement: only a real, non-symlink directory directly under its
+    // catalog root is a removal candidate.
     let stat: fs.Stats;
     try {
       stat = await fs.promises.lstat(dir);
@@ -1738,14 +1674,13 @@ export async function pruneFinalizedEvidenceRuns(
       continue;
     }
     if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
-    if (path.dirname(dir) !== parent) continue;
-    // Re-read and re-verify the *same* manifest immediately before removal, so a
-    // run that was concurrently re-activated, mutated, or whose manifest now
-    // disagrees with its directory is never deleted (TOCTOU guard).
-    const fresh = await readManifest(dir);
+    if (path.dirname(dir) !== rootDir) continue;
+    // Re-read through the catalog immediately before removal. A run that was
+    // swapped, mutated, or whose manifest no longer binds to its directory is
+    // never deleted.
+    const fresh = await catalog.refresh(entry);
     if (
       fresh === undefined ||
-      fresh.runId !== dirName ||
       !isEvidenceRun(fresh) ||
       !isFinalizedStatus(fresh.status)
     ) {
@@ -1753,7 +1688,7 @@ export async function pruneFinalizedEvidenceRuns(
     }
     // Re-check the active pointers last: an owner may have re-claimed this run
     // between the first scan and now.
-    const activeNow = await collectActiveRunIds(parent);
+    const activeNow = await collectActiveRunIds(rootDir);
     if (activeNow.has(dirName)) continue;
     await fs.promises.rm(dir, { recursive: true, force: true });
     forgetRunByteCache(dir);

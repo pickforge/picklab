@@ -1508,6 +1508,30 @@ describe("picklab artifacts", () => {
     expect(report.errors[0]).toContain("Corrupt evidence journal");
   });
 
+  it("fails closed for an unsafe evidence journal", async () => {
+    const env = makeEnv();
+    const projectDir = makeProjectDir();
+    const runId = "20260609-120000-unsafe";
+    writeSyntheticRun(projectDir, runId, {
+      evidenceVersion: 1,
+      actionLog: "actions.jsonl",
+    });
+    const runDir = path.join(projectDir, ".picklab", "runs", runId);
+    fs.symlinkSync(
+      path.join(runDir, "manifest.json"),
+      path.join(runDir, "actions.jsonl"),
+    );
+
+    const result = await runCli(
+      ["artifacts", "report", runId, "--project-dir", projectDir, "--json"],
+      env,
+    );
+    expect(result.code).toBe(1);
+    expect(parseJson(result).errors.join("\n")).toContain(
+      "Unsafe run catalog file",
+    );
+  });
+
   it("fails for unknown run ids", async () => {
     const env = makeEnv();
     const projectDir = makeProjectDir();

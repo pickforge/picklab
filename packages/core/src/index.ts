@@ -30,7 +30,6 @@ export {
   createRun,
   EVIDENCE_ACTION_LOG,
   EVIDENCE_VERSION,
-  listRuns,
   RunHandle,
   type ArtifactType,
   type CreateRunOptions,
@@ -38,6 +37,14 @@ export {
   type RunManifest,
   type RunStatus,
 } from "./run.js";
+
+export {
+  listRuns,
+  openRunCatalog,
+  RunCatalog,
+  type RunCatalogEntry,
+  type RunCatalogRoot,
+} from "./run-catalog.js";
 
 export {
   activePointerPath,
