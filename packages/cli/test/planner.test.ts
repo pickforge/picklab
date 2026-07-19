@@ -44,7 +44,6 @@ const baseLabUser = {
   userExists: false,
   homeExists: false,
   kvmPresent: true,
-  sudoPath: "/usr/bin/sudo",
 };
 
 describe("planLabUser", () => {
@@ -63,16 +62,14 @@ describe("planLabUser", () => {
     const useradd = result.plan.steps[0]!;
     expect(useradd.privileged).toBe(true);
     expect(commandOf(useradd)).toEqual({
-      cmd: "/usr/bin/sudo",
-      args: ["useradd", "-r", "-M", "-s", "/usr/sbin/nologin", "picklab-lab"],
+      cmd: "useradd",
+      args: ["-r", "-M", "-s", "/usr/sbin/nologin", "picklab-lab"],
     });
     expect(commandOf(result.plan.steps[3]!).args).toEqual([
-      "chmod",
       "750",
       "/var/lib/picklab/lab-home",
     ]);
     expect(commandOf(result.plan.steps[4]!).args).toEqual([
-      "usermod",
       "-aG",
       "kvm",
       "picklab-lab",
@@ -94,11 +91,21 @@ describe("planLabUser", () => {
     );
   });
 
-  it("prefixes sudo with -n in non-interactive mode", () => {
-    const result = planLabUser({ ...baseLabUser, nonInteractive: true });
+  it("keeps every privileged command free of sudo routing", () => {
+    const result = planLabUser(baseLabUser);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(commandOf(result.plan.steps[0]!).args[0]).toBe("-n");
+    const commands = result.plan.steps
+      .filter((step) => step.kind === "command")
+      .map(commandOf);
+    expect(commands.map((command) => command.cmd)).toEqual([
+      "useradd",
+      "mkdir",
+      "chown",
+      "chmod",
+      "usermod",
+    ]);
+    expect(JSON.stringify(commands)).not.toContain("sudo");
   });
 
   it("is a config-only no-op when user and home already exist", () => {
@@ -125,14 +132,12 @@ describe("planLabUser", () => {
       "chmod-home",
       "persist-lab-user",
     ]);
-  });
-
-  it("fails closed when sudo is unavailable", () => {
-    const result = planLabUser({ ...baseLabUser, sudoPath: null });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("sudo not found");
-    expect(result.error).toContain("useradd -r -M -s /usr/sbin/nologin");
+    expect(
+      result.plan.steps
+        .filter((step) => step.kind === "command")
+        .every((step) => step.privileged),
+    ).toBe(true);
+    expect(result.plan.steps.at(-1)?.privileged).toBe(false);
   });
 
   it("rejects invalid user names", () => {

@@ -49,10 +49,6 @@ export type PlanResult =
   | { ok: true; plan: ProvisioningPlan }
   | { ok: false; error: string };
 
-export function planHasCommandSteps(plan: ProvisioningPlan): boolean {
-  return plan.steps.some((step) => step.kind === "command");
-}
-
 export function formatStep(step: ProvisioningStep): string {
   switch (step.kind) {
     case "command":

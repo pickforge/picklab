@@ -32,6 +32,9 @@ release description, then reset it after the release is published.
 - Centralized session lifecycle composition in core and routed dead-session
   reaping through typed desktop, Android, and browser teardown owners, removing
   duplicate CLI/MCP orchestration and core PID/profile stop implementations.
+- Centralized CLI provisioning policy for plan classification, consent,
+  dry-runs, ordered preflight failures/skips, adapter-owned sudo routing,
+  cancellation, redacted presentation plans, and partial results.
 - Added a framing-aware DevTools NDJSON relay with protocol validation,
   backpressure, bounded diagnostics, redacted failures, and evidence hooks.
 - Added atomic, crash-recoverable evidence journals, active-run ownership,

@@ -21,8 +21,14 @@ export interface LabUserPlanInput {
   userExists: boolean;
   homeExists: boolean;
   kvmPresent: boolean;
-  sudoPath: string | null;
-  nonInteractive?: boolean;
+}
+
+export function labUserPrivilegeUnavailableMessage(name: string): string {
+  return (
+    `sudo not found on PATH; cannot provision lab user "${name}". ` +
+    `Install sudo, or create the user manually as root: ` +
+    `useradd -r -M -s ${NOLOGIN_SHELL} ${name}`
+  );
 }
 
 export function planLabUser(input: LabUserPlanInput): PlanResult {
@@ -41,23 +47,26 @@ export function planLabUser(input: LabUserPlanInput): PlanResult {
     };
   }
 
-  const sudoArgs = (args: string[]): string[] =>
-    input.nonInteractive === true ? ["-n", ...args] : args;
-
-  const privilegedSpecs: Array<{ id: string; title: string; args: string[] }> =
-    [];
+  const privilegedSpecs: Array<{
+    id: string;
+    title: string;
+    cmd: string;
+    args: string[];
+  }> = [];
   if (!input.userExists) {
     privilegedSpecs.push({
       id: "useradd",
       title: `Create locked service user ${input.name}`,
-      args: ["useradd", "-r", "-M", "-s", NOLOGIN_SHELL, input.name],
+      cmd: "useradd",
+      args: ["-r", "-M", "-s", NOLOGIN_SHELL, input.name],
     });
   }
   if (!input.homeExists) {
     privilegedSpecs.push({
       id: "mkdir-home",
       title: `Create lab home ${input.home}`,
-      args: ["mkdir", "-p", input.home],
+      cmd: "mkdir",
+      args: ["-p", input.home],
     });
   }
   if (!input.userExists || !input.homeExists) {
@@ -65,12 +74,14 @@ export function planLabUser(input: LabUserPlanInput): PlanResult {
       {
         id: "chown-home",
         title: `Own lab home by ${input.name}`,
-        args: ["chown", `${input.name}:${input.name}`, input.home],
+        cmd: "chown",
+        args: [`${input.name}:${input.name}`, input.home],
       },
       {
         id: "chmod-home",
         title: "Restrict lab home permissions to 750",
-        args: ["chmod", "750", input.home],
+        cmd: "chmod",
+        args: ["750", input.home],
       },
     );
   }
@@ -78,22 +89,13 @@ export function planLabUser(input: LabUserPlanInput): PlanResult {
     privilegedSpecs.push({
       id: "kvm-group",
       title: `Grant ${input.name} access to /dev/kvm`,
-      args: ["usermod", "-aG", "kvm", input.name],
+      cmd: "usermod",
+      args: ["-aG", "kvm", input.name],
     });
   }
 
   const steps: ProvisioningStep[] = [];
   if (privilegedSpecs.length > 0) {
-    const sudoPath = input.sudoPath;
-    if (sudoPath === null) {
-      return {
-        ok: false,
-        error:
-          `sudo not found on PATH; cannot provision lab user "${input.name}". ` +
-          `Install sudo, or create the user manually as root: ` +
-          `useradd -r -M -s ${NOLOGIN_SHELL} ${input.name}`,
-      };
-    }
     steps.push(
       ...privilegedSpecs.map(
         (spec): ProvisioningStep => ({
@@ -101,7 +103,7 @@ export function planLabUser(input: LabUserPlanInput): PlanResult {
           title: spec.title,
           kind: "command",
           privileged: true,
-          command: { cmd: sudoPath, args: sudoArgs(spec.args) },
+          command: { cmd: spec.cmd, args: spec.args },
         }),
       ),
     );

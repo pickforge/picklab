@@ -1,16 +1,16 @@
 import { sdkmanagerInstallCommand } from "@pickforge/picklab-android";
 import type { EnvLike } from "@pickforge/picklab-core";
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
-import { executePlan, type StepResult } from "../provision/executor.js";
 import {
-  planHasCommandSteps,
-  type ProvisioningStep,
-} from "../provision/plan.js";
+  executeProvisioning,
+  type StepResult,
+} from "../provision/executor.js";
+import type { ProvisioningStep } from "../provision/plan.js";
 import {
   planCreateAvd,
   RECOMMENDED_SYSTEM_IMAGE,
 } from "../provision/planner.js";
-import { confirm } from "../provision/prompts.js";
+import { confirm, toConsentDecision } from "../provision/prompts.js";
 
 export interface SetupAndroidCliOptions {
   createAvd?: boolean;
@@ -115,37 +115,35 @@ export async function runSetupAndroid(
   }
   report.plan = result.plan.steps;
 
-  if (planHasCommandSteps(result.plan) && opts.dryRun !== true) {
-    const answer = await confirm(`Create AVD "${android.avdName}"?`, {
-      yes: opts.yes,
-    });
-    if (answer === "non-interactive") {
-      report.ok = false;
-      report.errors.push(
-        "Refusing to create the AVD without consent in a non-interactive " +
-          "session. Re-run with --yes.",
-      );
-      emit(report, opts.json === true);
-      return 1;
-    }
-    if (answer === "no") {
-      report.ok = false;
-      report.errors.push("Aborted: AVD creation was declined.");
-      emit(report, opts.json === true);
-      return 1;
-    }
-  }
-
   const log =
     opts.json === true ? () => {} : (line: string) => console.log(line);
   if (opts.json !== true && android.avdExists) {
     console.log(`AVD "${android.avdName}" already exists.`);
   }
-  const execution = await executePlan(result.plan, {
-    dryRun: opts.dryRun,
-    env,
-    log,
-  });
+  const execution = await executeProvisioning(
+    [
+      {
+        kind: "plan",
+        plan: result.plan,
+        consent: {
+          retainPlanOnDenied: true,
+          decide: async () => {
+            const answer = await confirm(`Create AVD "${android.avdName}"?`, {
+              yes: opts.yes,
+            });
+            return toConsentDecision(answer, {
+              declined: "Aborted: AVD creation was declined.",
+              cancelled:
+                "Refusing to create the AVD without consent in a " +
+                "non-interactive session. Re-run with --yes.",
+            });
+          },
+        },
+      },
+    ],
+    { dryRun: opts.dryRun, env, log },
+  );
+  report.plan = execution.plan.steps;
   report.results = execution.results;
   report.ok = execution.ok;
   if (!execution.ok) {

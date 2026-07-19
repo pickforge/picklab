@@ -7,17 +7,19 @@ import {
   type DoctorCheck,
 } from "../provision/checks.js";
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
-import { executePlan, type StepResult } from "../provision/executor.js";
 import {
-  planHasCommandSteps,
-  type ProvisioningStep,
-} from "../provision/plan.js";
+  executeProvisioning,
+  type ProvisioningSection,
+  type StepResult,
+} from "../provision/executor.js";
+import type { ProvisioningStep } from "../provision/plan.js";
 import {
+  labUserPrivilegeUnavailableMessage,
   planCreateAvd,
   planLabUser,
   planPicklabHome,
 } from "../provision/planner.js";
-import { confirm } from "../provision/prompts.js";
+import { confirm, toConsentDecision } from "../provision/prompts.js";
 
 export interface InitCliOptions {
   profile?: PicklabProfile;
@@ -44,32 +46,21 @@ async function consentTo(
   what: string,
   opts: InitCliOptions,
   remediation: string,
-): Promise<{ granted: boolean; error?: string }> {
-  if (opts.yes === true || opts.dryRun === true) {
-    return { granted: true };
-  }
-  const answer = await confirm(`Provision ${what}?`, {});
-  if (answer === "yes") {
-    return { granted: true };
-  }
-  if (answer === "no") {
-    return { granted: false, error: `Required ${what} was declined. ${remediation}` };
-  }
-  return {
-    granted: false,
-    error:
+) {
+  const answer = await confirm(`Provision ${what}?`, { yes: opts.yes });
+  return toConsentDecision(answer, {
+    declined: `Required ${what} was declined. ${remediation}`,
+    cancelled:
       `Refusing to provision ${what} without consent in a non-interactive ` +
       `session. ${remediation}`,
-  };
+  });
 }
 
-async function planAvdProvisioning(
+function planAvdProvisioning(
   snapshot: DetectionSnapshot,
   opts: InitCliOptions,
-  steps: ProvisioningStep[],
-  errors: string[],
-  handledCheckIds: Set<string>,
-): Promise<void> {
+  sections: ProvisioningSection[],
+): void {
   const result = planCreateAvd({
     avdName: snapshot.android.avdName,
     sdkRoot: snapshot.android.sdkRoot,
@@ -78,57 +69,55 @@ async function planAvdProvisioning(
     existingAvds: snapshot.android.avds,
   });
   if (!result.ok) {
-    errors.push(result.error);
+    sections.push({ kind: "blocked", reason: result.error });
     return;
   }
-  if (planHasCommandSteps(result.plan)) {
-    const consent = await consentTo(
-      `dedicated AVD "${snapshot.android.avdName}" (runs avdmanager)`,
-      opts,
-      "Re-run with --yes --create-avd or run: picklab setup android --create-avd",
-    );
-    if (!consent.granted) {
-      errors.push(consent.error ?? "AVD provisioning was not approved");
-      return;
-    }
-  }
-  steps.push(...result.plan.steps);
-  handledCheckIds.add("avd");
+  sections.push({
+    kind: "plan",
+    plan: result.plan,
+    satisfies: "avd",
+    consent: {
+      decide: () =>
+        consentTo(
+          `dedicated AVD "${snapshot.android.avdName}" (runs avdmanager)`,
+          opts,
+          "Re-run with --yes --create-avd or run: picklab setup android --create-avd",
+        ),
+    },
+  });
 }
 
-async function planLabUserProvisioning(
+function planLabUserProvisioning(
   snapshot: DetectionSnapshot,
   opts: InitCliOptions,
-  steps: ProvisioningStep[],
-  errors: string[],
-  handledCheckIds: Set<string>,
-): Promise<void> {
+  sections: ProvisioningSection[],
+): void {
   const result = planLabUser({
     name: snapshot.labUser.name,
     home: snapshot.labUser.home,
     userExists: snapshot.labUser.exists,
     homeExists: snapshot.labUser.homeExists,
     kvmPresent: snapshot.android.kvm.exists,
-    sudoPath: snapshot.sudo,
-    nonInteractive: process.stdin.isTTY !== true,
   });
   if (!result.ok) {
-    errors.push(result.error);
+    sections.push({ kind: "blocked", reason: result.error });
     return;
   }
-  if (planHasCommandSteps(result.plan)) {
-    const consent = await consentTo(
-      `lab user "${snapshot.labUser.name}" (privileged, runs sudo)`,
-      opts,
-      "Re-run with --yes --create-lab-user or run: picklab setup lab-user",
-    );
-    if (!consent.granted) {
-      errors.push(consent.error ?? "Lab user provisioning was not approved");
-      return;
-    }
-  }
-  steps.push(...result.plan.steps);
-  handledCheckIds.add("lab-user");
+  sections.push({
+    kind: "plan",
+    plan: result.plan,
+    privilegeUnavailable: {
+      reason: labUserPrivilegeUnavailableMessage(snapshot.labUser.name),
+    },
+    consent: {
+      decide: () =>
+        consentTo(
+          `lab user "${snapshot.labUser.name}" (privileged, runs sudo)`,
+          opts,
+          "Re-run with --yes --create-lab-user or run: picklab setup lab-user",
+        ),
+    },
+  });
 }
 
 export async function runInit(
@@ -148,15 +137,20 @@ export async function runInit(
     }
   }
 
-  const errors: string[] = [];
-  const handledCheckIds = new Set<string>();
-  const steps: ProvisioningStep[] = [
+  const sections: ProvisioningSection[] = [
     {
-      id: "project-config",
-      title: `Write project config (profile: ${profile})`,
-      kind: "write-project-config",
-      privileged: false,
-      config: { profile },
+      kind: "plan",
+      plan: {
+        steps: [
+          {
+            id: "project-config",
+            title: `Write project config (profile: ${profile})`,
+            kind: "write-project-config",
+            privileged: false,
+            config: { profile },
+          },
+        ],
+      },
     },
   ];
   const homePlan = planPicklabHome({
@@ -164,70 +158,72 @@ export async function runInit(
     exists: snapshot.picklabHome.exists,
   });
   if (homePlan.steps.length > 0) {
-    steps.push(...homePlan.steps);
-    handledCheckIds.add("picklab-home");
+    sections.push({ kind: "plan", plan: homePlan, satisfies: "picklab-home" });
   }
 
   const avdRequired = requiredIds.includes("avd");
   if (!snapshot.android.avdExists && (avdRequired || opts.createAvd === true)) {
-    await planAvdProvisioning(snapshot, opts, steps, errors, handledCheckIds);
+    planAvdProvisioning(snapshot, opts, sections);
   }
   if (!snapshot.labUser.exists && opts.createLabUser === true) {
-    await planLabUserProvisioning(
-      snapshot,
-      opts,
-      steps,
-      errors,
-      handledCheckIds,
-    );
+    planLabUserProvisioning(snapshot, opts, sections);
   }
 
   for (const check of checks) {
     if (check.status !== "missing") continue;
-    if (handledCheckIds.has(check.id)) continue;
-    errors.push(
-      `Required check "${check.id}" failed: ${check.detail}.` +
+    sections.push({
+      kind: "blocked",
+      unlessSatisfied: check.id,
+      reason:
+        `Required check "${check.id}" failed: ${check.detail}.` +
         (check.hint === undefined ? "" : ` Hint: ${check.hint}`),
-    );
+    });
   }
 
   const report: InitReport = {
-    ok: errors.length === 0,
+    ok: false,
     profile,
     projectDir,
     dryRun: opts.dryRun === true,
     checks,
-    plan: steps,
+    plan: [],
     results: [],
-    errors,
+    errors: [],
   };
-
-  if (errors.length > 0) {
-    emit(report, opts);
-    return 1;
-  }
 
   const log =
     opts.json === true ? () => {} : (line: string) => console.log(line);
-  const execution = await executePlan(
-    { steps },
-    { dryRun: opts.dryRun, env, projectDir, log },
+  const execution = await executeProvisioning(
+    sections,
+    {
+      dryRun: opts.dryRun,
+      env,
+      projectDir,
+      log,
+      privilege: {
+        sudoPath: snapshot.sudo,
+        nonInteractive: process.stdin.isTTY !== true,
+      },
+    },
   );
+  report.plan = execution.plan.steps;
   report.results = execution.results;
+  report.ok = execution.ok;
   if (!execution.ok) {
-    report.ok = false;
-    const error = execution.error ?? "provisioning failed";
+    const errors =
+      execution.errors.length > 0 ? execution.errors : ["provisioning failed"];
     if (
       execution.results.some(
         (result) => result.id === "project-config" && result.ok,
       )
     ) {
       report.errors.push(
-        `${error}. Project config was written; fix the failed dependency and ` +
+        `${errors[0]}. Project config was written; fix the failed dependency and ` +
           `re-run picklab init (idempotent), or check picklab doctor.`,
       );
+      report.errors.push(...errors.slice(1));
     } else {
-      report.errors.push(error);
+      report.errors.push(...errors);
     }
   }
   emit(report, opts);

@@ -5,17 +5,19 @@ import {
   type DoctorCheck,
 } from "../provision/checks.js";
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
-import { executePlan, type StepResult } from "../provision/executor.js";
 import {
-  planHasCommandSteps,
-  type ProvisioningStep,
-} from "../provision/plan.js";
+  executeProvisioning,
+  type ProvisioningSection,
+  type StepResult,
+} from "../provision/executor.js";
+import type { ProvisioningStep } from "../provision/plan.js";
 import {
+  labUserPrivilegeUnavailableMessage,
   planCreateAvd,
   planLabUser,
   planPicklabHome,
 } from "../provision/planner.js";
-import { confirm } from "../provision/prompts.js";
+import { confirm, toConsentDecision } from "../provision/prompts.js";
 
 export interface DoctorCliOptions {
   json?: boolean;
@@ -39,32 +41,21 @@ export interface DoctorReport {
   fix?: DoctorFixReport;
 }
 
-async function consentToRepair(
-  question: string,
-  opts: DoctorCliOptions,
-): Promise<boolean> {
-  if (opts.dryRun === true) {
-    return true;
-  }
-  const answer = await confirm(question, { yes: opts.yes });
-  return answer === "yes";
-}
-
 async function buildFixPlan(
   snapshot: DetectionSnapshot,
   opts: DoctorCliOptions,
-): Promise<{ steps: ProvisioningStep[]; skipped: string[] }> {
-  const steps: ProvisioningStep[] = [];
-  const skipped: string[] = [];
+): Promise<ProvisioningSection[]> {
+  const sections: ProvisioningSection[] = [];
   const consentHint =
     "skipped (requires consent; re-run with --yes or confirm interactively)";
 
-  steps.push(
-    ...planPicklabHome({
+  sections.push({
+    kind: "plan",
+    plan: planPicklabHome({
       path: snapshot.picklabHome.path,
       exists: snapshot.picklabHome.exists,
-    }).steps,
-  );
+    }),
+  });
 
   if (!snapshot.android.avdExists) {
     const result = planCreateAvd({
@@ -75,17 +66,29 @@ async function buildFixPlan(
       existingAvds: snapshot.android.avds,
     });
     if (!result.ok) {
-      skipped.push(`avd: ${result.error}`);
-    } else if (
-      !planHasCommandSteps(result.plan) ||
-      (await consentToRepair(
-        `Create AVD "${snapshot.android.avdName}" (runs avdmanager)?`,
-        opts,
-      ))
-    ) {
-      steps.push(...result.plan.steps);
+      sections.push({
+        kind: "blocked",
+        action: "skip",
+        reason: `avd: ${result.error}`,
+      });
     } else {
-      skipped.push(`avd: ${consentHint}`);
+      sections.push({
+        kind: "plan",
+        plan: result.plan,
+        consent: {
+          onDenied: "skip",
+          decide: async () => {
+            const answer = await confirm(
+              `Create AVD "${snapshot.android.avdName}" (runs avdmanager)?`,
+              { yes: opts.yes },
+            );
+            return toConsentDecision(answer, {
+              declined: `avd: ${consentHint}`,
+              cancelled: `avd: ${consentHint}`,
+            });
+          },
+        },
+      });
     }
   }
 
@@ -96,25 +99,41 @@ async function buildFixPlan(
       userExists: snapshot.labUser.exists,
       homeExists: snapshot.labUser.homeExists,
       kvmPresent: snapshot.android.kvm.exists,
-      sudoPath: snapshot.sudo,
-      nonInteractive: process.stdin.isTTY !== true,
     });
     if (!result.ok) {
-      skipped.push(`lab-user: ${result.error}`);
-    } else if (
-      !planHasCommandSteps(result.plan) ||
-      (await consentToRepair(
-        `Create lab user "${snapshot.labUser.name}" (privileged, runs sudo)?`,
-        opts,
-      ))
-    ) {
-      steps.push(...result.plan.steps);
+      sections.push({
+        kind: "blocked",
+        action: "skip",
+        reason: `lab-user: ${result.error}`,
+      });
     } else {
-      skipped.push(`lab-user: ${consentHint}`);
+      sections.push({
+        kind: "plan",
+        plan: result.plan,
+        privilegeUnavailable: {
+          action: "skip",
+          reason: `lab-user: ${labUserPrivilegeUnavailableMessage(
+            snapshot.labUser.name,
+          )}`,
+        },
+        consent: {
+          onDenied: "skip",
+          decide: async () => {
+            const answer = await confirm(
+              `Create lab user "${snapshot.labUser.name}" (privileged, runs sudo)?`,
+              { yes: opts.yes },
+            );
+            return toConsentDecision(answer, {
+              declined: `lab-user: ${consentHint}`,
+              cancelled: `lab-user: ${consentHint}`,
+            });
+          },
+        },
+      });
     }
   }
 
-  return { steps, skipped };
+  return sections;
 }
 
 export async function runDoctor(
@@ -138,21 +157,30 @@ export async function runDoctor(
 
   let exitCode = 0;
   if (opts.fix === true) {
-    const { steps, skipped } = await buildFixPlan(snapshot, opts);
+    const sections = await buildFixPlan(snapshot, opts);
     const log =
       opts.json === true ? () => {} : (line: string) => console.log(line);
-    const execution = await executePlan(
-      { steps },
-      { dryRun: opts.dryRun, env, projectDir, log },
+    const execution = await executeProvisioning(
+      sections,
+      {
+        dryRun: opts.dryRun,
+        env,
+        projectDir,
+        log,
+        privilege: {
+          sudoPath: snapshot.sudo,
+          nonInteractive: process.stdin.isTTY !== true,
+        },
+      },
     );
     report.fix = {
       dryRun: opts.dryRun === true,
-      steps,
-      skipped,
+      steps: execution.plan.steps,
+      skipped: execution.skipped,
       results: execution.results,
     };
     if (!execution.ok) {
-      report.errors.push(execution.error ?? "repairs failed");
+      report.errors.push(...execution.errors);
       exitCode = 1;
     }
   }
