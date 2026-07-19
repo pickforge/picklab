@@ -3,10 +3,12 @@ import {
   createLocalSessions,
   destroyLocalSessions,
   localSessionStatusEntry,
+  teardownLocalSession,
   type LocalSessionCreateRuntime,
   type LocalSessionDestroyRuntime,
   type LocalSessionRecipe,
   type LocalSessionStatusRuntime,
+  type LocalSessionTeardownRuntime,
   type SessionRecord,
 } from "../src/index.js";
 
@@ -245,6 +247,34 @@ describe("local session lifecycle", () => {
       emulatorAlive: false,
       deviceState: "offline",
     });
+  });
+
+  it("combines typed desktop and android teardown before finalizing a legacy record", async () => {
+    const calls: string[] = [];
+    const runtime: LocalSessionTeardownRuntime = {
+      desktop: {
+        teardown: vi.fn(async (_id, finalize) => {
+          calls.push("desktop");
+          await finalize();
+        }),
+      },
+      android: {
+        teardown: vi.fn(async (_id, finalize) => {
+          calls.push("android");
+          await finalize();
+        }),
+      },
+    };
+
+    await teardownLocalSession(
+      record({ id: "duo-123456", type: "desktop+android" }),
+      runtime,
+      async () => {
+        calls.push("finalize");
+      },
+    );
+
+    expect(calls).toEqual(["android", "desktop", "finalize"]);
   });
 
   it("dispatches typed destroy and continues after individual failures", async () => {

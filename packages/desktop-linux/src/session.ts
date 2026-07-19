@@ -16,6 +16,7 @@ import {
   updateSession,
   type DesktopSessionInfo,
   type EnvLike,
+  type LocalSessionTeardownFinalizer,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import {
@@ -86,7 +87,12 @@ export async function createDesktopSession(
       "VNC was requested but x11vnc was not found on PATH; install x11vnc to enable it",
     );
   }
-  await reapDeadRunningSessions(registryEnv);
+  await reapDeadRunningSessions(registryEnv, {
+    desktop: {
+      teardown: (id, finalize) =>
+        teardownDesktopSession(id, registryEnv, finalize),
+    },
+  });
   const record = await createSession(
     { type: "desktop", projectDir: opts.projectDir },
     registryEnv,
@@ -491,9 +497,10 @@ export async function ensureSessionVnc(
   });
 }
 
-export async function destroyDesktopSession(
+export async function teardownDesktopSession(
   id: string,
-  registryEnv: EnvLike = process.env,
+  registryEnv: EnvLike,
+  finalize: LocalSessionTeardownFinalizer,
 ): Promise<void> {
   if ((await getSession(id, registryEnv)) === undefined) {
     throw new Error(`Desktop session not found: ${id}`);
@@ -562,8 +569,17 @@ export async function destroyDesktopSession(
         `Failed to stop ${failures.length} process(es) of desktop session ${id}`,
       );
     }
-    await destroySessionRecord(id, registryEnv);
+    await finalize();
   });
+}
+
+export async function destroyDesktopSession(
+  id: string,
+  registryEnv: EnvLike = process.env,
+): Promise<void> {
+  await teardownDesktopSession(id, registryEnv, () =>
+    destroySessionRecord(id, registryEnv),
+  );
 }
 
 export async function getDesktopSessionStatus(

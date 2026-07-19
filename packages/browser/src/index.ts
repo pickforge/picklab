@@ -35,6 +35,7 @@ export {
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,
+  teardownBrowserSession,
   type BrowserSessionHandle,
   type BrowserSessionStatus,
   type CreateBrowserSessionOptions,

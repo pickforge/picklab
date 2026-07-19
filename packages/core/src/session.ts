@@ -5,18 +5,12 @@ import { finalizeActiveEvidenceRun } from "./evidence.js";
 import { writeEvidenceReport } from "./evidence-render.js";
 import {
   ensureDir,
-  isProfileConfined,
   sessionsDir,
   runsDir,
   writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
-import {
-  isPidAlive,
-  processIdentityMatches,
-  stopPid,
-  stopProcessGroupVerified,
-} from "./proc.js";
+import { isPidAlive, processIdentityMatches } from "./proc.js";
 
 export type SessionType = "desktop" | "android" | "desktop+android" | "browser";
 export type SessionStatus = "starting" | "running" | "stopped" | "error";
@@ -272,141 +266,6 @@ export function isSessionProcessAlive(record: SessionRecord): boolean {
 }
 
 export const REAPER_CLEANUP_PENDING_META_KEY = "reaperCleanupPending";
-
-export async function reapDeadRunningSessions(
-  env: EnvLike = process.env,
-  isAlive: SessionLivenessCheck = isSessionProcessAlive,
-): Promise<SessionRecord[]> {
-  const reaped: SessionRecord[] = [];
-  for (const record of await listSessions(env)) {
-    const retryPending =
-      record.status === "error" &&
-      record.meta?.[REAPER_CLEANUP_PENDING_META_KEY] === true;
-    if (record.status !== "running" && !retryPending) continue;
-    if (!retryPending && (await isAlive(record))) continue;
-    if (!(await stopRecordedPids(record, env))) {
-      await updateSession(
-        record.id,
-        {
-          status: "error",
-          meta: {
-            ...record.meta,
-            [REAPER_CLEANUP_PENDING_META_KEY]: true,
-          },
-        },
-        env,
-      ).catch(() => {});
-      continue;
-    }
-    try {
-      await destroySessionRecord(record.id, env, "failed");
-    } catch {
-      await updateSession(
-        record.id,
-        {
-          status: "error",
-          meta: {
-            ...record.meta,
-            [REAPER_CLEANUP_PENDING_META_KEY]: true,
-          },
-        },
-        env,
-      ).catch(() => {});
-      continue;
-    }
-    reaped.push(record);
-  }
-  return reaped;
-}
-
-async function stopRecordedGroup(
-  pid: number,
-  startTicks: number,
-): Promise<boolean> {
-  try {
-    const result = await stopProcessGroupVerified({ pid, startTicks });
-    return (
-      result.outcome === "terminated" || result.outcome === "already-dead"
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function stopRecordedPids(
-  record: SessionRecord,
-  env: EnvLike,
-): Promise<boolean> {
-  const browser = record.browser;
-  if (
-    browser !== undefined &&
-    !(await stopRecordedGroup(
-      browser.browserPid,
-      browser.browserStartTimeTicks,
-    ))
-  ) {
-    return false;
-  }
-
-  const desktop = record.desktop;
-  const vncPid = desktop?.vncPid;
-  const vncStartTimeTicks = desktop?.vncStartTimeTicks;
-  if (vncPid !== undefined && isPidAlive(vncPid)) {
-    if (
-      vncStartTimeTicks === undefined ||
-      !processIdentityMatches({
-        pid: vncPid,
-        startTicks: vncStartTimeTicks,
-      })
-    ) {
-      return false;
-    }
-    try {
-      if (!(await stopPid(vncPid))) return false;
-    } catch {
-      return false;
-    }
-  }
-
-  const emulatorPid = record.android?.emulatorPid;
-  if (emulatorPid !== undefined && isPidAlive(emulatorPid)) {
-    try {
-      if (!(await stopPid(emulatorPid))) return false;
-    } catch {
-      return false;
-    }
-  }
-
-  if (desktop?.xvfbPid !== undefined) {
-    if (desktop.xvfbStartTimeTicks === undefined) {
-      if (isPidAlive(desktop.xvfbPid)) return false;
-    } else if (
-      !(await stopRecordedGroup(
-        desktop.xvfbPid,
-        desktop.xvfbStartTimeTicks,
-      ))
-    ) {
-      return false;
-    }
-  }
-
-  const pendingBrowserCleanup =
-    record.type === "browser" &&
-    record.meta?.[REAPER_CLEANUP_PENDING_META_KEY] === true;
-  if (browser?.profileMode === "ephemeral" || pendingBrowserCleanup) {
-    const sessionDir = path.join(sessionsDir(env), record.id);
-    const profileDir = browser?.profileDir ?? path.join(sessionDir, "profile");
-    if (!(await isProfileConfined(sessionDir, profileDir))) {
-      return false;
-    }
-    try {
-      await fs.promises.rm(sessionDir, { recursive: true, force: true });
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
 
 export async function updateSession(
   id: string,

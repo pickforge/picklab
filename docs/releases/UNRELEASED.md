@@ -48,6 +48,11 @@ then reset this file.
 
 ## Internal/release changes
 
+- Routed dead-session reaping through the desktop, Android, and browser typed
+  teardown owners. Core now owns only registry/liveness/retry/evidence policy,
+  eliminating its duplicate PID and browser-profile stop implementation. CLI
+  and MCP creation compose all owners; direct package creation reaps its own
+  runtime type.
 - Stabilized the browser Xvfb cancellation regression test by waiting for the
   fake process's complete PID/display marker instead of treating file creation
   as publication. This removes the full-suite/coverage race that could abandon
@@ -260,6 +265,8 @@ then reset this file.
   browser + desktop-linux suite iterations pass with a deliberately split
   fake startup-marker publication; the browser session suite (25 tests) and
   `bun run typecheck` pass.
+- Typed reaper teardown: core plus desktop-linux, Android, and browser suites;
+  CLI/MCP session tests; `bun run typecheck`; and `bun run build` pass.
 
 - Evidence storage foundation: `bun run typecheck`, `bun run build`, and the
   full suite pass (73 files, 895 passed / 2 skipped). New core coverage

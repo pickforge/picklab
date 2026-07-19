@@ -2,11 +2,13 @@ import {
   createAndroidSession,
   destroyAndroidSession,
   getAndroidSessionStatus,
+  teardownAndroidSession,
 } from "@pickforge/picklab-android";
 import {
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,
+  teardownBrowserSession,
 } from "@pickforge/picklab-browser";
 import {
   createLocalSessions,
@@ -15,18 +17,21 @@ import {
   listSessions,
   loadConfig,
   localSessionStatusEntry,
+  reapDeadRunningSessions,
   type LocalSessionCreateRuntime,
   type LocalSessionDestroyRuntime,
   type LocalSessionRecipe,
   type LocalSessionStatusEntry,
   type LocalSessionStatusRuntime,
   type LocalSessionSummary,
+  type LocalSessionTeardownRuntime,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import {
   createDesktopSession,
   destroyDesktopSession,
   getDesktopSessionStatus,
+  teardownDesktopSession,
 } from "@pickforge/picklab-desktop-linux";
 import {
   parseIntArg,
@@ -104,6 +109,21 @@ const destroyRuntime: LocalSessionDestroyRuntime = {
   android: { destroy: (id) => destroyAndroidSession(id) },
 };
 
+const reaperRuntime: LocalSessionTeardownRuntime = {
+  desktop: {
+    teardown: (id, finalize) =>
+      teardownDesktopSession(id, process.env, finalize),
+  },
+  browser: {
+    teardown: (id, finalize) =>
+      teardownBrowserSession(id, process.env, finalize),
+  },
+  android: {
+    teardown: (id, finalize) =>
+      teardownAndroidSession(id, process.env, {}, finalize),
+  },
+};
+
 function describeCreated(summary: LocalSessionSummary): string {
   if (summary.type === "desktop") {
     const vnc =
@@ -153,6 +173,7 @@ export async function runSessionCreate(
         (viewerMode === "auto" &&
           (!createsWritableDesktop || opts.vncControl !== true)));
 
+    await reapDeadRunningSessions(process.env, reaperRuntime);
     const sessions = await createLocalSessions(opts.type, createRuntime(opts));
 
     const lines = sessions.map(describeCreated);

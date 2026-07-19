@@ -251,6 +251,27 @@ describe("sdk auto-detection in the execution layer", () => {
 });
 
 describe("stopEmulator confirmation", () => {
+  it("does not send adb kill when the recorded pid is already dead", async () => {
+    const marker = path.join(tmpRoot, `adb-kill-${sdkCounter + 1}.txt`);
+    const sdk = makeFakeSdk(`printf '%s\\n' "$*" >> ${JSON.stringify(marker)}`);
+    const registryEnv = makeRegistryEnv();
+    const pid = await deadPid();
+    expect(tryReserveConsolePort(5568, registryEnv, pid)).toBe(true);
+
+    expect(
+      await stopEmulator({
+        serial: "emulator-5568",
+        pid,
+        sdk,
+        env: { PATH: "" },
+        registryEnv,
+        timeoutMs: 300,
+      }),
+    ).toBe(true);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(consolePortLockPath(5568, registryEnv))).toBe(false);
+  });
+
   it("returns false when adb devices cannot confirm the shutdown", async () => {
     const sdk = makeFakeSdk(
       [

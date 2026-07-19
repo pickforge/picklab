@@ -28,6 +28,7 @@ import {
   destroyBrowserSession,
   getBrowserSessionStatus,
   resolveLiveBrowserSession,
+  teardownBrowserSession,
   type BrowserSessionHandle,
 } from "../src/index.js";
 import { fakePath, writeExecutable, writeFakeChrome } from "./fakes.js";
@@ -57,6 +58,15 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+function reapBrowserSessions() {
+  return reapDeadRunningSessions(registryEnv, {
+    browser: {
+      teardown: (id, finalize) =>
+        teardownBrowserSession(id, registryEnv, finalize),
+    },
+  });
+}
 
 function spawnEnvFor(
   mode: FakeChromeMode,
@@ -538,9 +548,7 @@ describe.skipIf(!hasXvfb)("destroyBrowserSession (fake binaries)", () => {
         registryEnv,
       );
       expect(
-        (await reapDeadRunningSessions(registryEnv)).map(
-          (reaped) => reaped.id,
-        ),
+        (await reapBrowserSessions()).map((reaped) => reaped.id),
       ).toEqual([session.id]);
       expect(await getSession(session.id, registryEnv)).toBeUndefined();
       expect(fs.existsSync(session.profileDir)).toBe(false);
@@ -891,7 +899,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
 
       await stopPid(childPid, { timeoutMs: 1000 });
       expect(
-        (await reapDeadRunningSessions(registryEnv)).map((record) => record.id),
+        (await reapBrowserSessions()).map((record) => record.id),
       ).toEqual([id]);
       expect(await getSession(id, registryEnv)).toBeUndefined();
       expect(isPidAlive(failedXvfbPid)).toBe(false);
@@ -1065,6 +1073,13 @@ describe("browser record inspection (no live processes)", () => {
       true,
     );
     // The confinement guard must not have deleted the out-of-tree directory.
+    expect(fs.existsSync(outside)).toBe(true);
+    expect((await getSession(rec.id, registryEnv))?.meta?.reaperCleanupPending).toBe(
+      true,
+    );
+
+    expect(await reapBrowserSessions()).toEqual([]);
+    expect(await getSession(rec.id, registryEnv)).toBeDefined();
     expect(fs.existsSync(outside)).toBe(true);
   });
 

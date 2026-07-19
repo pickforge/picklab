@@ -100,6 +100,7 @@ export {
   createAndroidSession,
   destroyAndroidSession,
   getAndroidSessionStatus,
+  teardownAndroidSession,
   type AndroidSessionHandle,
   type AndroidSessionOpOptions,
   type AndroidSessionStatus,

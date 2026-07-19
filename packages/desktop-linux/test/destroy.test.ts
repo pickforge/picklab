@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 const FAILING_PID = 424_242;
 const STUCK_PID = 535_353;
+let allowFailingPidStop = false;
 
 vi.mock("@pickforge/picklab-core", async (importOriginal) => {
   const actual =
@@ -13,7 +14,7 @@ vi.mock("@pickforge/picklab-core", async (importOriginal) => {
     ...actual,
     processIdentityMatches: vi.fn(() => true),
     stopPid: vi.fn(async (pid: number) => {
-      if (pid === FAILING_PID) {
+      if (pid === FAILING_PID && !allowFailingPidStop) {
         throw new Error(`kill EPERM (pid ${pid})`);
       }
       if (pid === STUCK_PID) {
@@ -23,7 +24,7 @@ vi.mock("@pickforge/picklab-core", async (importOriginal) => {
     }),
     stopProcessGroupVerified: vi.fn(
       async ({ pid }: { pid: number; startTicks: number }) => {
-        if (pid === FAILING_PID) {
+        if (pid === FAILING_PID && !allowFailingPidStop) {
           throw new Error(`kill EPERM (pid ${pid})`);
         }
         return {
@@ -39,12 +40,16 @@ import {
   REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   getSession,
+  reapDeadRunningSessions,
   stopPid,
   stopProcessGroupVerified,
   updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { destroyDesktopSession } from "../src/session.js";
+import {
+  destroyDesktopSession,
+  teardownDesktopSession,
+} from "../src/session.js";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-destroy-test-"));
 const registryEnv: EnvLike = {
@@ -101,13 +106,19 @@ describe("destroyDesktopSession exception safety", () => {
       xvfbPid: FAILING_PID,
       vncPid: FAILING_PID,
     });
-    vi.mocked(stopPid).mockResolvedValueOnce(true);
-    vi.mocked(stopProcessGroupVerified).mockResolvedValueOnce({
-      outcome: "terminated",
-      signaled: true,
-    });
-    await destroyDesktopSession(id, registryEnv);
-    expect(await getSession(id, registryEnv)).toBeUndefined();
+    allowFailingPidStop = true;
+    try {
+      const reaped = await reapDeadRunningSessions(registryEnv, {
+        desktop: {
+          teardown: (sessionId, finalize) =>
+            teardownDesktopSession(sessionId, registryEnv, finalize),
+        },
+      });
+      expect(reaped.map((record) => record.id)).toEqual([id]);
+      expect(await getSession(id, registryEnv)).toBeUndefined();
+    } finally {
+      allowFailingPidStop = false;
+    }
   });
 
   it("still stops xvfb when stopping vnc throws", async () => {
