@@ -197,6 +197,13 @@ describe("picklab doctor", () => {
     const skipped = (report.fix.skipped as string[]).join("\n");
     expect(skipped).toContain("avd:");
     expect(skipped).toContain("lab-user:");
+    expect(skipped).toContain(
+      'sudo not found on PATH; cannot provision lab user "picklab-lab". ' +
+        "Install sudo, or create the user manually as root: " +
+        "useradd -r -M -s /usr/sbin/nologin picklab-lab",
+    );
+    expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
+      .toEqual(["avd", "lab-user"]);
   });
 
   it("skips AVD creation under --fix without consent in a non-interactive session", async () => {
@@ -210,6 +217,8 @@ describe("picklab doctor", () => {
     const skipped = (report.fix.skipped as string[]).join("\n");
     expect(skipped).toContain("avd: skipped (requires consent");
     expect(skipped).toContain("--yes");
+    expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
+      .toEqual(["avd", "lab-user"]);
     expect(
       (report.fix.steps as Array<{ id: string }>).map((step) => step.id),
     ).not.toContain("create-avd");
@@ -318,6 +327,27 @@ describe("picklab init", () => {
     expect(fs.existsSync(path.join(sdk, "avdmanager.log"))).toBe(false);
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("reports required AVD consent refusal before the required-check error", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    const env = makeEnv(tmpDir, { sdk });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      ["init", "--profile", "android", "--create-avd", "--json"],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.errors).toHaveLength(2);
+    expect(report.errors[0]).toContain("without consent");
+    expect(report.errors[1]).toContain('Required check "avd" failed');
+    expect(report.plan.map((step: { id: string }) => step.id)).toEqual([
+      "project-config",
+      "picklab-home",
+    ]);
   });
 
   it("initializes flutter-desktop without planning lab-user sudo steps", async () => {
@@ -491,8 +521,100 @@ describe("picklab init", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
+    expect((report.plan as Array<{ id: string }>).map((step) => step.id)).toEqual(
+      ["project-config", "picklab-home"],
+    );
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("retains earlier AVD sections when later lab-user privilege is unavailable", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    const env = makeEnv(tmpDir, { sdk });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "generic",
+        "--create-avd",
+        "--create-lab-user",
+        "--yes",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.plan.map((step: { id: string }) => step.id)).toEqual([
+      "project-config",
+      "picklab-home",
+      "create-avd",
+      "persist-avd",
+    ]);
+    expect(report.errors.join("\n")).toContain("sudo not found");
+    expect(fs.existsSync(path.join(sdk, "avdmanager.log"))).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
+    expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("reports an unrelated planning error and missing privilege support", async () => {
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"));
+    const env = makeEnv(tmpDir, { sdk });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "generic",
+        "--create-avd",
+        "--create-lab-user",
+        "--yes",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.errors[0]).toContain("sdkmanager");
+    expect(report.errors[1]).toContain("sudo not found");
+    expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
+    expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("materializes selected sudo steps even when another section blocks execution", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"));
+    const env = makeEnv(tmpDir, {
+      sdk,
+      bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "generic",
+        "--create-avd",
+        "--create-lab-user",
+        "--yes",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    const useradd = report.plan.find(
+      (step: { id: string }) => step.id === "useradd",
+    );
+    expect(useradd.command.args.slice(0, 2)).toEqual(["-n", "useradd"]);
+    expect(fs.existsSync(sudoLog)).toBe(false);
   });
 
   it("prints the full provisioning plan under --dry-run for android", async () => {
@@ -560,6 +682,42 @@ describe("picklab init", () => {
     ) as Record<string, any>;
     expect(globalConfig.android.avdName).toBe("picklab-avd");
   });
+
+  it("preserves unprivileged and privileged step order in one init", async () => {
+    const sequenceLog = path.join(tmpDir, "sequence.log");
+    const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
+    writeScript(
+      path.join(sdk, "cmdline-tools", "latest", "bin", "avdmanager"),
+      `echo avdmanager >> ${sequenceLog}\nexit 0`,
+    );
+    const env = makeEnv(tmpDir, {
+      sdk,
+      bins: { sudo: `echo "sudo:$*" >> ${sequenceLog}\nexit 0` },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "generic",
+        "--create-avd",
+        "--create-lab-user",
+        "--yes",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+
+    expect(result.code).toBe(0);
+    const sequence = fs.readFileSync(sequenceLog, "utf8").trim().split("\n");
+    expect(sequence[0]).toBe("avdmanager");
+    expect(sequence.slice(1).every((line) => line.startsWith("sudo:-n "))).toBe(
+      true,
+    );
+  });
 });
 
 describe("picklab setup lab-user", () => {
@@ -602,6 +760,55 @@ describe("picklab setup lab-user", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect((report.errors as string[]).join("\n")).toContain("--yes");
+    expect((report.plan as Array<any>)[0].command.args).toEqual([
+      "-n",
+      "useradd",
+      "-r",
+      "-M",
+      "-s",
+      "/usr/sbin/nologin",
+      "picklab-lab",
+    ]);
+  });
+
+  it("does not print the already-existing user before consent", async () => {
+    const home = path.join(tmpDir, "missing-home");
+    const env = makeEnv(tmpDir, {
+      bins: {
+        getent: "echo 'picklab-lab:x:999:999::/var/empty:/bin/false'",
+        sudo: "exit 0",
+      },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--home", home],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stdout).not.toContain('User "picklab-lab" already exists.');
+    expect(fs.existsSync(home)).toBe(false);
+  });
+
+  it("prints the already-existing user before approved dry-run logs", async () => {
+    const home = path.join(tmpDir, "missing-home");
+    const env = makeEnv(tmpDir, {
+      bins: {
+        getent: "echo 'picklab-lab:x:999:999::/var/empty:/bin/false'",
+        sudo: "exit 0",
+      },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--home", home, "--yes", "--dry-run"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(0);
+    const existsIndex = result.stdout.indexOf(
+      'User "picklab-lab" already exists.',
+    );
+    expect(existsIndex).toBeGreaterThanOrEqual(0);
+    expect(result.stdout.indexOf("[dry-run]")).toBeGreaterThan(existsIndex);
+    expect(fs.existsSync(home)).toBe(false);
   });
 
   it("fails closed when sudo is unavailable", async () => {
@@ -614,6 +821,7 @@ describe("picklab setup lab-user", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
+    expect(report.plan).toEqual([]);
   });
 
   it("runs each provisioning step through sudo and persists the config", async () => {
@@ -644,6 +852,41 @@ describe("picklab setup lab-user", () => {
       name: "picklab-lab",
       home: "/var/lib/picklab/lab-home",
     });
+  });
+
+  it("returns redacted partial results when a privileged step fails", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const env = makeEnv(tmpDir, {
+      bins: {
+        sudo:
+          `printf '%s\\n' "$*" >> ${sudoLog}\n` +
+          `if [ "$2" = "chmod" ]; then ` +
+          `echo 'API_TOKEN=planted-secret' >&2; exit 7; fi\nexit 0`,
+      },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--yes", "--json"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(
+      (report.results as Array<{ id: string; ok: boolean }>).map((step) => [
+        step.id,
+        step.ok,
+      ]),
+    ).toEqual([
+      ["useradd", true],
+      ["mkdir-home", true],
+      ["chown-home", true],
+      ["chmod-home", false],
+    ]);
+    expect(JSON.stringify(report)).toContain("API_TOKEN=[REDACTED]");
+    expect(JSON.stringify(report)).not.toContain("planted-secret");
+    expect(fs.existsSync(path.join(env.PICKLAB_HOME!, "config.json"))).toBe(
+      false,
+    );
   });
 });
 

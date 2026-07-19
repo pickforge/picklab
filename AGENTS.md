@@ -34,6 +34,8 @@ Repo-local guide for agents working in PickLab.
 - MCP screenshot `out` is confined under the project dir; the CLI `--out` stays unrestricted.
 - `android adb` only falls back to a raw, untargeted call when there is no running android session; ambiguous sessions fail closed (exit 1).
 - MCP tools never invoke sudo.
+- Provisioning planners emit raw commands; the executor owns consent, dry-run,
+  privileged routing, and redacted public plans.
 
 ## Testing notes
 

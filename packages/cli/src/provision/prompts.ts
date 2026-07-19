@@ -1,4 +1,5 @@
 import readline from "node:readline/promises";
+import type { ConsentDecision } from "./executor.js";
 
 export type ConfirmAnswer = "yes" | "no" | "non-interactive";
 
@@ -27,4 +28,15 @@ export async function confirm(
   } finally {
     rl.close();
   }
+}
+
+export function toConsentDecision(
+  answer: ConfirmAnswer,
+  reasons: { declined: string; cancelled: string },
+): ConsentDecision {
+  if (answer === "yes") return { kind: "approved" };
+  return {
+    kind: answer === "no" ? "declined" : "cancelled",
+    reason: answer === "no" ? reasons.declined : reasons.cancelled,
+  };
 }
