@@ -16,9 +16,18 @@ import {
   getBrowserSessionStatus,
 } from "@pickforge/picklab-browser";
 import {
+  createLocalSessions,
+  destroyLocalSessions,
   getSession,
   listSessions,
   loadConfig,
+  localSessionStatusEntry,
+  type LocalSessionCreateRuntime,
+  type LocalSessionDestroyRuntime,
+  type LocalSessionLifecycle,
+  type LocalSessionStatusEntry,
+  type LocalSessionStatusRuntime,
+  type LocalSessionSummary,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import {
@@ -29,14 +38,8 @@ import {
 import { runTool, type ServerContext } from "../context.js";
 import { withMcpEvidence } from "../evidence.js";
 
-interface SessionSummary extends Record<string, unknown> {
-  id: string;
-  type: "desktop" | "android" | "browser";
-}
-
-export interface SessionLifecycle {
+export interface SessionLifecycle extends LocalSessionLifecycle {
   onProgress?: (message: string) => void;
-  signal?: AbortSignal;
 }
 
 export function progressReporter(
@@ -58,82 +61,76 @@ export function progressReporter(
   };
 }
 
-async function createDesktopLeg(
+function createRuntime(
   ctx: ServerContext,
   args: {
     width?: number;
     height?: number;
     vnc?: boolean;
     vncControl?: boolean;
+    avdName?: string;
   },
-): Promise<SessionSummary> {
-  const handle = await createDesktopSession({
-    projectDir: ctx.projectDir,
-    registryEnv: ctx.env,
-    env: ctx.env,
-    width: args.width,
-    height: args.height,
-    vnc: args.vnc,
-    vncControl: args.vncControl,
-  });
-  const summary: SessionSummary = {
-    id: handle.id,
-    type: "desktop",
-    display: handle.display,
-    logDir: handle.logDir,
-  };
-  if (handle.vncPort !== undefined) {
-    summary.vncPort = handle.vncPort;
-    summary.vncViewOnly = handle.vncViewOnly;
-  }
-  return summary;
-}
-async function createBrowserLeg(
-  ctx: ServerContext,
-  args: { width?: number; height?: number },
   lifecycle: SessionLifecycle,
-): Promise<SessionSummary> {
-  const handle = await createBrowserSession({
-    projectDir: ctx.projectDir,
-    registryEnv: ctx.env,
-    env: ctx.env,
-    width: args.width,
-    height: args.height,
-    signal: lifecycle.signal,
-  });
+): LocalSessionCreateRuntime {
   return {
-    id: handle.id,
-    type: "browser",
-    display: handle.display,
-    cdpPort: handle.cdpPort,
-    profileDir: handle.profileDir,
-    binaryPath: handle.binaryPath,
-    logDir: handle.logDir,
+    desktop: {
+      create: () =>
+        createDesktopSession({
+          projectDir: ctx.projectDir,
+          registryEnv: ctx.env,
+          env: ctx.env,
+          width: args.width,
+          height: args.height,
+          vnc: args.vnc,
+          vncControl: args.vncControl,
+        }),
+      destroy: (id) => destroyDesktopSession(id, ctx.env),
+    },
+    browser: {
+      create: () =>
+        createBrowserSession({
+          projectDir: ctx.projectDir,
+          registryEnv: ctx.env,
+          env: ctx.env,
+          width: args.width,
+          height: args.height,
+          signal: lifecycle.signal,
+        }),
+    },
+    android: {
+      create: async () => {
+        const config = await loadConfig(ctx.projectDir, ctx.env);
+        const avdName = args.avdName ?? config.android?.avdName;
+        return createAndroidSession({
+          projectDir: ctx.projectDir,
+          registryEnv: ctx.env,
+          env: ctx.env,
+          onProgress: lifecycle.onProgress,
+          signal: lifecycle.signal,
+          ...(avdName === undefined ? {} : { avdName }),
+        });
+      },
+    },
   };
 }
 
-async function createAndroidLeg(
-  ctx: ServerContext,
-  args: { avdName?: string },
-  lifecycle: SessionLifecycle,
-): Promise<SessionSummary> {
-  const config = await loadConfig(ctx.projectDir, ctx.env);
-  const avdName = args.avdName ?? config.android?.avdName;
-  const handle = await createAndroidSession({
-    projectDir: ctx.projectDir,
-    registryEnv: ctx.env,
-    env: ctx.env,
-    onProgress: lifecycle.onProgress,
-    signal: lifecycle.signal,
-    ...(avdName === undefined ? {} : { avdName }),
-  });
+function statusRuntime(ctx: ServerContext): LocalSessionStatusRuntime {
   return {
-    id: handle.id,
-    type: "android",
-    avdName: handle.avdName,
-    serial: handle.serial,
-    consolePort: handle.consolePort,
-    logDir: handle.logDir,
+    desktop: { status: (id) => getDesktopSessionStatus(id, ctx.env) },
+    browser: { status: (id) => getBrowserSessionStatus(id, ctx.env) },
+    android: {
+      status: (id) => getAndroidSessionStatus(id, ctx.env, { env: ctx.env }),
+    },
+  };
+}
+
+function destroyRuntime(ctx: ServerContext): LocalSessionDestroyRuntime {
+  return {
+    desktop: { destroy: (id) => destroyDesktopSession(id, ctx.env) },
+    browser: { destroy: (id) => destroyBrowserSession(id, ctx.env) },
+    android: {
+      destroy: (id) => destroyAndroidSession(id, ctx.env, { env: ctx.env }),
+    },
   };
 }
 
@@ -148,35 +145,17 @@ export async function createSessions(
     avdName?: string;
   },
   lifecycle: SessionLifecycle = {},
-): Promise<SessionSummary[]> {
-  const type = args.type ?? "desktop";
-  const sessions: SessionSummary[] = [];
-  if (type === "desktop" || type === "desktop+android") {
-    sessions.push(await createDesktopLeg(ctx, args));
-  }
-  if (type === "browser") {
-    sessions.push(await createBrowserLeg(ctx, args, lifecycle));
-  }
-  if (type === "android" || type === "desktop+android") {
-    try {
-      if (lifecycle.signal?.aborted === true) {
-        throw new Error("Session creation aborted by the client");
-      }
-      sessions.push(await createAndroidLeg(ctx, args, lifecycle));
-    } catch (error) {
-      const desktop = sessions.find((session) => session.type === "desktop");
-      if (desktop !== undefined) {
-        await destroyDesktopSession(desktop.id, ctx.env).catch(() => {});
-      }
-      throw error;
-    }
-  }
-  return sessions;
+): Promise<LocalSessionSummary[]> {
+  return createLocalSessions(
+    args.type ?? "desktop",
+    createRuntime(ctx, args, lifecycle),
+    lifecycle,
+  );
 }
 
 export async function recordCreatedSessionsEvidence(
   ctx: ServerContext,
-  sessions: readonly SessionSummary[],
+  sessions: readonly LocalSessionSummary[],
   tool: "session_create" | "android_start",
 ): Promise<void> {
   for (const session of sessions) {
@@ -195,91 +174,12 @@ export async function recordCreatedSessionsEvidence(
 export async function sessionStatusEntry(
   ctx: ServerContext,
   record: SessionRecord,
-): Promise<Record<string, unknown>> {
-  const entry: Record<string, unknown> = {
-    id: record.id,
-    type: record.type,
-    status: record.status,
-    createdAt: record.createdAt,
-    projectDir: record.projectDir,
-  };
-  if (record.type === "browser") {
-    const browserStatus = await getBrowserSessionStatus(record.id, ctx.env);
-    const desktopStatus = await getDesktopSessionStatus(record.id, ctx.env);
-    if (record.status === "running" && !browserStatus.alive) {
-      entry.status = "dead";
-    }
-    entry.desktop = {
-      ...record.desktop,
-      xvfbAlive: browserStatus.xvfbAlive,
-      vncAlive: desktopStatus.vncAlive,
-      displayAlive: browserStatus.displayAlive,
-    };
-    entry.browser = {
-      ...record.browser,
-      browserAlive: browserStatus.browserAlive,
-    };
-    entry.viewer = {
-      endpoint:
-        record.desktop?.vncPort === undefined
-          ? null
-          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
-      ready: desktopStatus.vncAlive,
-      readOnly: record.desktop?.vncViewOnly === true,
-      hostGuiLaunchSupported: false,
-    };
-  } else if (record.desktop !== undefined) {
-    const status = await getDesktopSessionStatus(record.id, ctx.env);
-    if (record.status === "running" && !status.xvfbAlive) {
-      entry.status = "dead";
-    }
-    entry.desktop = {
-      ...record.desktop,
-      xvfbAlive: status.xvfbAlive,
-      vncAlive: status.vncAlive,
-      displayAlive: status.displayAlive,
-    };
-    entry.viewer = {
-      endpoint:
-        record.desktop.vncPort === undefined
-          ? null
-          : `vnc://127.0.0.1:${record.desktop.vncPort}`,
-      ready: status.vncAlive,
-      readOnly: record.desktop.vncViewOnly === true,
-      hostGuiLaunchSupported: false,
-    };
-  }
-  if (record.android !== undefined) {
-    const status = await getAndroidSessionStatus(record.id, ctx.env, {
-      env: ctx.env,
-    });
-    if (record.status === "running" && !status.emulatorAlive) {
-      entry.status = "dead";
-    }
-    entry.android = {
-      ...record.android,
-      emulatorAlive: status.emulatorAlive,
-      deviceState: status.deviceState,
-    };
+): Promise<LocalSessionStatusEntry> {
+  const entry = await localSessionStatusEntry(record, statusRuntime(ctx));
+  if (entry.viewer !== undefined) {
+    entry.viewer.hostGuiLaunchSupported = false;
   }
   return entry;
-}
-
-async function destroyRecord(
-  ctx: ServerContext,
-  record: SessionRecord,
-): Promise<void> {
-  if (record.type === "desktop") {
-    await destroyDesktopSession(record.id, ctx.env);
-  } else if (record.type === "browser") {
-    await destroyBrowserSession(record.id, ctx.env);
-  } else if (record.type === "android") {
-    await destroyAndroidSession(record.id, ctx.env, { env: ctx.env });
-  } else {
-    throw new Error(
-      `Cannot destroy session ${record.id} of type "${record.type}"`,
-    );
-  }
 }
 
 export function registerSessionTools(
@@ -394,30 +294,26 @@ export function registerSessionTools(
         } else {
           records.push(...(await listSessions(ctx.env)));
         }
-        const destroyed: string[] = [];
-        const errors: string[] = [];
-        for (const record of records) {
-          try {
-            await withMcpEvidence(
-              ctx,
-              {
-                sessionId: record.id,
-                tool: "session_destroy",
-                target: { name: record.type },
-                refreshReportAfterRecord: true,
-              },
-              async () => {
-                await destroyRecord(ctx, record);
-                return { data: {} };
-              },
-            );
-            destroyed.push(record.id);
-          } catch (error) {
-            errors.push(
-              `${record.id}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
+        const { destroyed, errors } = await destroyLocalSessions(
+          records,
+          destroyRuntime(ctx),
+          {
+            aroundDestroy: (record, destroy) =>
+              withMcpEvidence(
+                ctx,
+                {
+                  sessionId: record.id,
+                  tool: "session_destroy",
+                  target: { name: record.type },
+                  refreshReportAfterRecord: true,
+                },
+                async () => {
+                  await destroy();
+                  return { data: {} };
+                },
+              ).then(() => undefined),
+          },
+        );
         return { data: { destroyed }, errors };
       }),
   );

@@ -132,6 +132,28 @@ export {
 } from "./target.js";
 
 export {
+  createLocalSessions,
+  destroyLocalSession,
+  destroyLocalSessions,
+  localSessionStatusEntry,
+  type AndroidLegHandle,
+  type AndroidLiveStatus,
+  type BrowserLegHandle,
+  type BrowserLiveStatus,
+  type DesktopLegHandle,
+  type DesktopLiveStatus,
+  type DestroyLocalSessionsOptions,
+  type DestroyLocalSessionsResult,
+  type LocalSessionCreateRuntime,
+  type LocalSessionDestroyRuntime,
+  type LocalSessionLifecycle,
+  type LocalSessionRecipe,
+  type LocalSessionStatusEntry,
+  type LocalSessionStatusRuntime,
+  type LocalSessionSummary,
+} from "./session-lifecycle.js";
+
+export {
   REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
