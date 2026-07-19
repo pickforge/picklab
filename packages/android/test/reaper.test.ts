@@ -21,6 +21,7 @@ vi.mock("../src/emulator.js", async (importOriginal) => {
 
 import {
   REAPER_CLEANUP_PENDING_META_KEY,
+  beginEvidenceRun,
   getSession,
   isPidAlive,
   reapDeadRunningSessions,
@@ -80,6 +81,8 @@ describe("android reaper tracking", () => {
       bootTimeoutMs: 5_000,
     });
 
+    const { run } = await beginEvidenceRun(projectDir, session.id);
+
     forceStopFailure = true;
     try {
       await expect(
@@ -103,5 +106,10 @@ describe("android reaper tracking", () => {
     expect(reaped.map((record) => record.id)).toContain(session.id);
     expect(await getSession(session.id, registryEnv)).toBeUndefined();
     expect(isPidAlive(session.emulatorPid)).toBe(false);
+    expect(
+      JSON.parse(
+        await fs.promises.readFile(path.join(run.dir, "manifest.json"), "utf8"),
+      ),
+    ).toMatchObject({ status: "failed" });
   }, 20_000);
 });

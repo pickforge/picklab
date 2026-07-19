@@ -1066,6 +1066,13 @@ describe("browser record inspection (no live processes)", () => {
     );
     // The confinement guard must not have deleted the out-of-tree directory.
     expect(fs.existsSync(outside)).toBe(true);
+    expect((await getSession(rec.id, registryEnv))?.meta?.reaperCleanupPending).toBe(
+      true,
+    );
+
+    expect(await reapDeadRunningSessions(registryEnv)).toEqual([]);
+    expect(await getSession(rec.id, registryEnv)).toBeDefined();
+    expect(fs.existsSync(outside)).toBe(true);
   });
 
   it("refuses a symlinked profile and never removes its outside target", async () => {
