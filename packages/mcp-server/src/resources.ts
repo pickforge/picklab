@@ -10,15 +10,15 @@ import {
   EVIDENCE_REPORT,
   getSession,
   isEvidenceRun,
-  listRuns,
   listSessions,
+  openRunCatalog,
   parseActionsJournal,
   redactSecrets,
-  runsDir,
   sortEvidenceRecords,
+  type RunCatalog,
+  type RunCatalogEntry,
 } from "@pickforge/picklab-core";
 import type { ServerContext } from "./context.js";
-import { isSafeRunId } from "./tools/artifacts.js";
 import { sessionStatusEntry } from "./tools/session.js";
 
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -49,12 +49,11 @@ function decodeVariable(variables: Variables, label: string): string {
 }
 
 function runFilePath(
-  ctx: ServerContext,
-  runId: string,
+  entry: RunCatalogEntry,
   subdir: "screenshots" | "logs",
   name: string,
 ): string {
-  const base = path.join(runsDir(ctx.projectDir), runId, subdir);
+  const base = path.join(entry.dir, subdir);
   const resolved = path.resolve(base, name);
   if (resolved !== path.join(base, name)) {
     throw new Error(`Invalid resource path: ${name}`);
@@ -66,24 +65,17 @@ function runFilePath(
 // outside the runs root). Returns true when the run dir is safe, false when it
 // is missing or escapes the runs root via symlinks.
 async function isRunDirSafe(
-  ctx: ServerContext,
-  runId: string,
+  catalog: RunCatalog,
+  entry: RunCatalogEntry,
 ): Promise<boolean> {
-  const root = runsDir(ctx.projectDir);
-  const runDir = path.join(root, runId);
+  if ((await catalog.refresh(entry)) === undefined) return false;
+  const root = catalog.roots[entry.rootPrecedence];
+  if (root === undefined) return false;
   try {
-    // The real runs root must be exactly `.picklab/runs` under the real
-    // project dir. This rejects a symlinked `.picklab` or `.picklab/runs`
-    // ancestor that would redirect reads to outside runs (core listRuns
-    // applies the same confinement), while allowing the project dir itself to
-    // be a symlink.
-    const realProject = await fs.promises.realpath(ctx.projectDir);
-    const realRoot = await fs.promises.realpath(root);
-    if (realRoot !== path.join(realProject, ".picklab", "runs")) {
-      return false;
-    }
-    const realRunDir = await fs.promises.realpath(runDir);
-    return realRunDir === path.join(realRoot, runId);
+    const realRoot = await fs.promises.realpath(entry.rootDir);
+    if (realRoot !== root.expectedRealDir) return false;
+    const realRunDir = await fs.promises.realpath(entry.dir);
+    return realRunDir === path.join(realRoot, entry.dirName);
   } catch {
     return false;
   }
@@ -93,13 +85,13 @@ async function isRunDirSafe(
 // the file (or subdir) does not exist, return so the caller's read produces its
 // usual not-found error.
 async function assertWithinSubdir(
-  ctx: ServerContext,
-  runId: string,
+  catalog: RunCatalog,
+  entry: RunCatalogEntry,
   subdir: "screenshots" | "logs",
   filePath: string,
   notFound: () => Error,
 ): Promise<void> {
-  if (!(await isRunDirSafe(ctx, runId))) {
+  if (!(await isRunDirSafe(catalog, entry))) {
     throw notFound();
   }
   // Reject a symlinked artifact file even when its target stays inside the run
@@ -115,7 +107,7 @@ async function assertWithinSubdir(
     }
     return;
   }
-  const runDir = path.join(runsDir(ctx.projectDir), runId);
+  const runDir = entry.dir;
   const base = path.join(runDir, subdir);
   let realRunDir: string;
   let realBase: string;
@@ -135,87 +127,6 @@ async function assertWithinSubdir(
   }
   if (realFile !== realBase && !realFile.startsWith(realBase + path.sep)) {
     throw notFound();
-  }
-}
-
-// Reject a missing fixed run file, a symlink, or a real location that escapes
-// the run directory.
-async function assertRootFileWithinRun(
-  ctx: ServerContext,
-  runId: string,
-  fileName: string,
-  filePath: string,
-  notFound: () => Error,
-): Promise<fs.Stats> {
-  if (!(await isRunDirSafe(ctx, runId))) {
-    throw notFound();
-  }
-  let expectedEntry: fs.Stats;
-  try {
-    expectedEntry = await fs.promises.lstat(filePath);
-    if (expectedEntry.isSymbolicLink() || !expectedEntry.isFile()) {
-      throw notFound();
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === undefined) {
-      throw error;
-    }
-    throw notFound();
-  }
-  const runDir = path.join(runsDir(ctx.projectDir), runId);
-  let realRunDir: string;
-  let realFile: string;
-  try {
-    realRunDir = await fs.promises.realpath(runDir);
-    realFile = await fs.promises.realpath(filePath);
-  } catch {
-    throw notFound();
-  }
-  if (realFile !== path.join(realRunDir, fileName)) {
-    throw notFound();
-  }
-  return expectedEntry;
-}
-
-function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-// Open the validated file without following its final component, bind the
-// descriptor to the validated inode, and reject a pathname swap during read.
-async function readTextFileNoFollow(
-  filePath: string,
-  expected: fs.Stats,
-  notFound: () => Error,
-): Promise<string> {
-  let handle: fs.promises.FileHandle;
-  try {
-    handle = await fs.promises.open(
-      filePath,
-      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
-    );
-  } catch {
-    throw notFound();
-  }
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || !sameFileIdentity(opened, expected)) {
-      throw notFound();
-    }
-    const raw = await handle.readFile("utf8");
-    const current = await fs.promises.lstat(filePath);
-    if (
-      current.isSymbolicLink() ||
-      !current.isFile() ||
-      !sameFileIdentity(opened, current)
-    ) {
-      throw notFound();
-    }
-    return raw;
-  } catch {
-    throw notFound();
-  } finally {
-    await handle.close();
   }
 }
 
@@ -245,48 +156,16 @@ async function readTailUtf8(
   }
 }
 
-async function isRootFileSafe(
-  ctx: ServerContext,
-  runId: string,
-  fileName: string,
-): Promise<boolean> {
-  if (!(await isRunDirSafe(ctx, runId))) return false;
-  const runDir = path.join(runsDir(ctx.projectDir), runId);
-  const filePath = path.join(runDir, fileName);
-  try {
-    const entry = await fs.promises.lstat(filePath);
-    if (entry.isSymbolicLink() || !entry.isFile()) return false;
-    const realRunDir = await fs.promises.realpath(runDir);
-    const realFile = await fs.promises.realpath(filePath);
-    return realFile === path.join(realRunDir, fileName);
-  } catch {
-    return false;
-  }
-}
-
-// List runs whose run id is safe and whose manifest passes realpath
-// confinement, so symlinked manifests are never exposed via listings.
-async function listSafeRuns(
-  ctx: ServerContext,
-): Promise<Awaited<ReturnType<typeof listRuns>>> {
-  const safe: Awaited<ReturnType<typeof listRuns>> = [];
-  for (const manifest of await listRuns(ctx.projectDir)) {
-    if (!isSafeRunId(manifest.runId)) continue;
-    if (!(await isRootFileSafe(ctx, manifest.runId, "manifest.json"))) continue;
-    safe.push(manifest);
-  }
-  return safe;
-}
-
 async function listEvidenceRunFiles(
   ctx: ServerContext,
   fileName: typeof EVIDENCE_ACTION_LOG | typeof EVIDENCE_REPORT,
 ): Promise<string[]> {
+  const catalog = await openRunCatalog(ctx.projectDir);
   const runIds: string[] = [];
-  for (const manifest of await listSafeRuns(ctx)) {
-    if (!isEvidenceRun(manifest)) continue;
-    if (!(await isRootFileSafe(ctx, manifest.runId, fileName))) continue;
-    runIds.push(manifest.runId);
+  for (const entry of await catalog.list()) {
+    if (!isEvidenceRun(entry.manifest)) continue;
+    if (!(await catalog.hasRootFile(entry, fileName))) continue;
+    runIds.push(entry.manifest.runId);
   }
   return runIds;
 }
@@ -296,8 +175,9 @@ async function listRunFiles(
   subdir: "screenshots" | "logs",
 ): Promise<Array<{ runId: string; name: string }>> {
   const entries: Array<{ runId: string; name: string }> = [];
-  for (const manifest of await listSafeRuns(ctx)) {
-    const runDir = path.join(runsDir(ctx.projectDir), manifest.runId);
+  const catalog = await openRunCatalog(ctx.projectDir);
+  for (const entry of await catalog.list()) {
+    const runDir = entry.dir;
     const dir = path.join(runDir, subdir);
     try {
       const realRunDir = await fs.promises.realpath(runDir);
@@ -315,14 +195,14 @@ async function listRunFiles(
     }
     for (const name of names) {
       if (!SAFE_NAME_PATTERN.test(name) || name.includes("..")) continue;
-      let entry: fs.Stats;
+      let fileStat: fs.Stats;
       try {
-        entry = await fs.promises.lstat(path.join(dir, name));
+        fileStat = await fs.promises.lstat(path.join(dir, name));
       } catch {
         continue;
       }
-      if (entry.isSymbolicLink()) continue;
-      entries.push({ runId: manifest.runId, name });
+      if (fileStat.isSymbolicLink()) continue;
+      entries.push({ runId: entry.manifest.runId, name });
     }
   }
   return entries;
@@ -338,7 +218,8 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
       mimeType: "application/json",
     },
     async (uri) => {
-      const runs = (await listSafeRuns(ctx)).map((manifest) => ({
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const runs = (await catalog.list()).map(({ manifest }) => ({
         runId: manifest.runId,
         slug: manifest.slug,
         createdAt: manifest.createdAt,
@@ -361,11 +242,13 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     "run-manifest",
     new ResourceTemplate("picklab://runs/{runId}/manifest", {
       list: async () => ({
-        resources: (await listSafeRuns(ctx)).map((manifest) => ({
-            uri: `picklab://runs/${manifest.runId}/manifest`,
-            name: `Run ${manifest.runId} manifest`,
-            mimeType: "application/json",
-          })),
+        resources: (
+          await (await openRunCatalog(ctx.projectDir)).list()
+        ).map(({ manifest }) => ({
+          uri: `picklab://runs/${manifest.runId}/manifest`,
+          name: `Run ${manifest.runId} manifest`,
+          mimeType: "application/json",
+        })),
       }),
     }),
     {
@@ -375,23 +258,15 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const manifestPath = path.join(
-        runsDir(ctx.projectDir),
-        runId,
-        "manifest.json",
-      );
-      const expected = await assertRootFileWithinRun(
-        ctx,
-        runId,
-        "manifest.json",
-        manifestPath,
-        () => new Error(`Run not found: ${runId}`),
-      );
-      const raw = await readTextFileNoFollow(
-        manifestPath,
-        expected,
-        () => new Error(`Run not found: ${runId}`),
-      );
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const entry = await catalog.find(runId);
+      if (entry === undefined) throw new Error(`Run not found: ${runId}`);
+      let raw: string;
+      try {
+        raw = await catalog.readRootText(entry, "manifest.json");
+      } catch {
+        throw new Error(`Run not found: ${runId}`);
+      }
       return {
         contents: [
           { uri: uri.href, mimeType: "application/json", text: raw },
@@ -420,28 +295,19 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const manifest = (await listSafeRuns(ctx)).find(
-        (candidate) => candidate.runId === runId,
-      );
-      if (manifest === undefined || !isEvidenceRun(manifest)) {
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const entry = await catalog.find(runId);
+      if (entry === undefined || !isEvidenceRun(entry.manifest)) {
         throw new Error(`Actions not found: ${runId}`);
       }
-      const runDir = path.join(runsDir(ctx.projectDir), runId);
-      const actionsPath = path.join(runDir, EVIDENCE_ACTION_LOG);
-      const expected = await assertRootFileWithinRun(
-        ctx,
-        runId,
-        EVIDENCE_ACTION_LOG,
-        actionsPath,
-        () => new Error(`Actions not found: ${runId}`),
-      );
+      let raw: string;
+      try {
+        raw = await catalog.readRootText(entry, EVIDENCE_ACTION_LOG);
+      } catch {
+        throw new Error(`Actions not found: ${runId}`);
+      }
       let records;
       try {
-        const raw = await readTextFileNoFollow(
-          actionsPath,
-          expected,
-          () => new Error(`Actions not found: ${runId}`),
-        );
         records = parseActionsJournal(raw, `run ${runId}`);
       } catch (error) {
         throw new Error(
@@ -482,29 +348,17 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const manifest = (await listSafeRuns(ctx)).find(
-        (candidate) => candidate.runId === runId,
-      );
-      if (manifest === undefined || !isEvidenceRun(manifest)) {
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const entry = await catalog.find(runId);
+      if (entry === undefined || !isEvidenceRun(entry.manifest)) {
         throw new Error(`Report not found: ${runId}`);
       }
-      const reportPath = path.join(
-        runsDir(ctx.projectDir),
-        runId,
-        EVIDENCE_REPORT,
-      );
-      const expected = await assertRootFileWithinRun(
-        ctx,
-        runId,
-        EVIDENCE_REPORT,
-        reportPath,
-        () => new Error(`Report not found: ${runId}`),
-      );
-      const html = await readTextFileNoFollow(
-        reportPath,
-        expected,
-        () => new Error(`Report not found: ${runId}`),
-      );
+      let html: string;
+      try {
+        html = await catalog.readRootText(entry, EVIDENCE_REPORT);
+      } catch {
+        throw new Error(`Report not found: ${runId}`);
+      }
       return {
         contents: [
           {
@@ -539,10 +393,15 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
       if (!name.endsWith(".png")) {
         throw new Error(`Not a PNG screenshot: ${name}`);
       }
-      const filePath = runFilePath(ctx, runId, "screenshots", name);
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const entry = await catalog.find(runId);
+      if (entry === undefined) {
+        throw new Error(`Screenshot not found: ${runId}/${name}`);
+      }
+      const filePath = runFilePath(entry, "screenshots", name);
       await assertWithinSubdir(
-        ctx,
-        runId,
+        catalog,
+        entry,
         "screenshots",
         filePath,
         () => new Error(`Screenshot not found: ${runId}/${name}`),
@@ -604,10 +463,15 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
       const name = decodeVariable(variables, "name");
-      const filePath = runFilePath(ctx, runId, "logs", name);
+      const catalog = await openRunCatalog(ctx.projectDir);
+      const entry = await catalog.find(runId);
+      if (entry === undefined) {
+        throw new Error(`Log not found: ${runId}/${name}`);
+      }
+      const filePath = runFilePath(entry, "logs", name);
       await assertWithinSubdir(
-        ctx,
-        runId,
+        catalog,
+        entry,
         "logs",
         filePath,
         () => new Error(`Log not found: ${runId}/${name}`),

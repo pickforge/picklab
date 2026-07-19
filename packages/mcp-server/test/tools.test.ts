@@ -262,6 +262,24 @@ describe("artifact report", () => {
     expect(report).toContain("[REDACTED]");
     expect(report).not.toContain(PLANTED_TOKEN);
   });
+
+  it("fails closed for an unsafe evidence journal", async () => {
+    const runId = "20260609-120000-unsafe-evidence";
+    const { dir } = writeSyntheticRun(dirs.projectDir, runId);
+    const manifestPath = path.join(dir, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.evidenceVersion = 1;
+    manifest.actionLog = "actions.jsonl";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.symlinkSync(manifestPath, path.join(dir, "actions.jsonl"));
+
+    const result = await lab.client.callTool({
+      name: "artifact_report",
+      arguments: { runId },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("Unsafe run catalog file");
+  });
 });
 
 describe("empty lab", () => {

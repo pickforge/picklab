@@ -1197,6 +1197,47 @@ describe("finalized-run retention", () => {
     expect(removed).not.toContain(victim);
   });
 
+  it("does not prune a real directory replacement after catalog discovery", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 21; i += 1) {
+      const minute = String(i).padStart(2, "0");
+      ids.push(await finalizedEvidenceRun(`2026-06-09T10:${minute}:00Z`));
+    }
+    const victim = ids[0]!;
+    const victimDir = path.join(runsRoot(), victim);
+    const replacementManifest = await fs.promises.readFile(
+      path.join(victimDir, "manifest.json"),
+      "utf8",
+    );
+    const realReaddir = fs.promises.readdir.bind(fs.promises);
+    let rootReads = 0;
+    const spy = vi.spyOn(fs.promises, "readdir").mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.readdir>
+    ) => {
+      if (path.resolve(String(args[0])) === runsRoot()) {
+        rootReads += 1;
+        if (rootReads === 2) {
+          await fs.promises.rename(victimDir, `${victimDir}-original`);
+          await fs.promises.mkdir(victimDir);
+          await fs.promises.writeFile(
+            path.join(victimDir, "manifest.json"),
+            replacementManifest,
+          );
+        }
+      }
+      return (realReaddir as typeof fs.promises.readdir)(...args);
+    }) as typeof fs.promises.readdir);
+
+    try {
+      expect(await pruneFinalizedEvidenceRuns(project, { keep: 20 })).toEqual(
+        [],
+      );
+      expect(fs.existsSync(victimDir)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("resists fake-inflation manifests that point at a real run", async () => {
     // One real finalized run we intend to keep.
     const real = await finalizedEvidenceRun("2026-06-09T12:00:00Z");

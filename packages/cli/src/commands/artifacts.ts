@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
-import path from "node:path";
 import {
+  EVIDENCE_ACTION_LOG,
   isEvidenceRun,
-  listRuns,
-  readActions,
+  openRunCatalog,
+  parseActionsJournal,
   renderRunReport,
   runsDir,
-  type RunManifest,
+  type RunCatalog,
+  type RunCatalogEntry,
 } from "@pickforge/picklab-core";
 import { findOnPath } from "@pickforge/picklab-desktop-linux";
 import {
@@ -18,8 +19,9 @@ import {
 export async function runArtifactsList(opts: BaseCliOptions): Promise<number> {
   return runReported(opts, async () => {
     const projectDir = resolveProjectDir(opts);
-    const manifests = await listRuns(projectDir);
-    const runs = manifests.map((manifest) => ({
+    const catalog = await openRunCatalog(projectDir);
+    const entries = await catalog.list();
+    const runs = entries.map(({ manifest }) => ({
       runId: manifest.runId,
       slug: manifest.slug,
       createdAt: manifest.createdAt,
@@ -39,32 +41,28 @@ export async function runArtifactsList(opts: BaseCliOptions): Promise<number> {
   });
 }
 
-const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-
-function isSafeRunId(runId: string): boolean {
-  return RUN_ID_PATTERN.test(runId) && runId !== "." && runId !== "..";
-}
-
 async function findRun(
   projectDir: string,
   runId: string | undefined,
-): Promise<{ manifest: RunManifest; dir: string }> {
-  const manifests = (await listRuns(projectDir)).filter((candidate) =>
-    isSafeRunId(candidate.runId),
-  );
-  let manifest: RunManifest | undefined;
-  if (runId === undefined) {
-    manifest = manifests[0];
-    if (manifest === undefined) {
+): Promise<{ catalog: RunCatalog; entry: RunCatalogEntry }> {
+  const catalog = await openRunCatalog(projectDir);
+  const entry = await catalog.find(runId);
+  if (entry === undefined) {
+    if (runId === undefined) {
       throw new Error(`No runs found under ${runsDir(projectDir)}`);
     }
-  } else {
-    manifest = manifests.find((candidate) => candidate.runId === runId);
-    if (manifest === undefined) {
-      throw new Error(`Run not found: ${runId} (see: picklab artifacts list)`);
-    }
+    throw new Error(`Run not found: ${runId} (see: picklab artifacts list)`);
   }
-  return { manifest, dir: path.join(runsDir(projectDir), manifest.runId) };
+  return { catalog, entry };
+}
+
+async function readCatalogActions(
+  catalog: RunCatalog,
+  entry: RunCatalogEntry,
+): Promise<ReturnType<typeof parseActionsJournal>> {
+  if (!isEvidenceRun(entry.manifest)) return [];
+  const raw = await catalog.readRootTextIfPresent(entry, EVIDENCE_ACTION_LOG);
+  return raw === undefined ? [] : parseActionsJournal(raw, entry.dir);
 }
 
 export async function runArtifactsOpen(
@@ -73,7 +71,8 @@ export async function runArtifactsOpen(
 ): Promise<number> {
   return runReported(opts, async () => {
     const projectDir = resolveProjectDir(opts);
-    const { manifest, dir } = await findRun(projectDir, runId);
+    const { entry } = await findRun(projectDir, runId);
+    const { manifest, dir } = entry;
     let opened = false;
     const display = process.env.DISPLAY;
     if (opts.json !== true && display !== undefined && display !== "") {
@@ -101,8 +100,9 @@ export async function runArtifactsReport(
 ): Promise<number> {
   return runReported(opts, async () => {
     const projectDir = resolveProjectDir(opts);
-    const { manifest, dir } = await findRun(projectDir, runId);
-    const records = isEvidenceRun(manifest) ? await readActions(dir) : [];
+    const { catalog, entry } = await findRun(projectDir, runId);
+    const { manifest, dir } = entry;
+    const records = await readCatalogActions(catalog, entry);
     return {
       data: { runId: manifest.runId, dir, manifest },
       lines: renderRunReport(manifest, dir, records),

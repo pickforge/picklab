@@ -1,49 +1,42 @@
-import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  EVIDENCE_ACTION_LOG,
   isEvidenceRun,
-  listRuns,
-  readActions,
+  openRunCatalog,
+  parseActionsJournal,
   renderRunReport,
   runsDir,
-  type RunManifest,
+  type RunCatalog,
+  type RunCatalogEntry,
 } from "@pickforge/picklab-core";
 import { runTool, type ServerContext } from "../context.js";
-
-const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-
-export function isSafeRunId(runId: string): boolean {
-  return (
-    RUN_ID_PATTERN.test(runId) &&
-    runId !== "." &&
-    runId !== ".." &&
-    !runId.includes("..")
-  );
-}
 
 export async function findRun(
   projectDir: string,
   runId: string | undefined,
-): Promise<{ manifest: RunManifest; dir: string }> {
-  const manifests = (await listRuns(projectDir)).filter((candidate) =>
-    isSafeRunId(candidate.runId),
-  );
-  let manifest: RunManifest | undefined;
-  if (runId === undefined) {
-    manifest = manifests[0];
-    if (manifest === undefined) {
+): Promise<{ catalog: RunCatalog; entry: RunCatalogEntry }> {
+  const catalog = await openRunCatalog(projectDir);
+  const entry = await catalog.find(runId);
+  if (entry === undefined) {
+    if (runId === undefined) {
       throw new Error(`No runs found under ${runsDir(projectDir)}`);
     }
-  } else {
-    manifest = manifests.find((candidate) => candidate.runId === runId);
-    if (manifest === undefined) {
-      throw new Error(
-        `Run not found: ${runId} (see the artifact_list tool)`,
-      );
-    }
+    throw new Error(`Run not found: ${runId} (see the artifact_list tool)`);
   }
-  return { manifest, dir: path.join(runsDir(projectDir), manifest.runId) };
+  return { catalog, entry };
+}
+
+async function readCatalogActions(
+  catalog: RunCatalog,
+  entry: RunCatalogEntry,
+): Promise<ReturnType<typeof parseActionsJournal>> {
+  if (!isEvidenceRun(entry.manifest)) return [];
+  const raw = await catalog.readRootTextIfPresent(
+    entry,
+    EVIDENCE_ACTION_LOG,
+  );
+  return raw === undefined ? [] : parseActionsJournal(raw, entry.dir);
 }
 
 export function registerArtifactTools(
@@ -61,8 +54,9 @@ export function registerArtifactTools(
     },
     () =>
       runTool(async () => {
-        const manifests = await listRuns(ctx.projectDir);
-        const runs = manifests.map((manifest) => ({
+        const catalog = await openRunCatalog(ctx.projectDir);
+        const entries = await catalog.list();
+        const runs = entries.map(({ manifest }) => ({
           runId: manifest.runId,
           slug: manifest.slug,
           createdAt: manifest.createdAt,
@@ -86,8 +80,9 @@ export function registerArtifactTools(
     },
     (args) =>
       runTool(async () => {
-        const { manifest, dir } = await findRun(ctx.projectDir, args.runId);
-        const records = isEvidenceRun(manifest) ? await readActions(dir) : [];
+        const { catalog, entry } = await findRun(ctx.projectDir, args.runId);
+        const { manifest, dir } = entry;
+        const records = await readCatalogActions(catalog, entry);
         return {
           data: {
             runId: manifest.runId,

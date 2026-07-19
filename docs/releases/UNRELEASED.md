@@ -32,6 +32,9 @@ release description, then reset it after the release is published.
 - Centralized session lifecycle composition in core and routed dead-session
   reaping through typed desktop, Android, and browser teardown owners, removing
   duplicate CLI/MCP orchestration and core PID/profile stop implementations.
+- Added one verified run catalog for deterministic discovery, directory-manifest
+  identity binding, corrupt-entry handling, and symlink-safe root-file reads
+  across core retention, CLI artifacts, and MCP tools/resources.
 - Centralized CLI provisioning policy for plan classification, consent,
   dry-runs, ordered preflight failures/skips, adapter-owned sudo routing,
   cancellation, redacted presentation plans, and partial results.
@@ -56,6 +59,7 @@ release description, then reset it after the release is published.
 
 - `bun install --frozen-lockfile`
 - `bun run typecheck`
+- Focused run catalog, run, evidence, CLI artifact, and MCP resource/tool suites.
 - `bun run test` (79 files, 958 passed / 2 skipped)
 - `bun run test:coverage` (79 files, 958 passed / 2 skipped; all thresholds met)
 - `bun run build`
