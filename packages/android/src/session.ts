@@ -10,6 +10,7 @@ import {
   updateSession,
   type AndroidSessionInfo,
   type EnvLike,
+  type LocalSessionTeardownFinalizer,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import { listDevices } from "./adb.js";
@@ -64,7 +65,17 @@ export async function createAndroidSession(
 ): Promise<AndroidSessionHandle> {
   const registryEnv = opts.registryEnv ?? process.env;
   const avdName = opts.avdName ?? DEFAULT_AVD_NAME;
-  await reapDeadRunningSessions(registryEnv);
+  await reapDeadRunningSessions(registryEnv, {
+    android: {
+      teardown: (id, finalize) =>
+        teardownAndroidSession(
+          id,
+          registryEnv,
+          { sdk: opts.sdk, env: opts.env },
+          finalize,
+        ),
+    },
+  });
   const record = await createSession(
     { type: "android", projectDir: opts.projectDir, android: { avdName } },
     registryEnv,
@@ -144,10 +155,11 @@ export async function createAndroidSession(
   }
 }
 
-export async function destroyAndroidSession(
+export async function teardownAndroidSession(
   id: string,
-  registryEnv: EnvLike = process.env,
-  opts: AndroidSessionOpOptions = {},
+  registryEnv: EnvLike,
+  opts: AndroidSessionOpOptions,
+  finalize: LocalSessionTeardownFinalizer,
 ): Promise<void> {
   const record = await getSession(id, registryEnv);
   if (record === undefined) {
@@ -189,7 +201,17 @@ export async function destroyAndroidSession(
       );
     }
   }
-  await destroySessionRecord(id, registryEnv);
+  await finalize();
+}
+
+export async function destroyAndroidSession(
+  id: string,
+  registryEnv: EnvLike = process.env,
+  opts: AndroidSessionOpOptions = {},
+): Promise<void> {
+  await teardownAndroidSession(id, registryEnv, opts, () =>
+    destroySessionRecord(id, registryEnv),
+  );
 }
 
 export async function getAndroidSessionStatus(

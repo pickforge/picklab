@@ -1,4 +1,14 @@
-import type { SessionRecord, SessionType } from "./session.js";
+import type { EnvLike } from "./paths.js";
+import {
+  REAPER_CLEANUP_PENDING_META_KEY,
+  destroySessionRecord,
+  isSessionProcessAlive,
+  listSessions,
+  updateSession,
+  type SessionLivenessCheck,
+  type SessionRecord,
+  type SessionType,
+} from "./session.js";
 
 export type LocalSessionRecipe = SessionType;
 
@@ -88,6 +98,29 @@ export interface LocalSessionDestroyRuntime {
   };
   browser: {
     destroy: (id: string) => Promise<void>;
+  };
+}
+
+export type LocalSessionTeardownFinalizer = () => Promise<void>;
+
+export interface LocalSessionTeardownRuntime {
+  desktop?: {
+    teardown: (
+      id: string,
+      finalize: LocalSessionTeardownFinalizer,
+    ) => Promise<void>;
+  };
+  android?: {
+    teardown: (
+      id: string,
+      finalize: LocalSessionTeardownFinalizer,
+    ) => Promise<void>;
+  };
+  browser?: {
+    teardown: (
+      id: string,
+      finalize: LocalSessionTeardownFinalizer,
+    ) => Promise<void>;
   };
 }
 
@@ -273,6 +306,84 @@ export async function localSessionStatusEntry(
     };
   }
   return entry;
+}
+
+function canTeardownLocalSession(
+  record: SessionRecord,
+  runtime: LocalSessionTeardownRuntime,
+): boolean {
+  if (record.type === "desktop") return runtime.desktop !== undefined;
+  if (record.type === "android") return runtime.android !== undefined;
+  if (record.type === "browser") return runtime.browser !== undefined;
+  return runtime.desktop !== undefined && runtime.android !== undefined;
+}
+
+export async function teardownLocalSession(
+  record: SessionRecord,
+  runtime: LocalSessionTeardownRuntime,
+  finalize: LocalSessionTeardownFinalizer,
+): Promise<void> {
+  if (record.type === "desktop" && runtime.desktop !== undefined) {
+    await runtime.desktop.teardown(record.id, finalize);
+    return;
+  }
+  if (record.type === "android" && runtime.android !== undefined) {
+    await runtime.android.teardown(record.id, finalize);
+    return;
+  }
+  if (record.type === "browser" && runtime.browser !== undefined) {
+    await runtime.browser.teardown(record.id, finalize);
+    return;
+  }
+  if (
+    record.type === "desktop+android" &&
+    runtime.desktop !== undefined &&
+    runtime.android !== undefined
+  ) {
+    await runtime.android.teardown(record.id, async () => {});
+    await runtime.desktop.teardown(record.id, async () => {});
+    await finalize();
+    return;
+  }
+  throw new Error(
+    `No typed teardown runtime is available for session ${record.id} of type "${record.type}"`,
+  );
+}
+
+export async function reapDeadRunningSessions(
+  env: EnvLike,
+  runtime: LocalSessionTeardownRuntime,
+  isAlive: SessionLivenessCheck = isSessionProcessAlive,
+): Promise<SessionRecord[]> {
+  const reaped: SessionRecord[] = [];
+  for (const record of await listSessions(env)) {
+    const retryPending =
+      record.status === "error" &&
+      record.meta?.[REAPER_CLEANUP_PENDING_META_KEY] === true;
+    if (record.status !== "running" && !retryPending) continue;
+    if (!canTeardownLocalSession(record, runtime)) continue;
+    if (!retryPending && (await isAlive(record))) continue;
+    try {
+      await teardownLocalSession(record, runtime, () =>
+        destroySessionRecord(record.id, env, "failed"),
+      );
+    } catch {
+      await updateSession(
+        record.id,
+        {
+          status: "error",
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
+        },
+        env,
+      ).catch(() => {});
+      continue;
+    }
+    reaped.push(record);
+  }
+  return reaped;
 }
 
 export async function destroyLocalSession(

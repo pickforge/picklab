@@ -93,6 +93,7 @@ export {
   ensureSessionVnc,
   getDesktopSessionStatus,
   stopOwnedSessionVnc,
+  teardownDesktopSession,
   withSessionVncLock,
   type CreateDesktopSessionOptions,
   type DesktopSessionHandle,

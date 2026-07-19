@@ -377,6 +377,9 @@ async function stopEmulatorProcess(
   opts: StopEmulatorOptions,
 ): Promise<boolean> {
   const timeoutMs = opts.timeoutMs ?? EMU_KILL_TIMEOUT_MS;
+  if (opts.pid !== undefined && !isPidAlive(opts.pid)) {
+    return true;
+  }
   let adbPath: string | null = null;
   try {
     adbPath = resolveAdb(opts);

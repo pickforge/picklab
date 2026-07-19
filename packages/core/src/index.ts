@@ -136,6 +136,8 @@ export {
   destroyLocalSession,
   destroyLocalSessions,
   localSessionStatusEntry,
+  reapDeadRunningSessions,
+  teardownLocalSession,
   type AndroidLegHandle,
   type AndroidLiveStatus,
   type BrowserLegHandle,
@@ -151,6 +153,8 @@ export {
   type LocalSessionStatusEntry,
   type LocalSessionStatusRuntime,
   type LocalSessionSummary,
+  type LocalSessionTeardownFinalizer,
+  type LocalSessionTeardownRuntime,
 } from "./session-lifecycle.js";
 
 export {
@@ -161,7 +165,6 @@ export {
   isDisplaySocketAlive,
   isSessionProcessAlive,
   listSessions,
-  reapDeadRunningSessions,
   updateSession,
   type AndroidSessionInfo,
   type BrowserSessionInfo,

@@ -27,7 +27,11 @@ import {
   reapDeadRunningSessions,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { createAndroidSession, destroyAndroidSession } from "../src/index.js";
+import {
+  createAndroidSession,
+  destroyAndroidSession,
+  teardownAndroidSession,
+} from "../src/index.js";
 
 const tmpRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "picklab-android-reaper-"),
@@ -102,7 +106,17 @@ describe("android reaper tracking", () => {
       forceStopFailure = false;
     }
 
-    const reaped = await reapDeadRunningSessions(registryEnv);
+    const reaped = await reapDeadRunningSessions(registryEnv, {
+      android: {
+        teardown: (id, finalize) =>
+          teardownAndroidSession(
+            id,
+            registryEnv,
+            { sdk, env: { PATH: "" }, timeoutMs: 300 },
+            finalize,
+          ),
+      },
+    });
     expect(reaped.map((record) => record.id)).toContain(session.id);
     expect(await getSession(session.id, registryEnv)).toBeUndefined();
     expect(isPidAlive(session.emulatorPid)).toBe(false);

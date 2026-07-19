@@ -18,6 +18,7 @@ import {
   type BrowserSessionInfo,
   type DesktopSessionInfo,
   type EnvLike,
+  type LocalSessionTeardownFinalizer,
   type OwnedDaemonHandle,
   type ProcessIdentity,
   type SessionRecord,
@@ -218,7 +219,12 @@ export async function createBrowserSession(
     ...(opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : {}),
   });
 
-  await reapDeadRunningSessions(registryEnv);
+  await reapDeadRunningSessions(registryEnv, {
+    browser: {
+      teardown: (id, finalize) =>
+        teardownBrowserSession(id, registryEnv, finalize),
+    },
+  });
   assertNotAborted(opts.signal);
   const record = await createSession(
     { type: "browser", projectDir: opts.projectDir },
@@ -489,9 +495,10 @@ export async function getBrowserSessionStatus(
  * into one error
  * and leave the record in `error` state for inspection.
  */
-export async function destroyBrowserSession(
+export async function teardownBrowserSession(
   id: string,
-  registryEnv: EnvLike = process.env,
+  registryEnv: EnvLike,
+  finalize: LocalSessionTeardownFinalizer,
 ): Promise<void> {
   const initial = await getSession(id, registryEnv);
   if (initial === undefined) {
@@ -624,6 +631,15 @@ export async function destroyBrowserSession(
         `Failed to fully destroy browser session ${id}`,
       );
     }
-    await destroySessionRecord(id, registryEnv);
+    await finalize();
   });
+}
+
+export async function destroyBrowserSession(
+  id: string,
+  registryEnv: EnvLike = process.env,
+): Promise<void> {
+  await teardownBrowserSession(id, registryEnv, () =>
+    destroySessionRecord(id, registryEnv),
+  );
 }

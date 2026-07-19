@@ -46,7 +46,10 @@ import {
   updateSession,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { destroyDesktopSession } from "../src/session.js";
+import {
+  destroyDesktopSession,
+  teardownDesktopSession,
+} from "../src/session.js";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-destroy-test-"));
 const registryEnv: EnvLike = {
@@ -105,7 +108,12 @@ describe("destroyDesktopSession exception safety", () => {
     });
     allowFailingPidStop = true;
     try {
-      const reaped = await reapDeadRunningSessions(registryEnv);
+      const reaped = await reapDeadRunningSessions(registryEnv, {
+        desktop: {
+          teardown: (sessionId, finalize) =>
+            teardownDesktopSession(sessionId, registryEnv, finalize),
+        },
+      });
       expect(reaped.map((record) => record.id)).toEqual([id]);
       expect(await getSession(id, registryEnv)).toBeUndefined();
     } finally {

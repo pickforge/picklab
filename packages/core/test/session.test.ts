@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
+import { teardownAndroidSession } from "../../android/src/session.js";
+import { teardownBrowserSession } from "../../browser/src/session.js";
+import { teardownDesktopSession } from "../../desktop-linux/src/session.js";
 import { isPidAlive, readProcessIdentity, stopPid } from "../src/proc.js";
 import {
   activePointerPath,
@@ -18,12 +21,37 @@ import {
   getSession,
   isSessionProcessAlive,
   listSessions,
-  reapDeadRunningSessions,
   updateSession,
+  type SessionLivenessCheck,
 } from "../src/session.js";
+import { reapDeadRunningSessions as reapWithTypedRuntime } from "../src/session-lifecycle.js";
 
 let home: string;
 let env: { PICKLAB_HOME: string };
+
+function reapDeadRunningSessions(
+  registryEnv: { PICKLAB_HOME: string },
+  isAlive?: SessionLivenessCheck,
+) {
+  return reapWithTypedRuntime(
+    registryEnv,
+    {
+      desktop: {
+        teardown: (id, finalize) =>
+          teardownDesktopSession(id, registryEnv, finalize),
+      },
+      android: {
+        teardown: (id, finalize) =>
+          teardownAndroidSession(id, registryEnv, {}, finalize),
+      },
+      browser: {
+        teardown: (id, finalize) =>
+          teardownBrowserSession(id, registryEnv, finalize),
+      },
+    },
+    isAlive,
+  );
+}
 
 beforeEach(async () => {
   home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-sess-"));
@@ -853,7 +881,7 @@ describe("session registry", () => {
       const failed = await getSession(stale.id, env);
       expect(failed?.status).toBe("error");
       expect(failed?.meta?.reaperCleanupPending).toBe(true);
-      expect(fs.existsSync(profileDir)).toBe(true);
+      expect(fs.existsSync(profileDir)).toBe(false);
 
       failRemoval = false;
       expect(

@@ -9,11 +9,13 @@ import {
   createAndroidSession,
   destroyAndroidSession,
   getAndroidSessionStatus,
+  teardownAndroidSession,
 } from "@pickforge/picklab-android";
 import {
   createBrowserSession,
   destroyBrowserSession,
   getBrowserSessionStatus,
+  teardownBrowserSession,
 } from "@pickforge/picklab-browser";
 import {
   createLocalSessions,
@@ -22,18 +24,21 @@ import {
   listSessions,
   loadConfig,
   localSessionStatusEntry,
+  reapDeadRunningSessions,
   type LocalSessionCreateRuntime,
   type LocalSessionDestroyRuntime,
   type LocalSessionLifecycle,
   type LocalSessionStatusEntry,
   type LocalSessionStatusRuntime,
   type LocalSessionSummary,
+  type LocalSessionTeardownRuntime,
   type SessionRecord,
 } from "@pickforge/picklab-core";
 import {
   createDesktopSession,
   destroyDesktopSession,
   getDesktopSessionStatus,
+  teardownDesktopSession,
 } from "@pickforge/picklab-desktop-linux";
 import { runTool, type ServerContext } from "../context.js";
 import { withMcpEvidence } from "../evidence.js";
@@ -134,6 +139,23 @@ function destroyRuntime(ctx: ServerContext): LocalSessionDestroyRuntime {
   };
 }
 
+function reaperRuntime(ctx: ServerContext): LocalSessionTeardownRuntime {
+  return {
+    desktop: {
+      teardown: (id, finalize) =>
+        teardownDesktopSession(id, ctx.env, finalize),
+    },
+    browser: {
+      teardown: (id, finalize) =>
+        teardownBrowserSession(id, ctx.env, finalize),
+    },
+    android: {
+      teardown: (id, finalize) =>
+        teardownAndroidSession(id, ctx.env, { env: ctx.env }, finalize),
+    },
+  };
+}
+
 export async function createSessions(
   ctx: ServerContext,
   args: {
@@ -146,6 +168,7 @@ export async function createSessions(
   },
   lifecycle: SessionLifecycle = {},
 ): Promise<LocalSessionSummary[]> {
+  await reapDeadRunningSessions(ctx.env, reaperRuntime(ctx));
   return createLocalSessions(
     args.type ?? "desktop",
     createRuntime(ctx, args, lifecycle),
