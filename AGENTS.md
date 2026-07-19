@@ -49,14 +49,15 @@ Repo-local guide for agents working in PickLab.
   internal/release changes, what was tested, what was not tested yet, and known
   blockers. At release time, use it to polish the generated GitHub release
   description, then reset the draft.
-- Bump `packages/cli/package.json` to the new version, land on `main`, tag
-  `vX.Y.Z`, push the tag. CI runs the full suite, publishes
-  `@pickforge/picklab` to npm, and creates the GitHub release — both go live
-  without manual steps, so make sure `main` is truly ready before tagging.
-- The GitHub release description is the single source of release notes
-  (`--generate-notes` drafts it; edit it after if the generated list reads
-  poorly). pickforge.dev/picklab shows the latest release via the GitHub API —
-  no website change needed for a normal release.
+- Bump every workspace package manifest and `bun.lock` to the new version, land
+  on `main`, tag `vX.Y.Z`, and push the tag. CI validates the tag/package match,
+  runs the full suite, publishes `@pickforge/picklab` to npm, and creates a draft
+  GitHub release. Make sure `main` is truly ready before tagging because npm goes
+  live without a manual gate.
+- The GitHub release description is the single source of release notes. A human
+  polishes the generated draft from `docs/releases/UNRELEASED.md` and publishes
+  it; pickforge.dev/picklab then shows it via the GitHub API. Reset UNRELEASED
+  after publication. No website change is needed for a normal release.
 - Only touch `landing-page` (`src/pages/products.ts`) when the install story
   or positioning changes.
 ## Workspace policy
