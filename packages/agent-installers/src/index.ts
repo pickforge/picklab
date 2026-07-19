@@ -9,8 +9,6 @@ export {
   type RegistrationState,
 } from "./types.js";
 
-export { writeFileAtomic } from "./atomicFile.js";
-
 export {
   agentsStatePath,
   readAgentsState,

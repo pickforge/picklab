@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { agentsDir, type EnvLike } from "@pickforge/picklab-core";
-import { writeFileAtomic } from "./atomicFile.js";
+import { agentsDir, writeFileAtomic, type EnvLike } from "@pickforge/picklab-core";
 
 export interface AgentStateEntry {
   registered: boolean;

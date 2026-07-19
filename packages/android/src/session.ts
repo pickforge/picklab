@@ -5,6 +5,7 @@ import {
   getSession,
   isPidAlive,
   reapDeadRunningSessions,
+  REAPER_CLEANUP_PENDING_META_KEY,
   sessionsDir,
   updateSession,
   type AndroidSessionInfo,
@@ -104,18 +105,41 @@ export async function createAndroidSession(
       logDir,
     };
   } catch (error) {
+    let emulatorGone = true;
     if (emulator !== undefined) {
-      await stopEmulator({
-        serial: emulator.serial,
-        pid: emulator.pid,
-        sdk: opts.sdk,
-        env: opts.env,
-        registryEnv,
-      }).catch(() => {});
+      try {
+        emulatorGone = await stopEmulator({
+          serial: emulator.serial,
+          pid: emulator.pid,
+          sdk: opts.sdk,
+          env: opts.env,
+          registryEnv,
+        });
+      } catch {
+        emulatorGone = false;
+      }
     }
-    await updateSession(record.id, { status: "error" }, registryEnv).catch(
-      () => {},
-    );
+    const clearedMeta = { ...record.meta };
+    delete clearedMeta[REAPER_CLEANUP_PENDING_META_KEY];
+    await updateSession(
+      record.id,
+      emulatorGone
+        ? { status: "error", meta: clearedMeta }
+        : {
+            status: "error",
+            meta: {
+              ...record.meta,
+              [REAPER_CLEANUP_PENDING_META_KEY]: true,
+            },
+            android: {
+              avdName,
+              serial: emulator?.serial,
+              emulatorPid: emulator?.pid,
+              consolePort: emulator?.consolePort,
+            },
+          },
+      registryEnv,
+    ).catch(() => {});
     throw error;
   }
 }
@@ -147,7 +171,17 @@ export async function destroyAndroidSession(
       failure = error instanceof Error ? error : new Error(String(error));
     }
     if (!stopped) {
-      await updateSession(id, { status: "error" }, registryEnv).catch(() => {});
+      await updateSession(
+        id,
+        {
+          status: "error",
+          meta: {
+            ...record.meta,
+            [REAPER_CLEANUP_PENDING_META_KEY]: true,
+          },
+        },
+        registryEnv,
+      ).catch(() => {});
       throw new Error(
         `Failed to stop emulator of android session ${id} ` +
           `(serial ${android.serial ?? "unknown"}, pid ${android.emulatorPid ?? "unknown"})` +

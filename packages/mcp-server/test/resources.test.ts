@@ -245,6 +245,36 @@ describe("resource reads", () => {
     expect(text).not.toContain(PLANTED_TOKEN);
   });
 
+  it("caps an oversized log to its trailing bytes instead of loading it all", async () => {
+    const bigPath = path.join(
+      dirs.projectDir,
+      ".picklab",
+      "runs",
+      RUN_ID,
+      "logs",
+      "big.log",
+    );
+    const filler = "x".repeat(1024);
+    const lines: string[] = [];
+    for (let i = 0; i < 1200; i += 1) {
+      lines.push(`line-${i}-${filler}`);
+    }
+    lines.push(`tail-marker Authorization: Bearer ${PLANTED_TOKEN}`);
+    fs.writeFileSync(bigPath, `${lines.join("\n")}\n`);
+    expect(fs.statSync(bigPath).size).toBeGreaterThan(1024 * 1024);
+
+    const { contents } = await lab.client.readResource({
+      uri: `picklab://runs/${RUN_ID}/logs/big.log`,
+    });
+    const text = first(contents).text as string;
+    expect(text).toContain("[truncated:");
+    expect(text).toContain("tail-marker");
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain(PLANTED_TOKEN);
+    expect(text).not.toContain("line-0-");
+    expect(text.length).toBeLessThan(1024 * 1024 + 1024);
+  });
+
   it("reads a session status as JSON", async () => {
     const { contents } = await lab.client.readResource({
       uri: `picklab://sessions/${sessionId}/status`,

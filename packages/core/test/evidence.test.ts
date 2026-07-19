@@ -731,6 +731,53 @@ describe("evidence cap and truncation", () => {
     expect(result.outcome).toBe("appended");
     expect(await isEvidenceTruncated(run.dir)).toBe(false);
   });
+
+  it("reuses the cached artifact total across metadata-only appends instead of rescanning every file", async () => {
+    const { run } = await beginEvidenceRun(project, "desk-cache00");
+    const screenshots = path.join(run.dir, "screenshots");
+    // Seed a large number of on-disk artifacts up front.
+    await Promise.all(
+      Array.from({ length: 40 }, (_, i) =>
+        fs.promises.writeFile(
+          path.join(screenshots, `seed-${i}.bin`),
+          Buffer.alloc(1024),
+        ),
+      ),
+    );
+    // First append after the artifacts land always does a full scan, seeding
+    // the cache with the correct total.
+    const seeded = await appendAction(run.dir, action({ actionId: "seed" }), {
+      maxBytes: 1_000_000,
+    });
+    expect(seeded.usedBytes).toBeGreaterThanOrEqual(40 * 1024);
+
+    const lstatSpy = vi.spyOn(fs.promises, "lstat");
+    lstatSpy.mockClear();
+    for (let i = 0; i < 10; i += 1) {
+      await appendAction(run.dir, action({ actionId: `meta-${i}` }), {
+        maxBytes: 1_000_000,
+      });
+    }
+    const lstatCalls = lstatSpy.mock.calls.length;
+    lstatSpy.mockRestore();
+    // A full rescan touches every one of the 40 seeded files on every call
+    // (400+ lstats across 10 calls). The cache should keep this bounded to
+    // roughly the number of directories checked per call, independent of the
+    // artifact count.
+    expect(lstatCalls).toBeLessThan(40);
+
+    // A new artifact written directly to disk (no appendAction call in
+    // between) must still be picked up on the next append: the cache must
+    // never permanently undercount.
+    await fs.promises.writeFile(
+      path.join(screenshots, "late.bin"),
+      Buffer.alloc(2048),
+    );
+    const after = await appendAction(run.dir, action({ actionId: "after" }), {
+      maxBytes: 1_000_000,
+    });
+    expect(after.usedBytes).toBeGreaterThanOrEqual(seeded.usedBytes + 2048);
+  });
 });
 
 describe("truncation marker durability", () => {

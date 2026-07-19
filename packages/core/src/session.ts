@@ -8,6 +8,7 @@ import {
   isProfileConfined,
   sessionsDir,
   runsDir,
+  writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
 import {
@@ -84,8 +85,6 @@ const ID_PREFIXES: Record<SessionType, string> = {
 const SESSION_ID_PATTERN = /^(desk|andr|duo|brow)-[0-9a-f]{6,}$/;
 const MAX_ID_ATTEMPTS = 5;
 
-let tmpCounter = 0;
-
 function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
 }
@@ -114,13 +113,7 @@ async function writeSession(
 ): Promise<void> {
   const dir = await ensureDir(sessionsDir(env));
   const target = path.join(dir, `${record.id}.json`);
-  tmpCounter += 1;
-  const tmp = path.join(
-    dir,
-    `.${record.id}.json.tmp-${process.pid}-${tmpCounter}`,
-  );
-  await fs.promises.writeFile(tmp, serialize(record), "utf8");
-  await fs.promises.rename(tmp, target);
+  await writeFileAtomic(target, serialize(record));
 }
 
 export async function createSession(

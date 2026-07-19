@@ -37,6 +37,47 @@ export async function ensureDir(dir: string): Promise<string> {
   return dir;
 }
 
+let atomicTmpCounter = 0;
+
+/**
+ * Write a file atomically: write to a sibling temp file, preserve the target's
+ * existing permission mode (if any), then rename over the destination. The
+ * rename is atomic on the same filesystem, so a reader never observes a
+ * partially written file. On any failure the temp file is removed rather than
+ * left behind.
+ */
+export async function writeFileAtomic(
+  filePath: string,
+  content: string,
+): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+  atomicTmpCounter += 1;
+  const tmp = path.join(
+    dir,
+    `.${path.basename(filePath)}.tmp-${process.pid}-${atomicTmpCounter}`,
+  );
+  let mode: number | undefined;
+  try {
+    mode = (await fs.promises.stat(filePath)).mode & 0o777;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    await fs.promises.writeFile(tmp, content, { encoding: "utf8", mode });
+    if (mode !== undefined) {
+      await fs.promises.chmod(tmp, mode);
+    }
+    await fs.promises.rename(tmp, filePath);
+  } catch (error) {
+    await fs.promises.rm(tmp, { force: true });
+    throw error;
+  }
+}
+
 /**
  * Confinement guard for an ephemeral browser profile. In addition to lexical
  * containment, every existing path from the sessions directory through the
