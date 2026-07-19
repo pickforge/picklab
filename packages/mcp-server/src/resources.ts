@@ -23,6 +23,8 @@ import { sessionStatusEntry } from "./tools/session.js";
 
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 const MAX_BLOB_BYTES = 8 * 1024 * 1024;
+/** Upper bound on how many trailing bytes of an oversized run log are read into memory. */
+const MAX_LOG_TAIL_BYTES = 1 * 1024 * 1024;
 
 function decodeVariable(variables: Variables, label: string): string {
   const raw = variables[label];
@@ -212,6 +214,32 @@ async function readTextFileNoFollow(
     return raw;
   } catch {
     throw notFound();
+  } finally {
+    await handle.close();
+  }
+}
+
+// Read only the trailing `maxBytes` of a file (tail semantics), so an
+// oversized log never gets pulled fully into memory just to redact secrets
+// from it. Drops a partial leading line so the returned text starts cleanly.
+async function readTailUtf8(
+  filePath: string,
+  fileSize: number,
+  maxBytes: number,
+): Promise<string> {
+  const handle = await fs.promises.open(
+    filePath,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+  );
+  try {
+    const length = Math.min(maxBytes, fileSize);
+    const position = fileSize - length;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, position);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    if (position === 0) return text;
+    const firstNewline = text.indexOf("\n");
+    return firstNewline === -1 ? text : text.slice(firstNewline + 1);
   } finally {
     await handle.close();
   }
@@ -584,18 +612,33 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
         filePath,
         () => new Error(`Log not found: ${runId}/${name}`),
       );
-      let raw: string;
+      let stat: fs.Stats;
       try {
-        raw = await fs.promises.readFile(filePath, "utf8");
+        stat = await fs.promises.stat(filePath);
       } catch {
         throw new Error(`Log not found: ${runId}/${name}`);
       }
+      let raw: string;
+      let truncated = false;
+      try {
+        if (stat.size > MAX_LOG_TAIL_BYTES) {
+          truncated = true;
+          raw = await readTailUtf8(filePath, stat.size, MAX_LOG_TAIL_BYTES);
+        } else {
+          raw = await fs.promises.readFile(filePath, "utf8");
+        }
+      } catch {
+        throw new Error(`Log not found: ${runId}/${name}`);
+      }
+      const text = redactSecrets(raw);
       return {
         contents: [
           {
             uri: uri.href,
             mimeType: "text/plain",
-            text: redactSecrets(raw),
+            text: truncated
+              ? `[truncated: showing last ${MAX_LOG_TAIL_BYTES} of ${stat.size} bytes]\n${text}`
+              : text,
           },
         ],
       };

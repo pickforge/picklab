@@ -9,6 +9,7 @@ export {
   projectConfigPath,
   runsDir,
   sessionsDir,
+  writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
 

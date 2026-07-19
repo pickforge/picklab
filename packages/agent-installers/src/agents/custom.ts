@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { agentsDir, ensureDir, type EnvLike } from "@pickforge/picklab-core";
-import { writeFileAtomic } from "../atomicFile.js";
+import {
+  agentsDir,
+  ensureDir,
+  writeFileAtomic,
+  type EnvLike,
+} from "@pickforge/picklab-core";
 import {
   MCP_SERVER_NAME,
   renderJsonSnippet,

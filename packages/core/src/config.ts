@@ -4,6 +4,7 @@ import {
   ensureDir,
   globalConfigPath,
   projectConfigPath,
+  writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
 
@@ -102,24 +103,12 @@ export async function loadConfig(
   ) as PicklabConfig;
 }
 
-let tmpCounter = 0;
-
 async function writeConfigFile(
   filePath: string,
   config: PicklabConfig,
 ): Promise<void> {
-  const dir = await ensureDir(path.dirname(filePath));
-  tmpCounter += 1;
-  const tmp = path.join(
-    dir,
-    `.${path.basename(filePath)}.tmp-${process.pid}-${tmpCounter}`,
-  );
-  await fs.promises.writeFile(
-    tmp,
-    `${JSON.stringify(config, null, 2)}\n`,
-    "utf8",
-  );
-  await fs.promises.rename(tmp, filePath);
+  await ensureDir(path.dirname(filePath));
+  await writeFileAtomic(filePath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export async function saveProjectConfig(

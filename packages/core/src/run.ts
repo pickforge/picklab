@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, runsDir } from "./paths.js";
+import { ensureDir, runsDir, writeFileAtomic } from "./paths.js";
 
 export type RunStatus = "running" | "completed" | "failed";
 export type ArtifactType = "screenshot" | "log" | "report" | "other";
@@ -58,8 +58,6 @@ export interface CreateRunOptions {
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
 
-let tmpCounter = 0;
-
 function assertValidSlug(slug: string): void {
   if (!SLUG_PATTERN.test(slug) || slug.includes("..")) {
     throw new Error(
@@ -79,17 +77,7 @@ function formatTimestamp(date: Date): string {
 
 async function writeManifest(runDir: string, manifest: RunManifest): Promise<void> {
   const target = path.join(runDir, "manifest.json");
-  tmpCounter += 1;
-  const tmp = path.join(
-    runDir,
-    `.manifest.json.tmp-${process.pid}-${tmpCounter}`,
-  );
-  await fs.promises.writeFile(
-    tmp,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
-  await fs.promises.rename(tmp, target);
+  await writeFileAtomic(target, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 export class RunHandle {

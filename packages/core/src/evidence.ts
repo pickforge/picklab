@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ensureDir, runsDir } from "./paths.js";
+import { ensureDir, runsDir, writeFileAtomic } from "./paths.js";
 import {
   isPidAlive,
   processIdentityMatches,
@@ -62,8 +62,6 @@ const EMPTY_CLAIM_GRACE_ATTEMPTS = 4;
 /** Hard cap on claim attempts as a spin guard alongside the wall-clock budget. */
 const MAX_CLAIM_ATTEMPTS = 10_000;
 const SAFE_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
-
-let pointerTmpCounter = 0;
 
 export type EvidenceActionStatus = "ok" | "error" | "cancelled" | "timeout";
 
@@ -741,18 +739,7 @@ export async function beginEvidenceRun(
 
       // Publish atomically (temp + rename) so a concurrent reader never sees a
       // torn pointer — only the intact claim or the intact full pointer.
-      pointerTmpCounter += 1;
-      const tmp = path.join(
-        parent,
-        `.active-${sessionId}.json.tmp-${ownerPid}-${pointerTmpCounter}`,
-      );
-      await fs.promises.writeFile(tmp, pointerContent, "utf8");
-      try {
-        await fs.promises.rename(tmp, pointerPath);
-      } catch (renameError) {
-        await fs.promises.unlink(tmp).catch(() => {});
-        throw renameError;
-      }
+      await writeFileAtomic(pointerPath, pointerContent);
 
       // Final confirmation that the published pointer is ours.
       const publishedRaw = await readTextIfPresent(pointerPath);
@@ -922,7 +909,96 @@ function buildTruncationMarker(
  * same run observes the same total, so the cap cannot be evaded by spreading
  * writes over many calls or many processes.
  */
-async function measureRunEvidenceBytes(runDir: string): Promise<number> {
+interface RunByteCacheEntry {
+  /** Cumulative bytes of every counted file except the journal itself. */
+  artifactBytes: number;
+  /**
+   * The exact same *counted* entry names measurement itself would see (every
+   * non-symlink file except the manifest, the journal, and dot-prefixed
+   * control/temp files, plus every non-symlink subdirectory), keyed by path
+   * relative to runDir. Deliberately excludes uncounted control files (the
+   * journal lock, the truncation sentinel, the manifest) so their churn on
+   * every append never forces a rescan.
+   */
+  entries: Map<string, string>;
+}
+
+/** In-process cache of the last-measured artifact footprint per run directory. */
+const runByteCache = new Map<string, RunByteCacheEntry>();
+
+/** Drop a run's cached byte-accounting state (e.g. once it is pruned). */
+function forgetRunByteCache(runDir: string): void {
+  runByteCache.delete(runDir);
+}
+
+/**
+ * Snapshot the set of *counted* entry names in every directory of the run tree
+ * (never following symlinks, never touching a file's contents) — the same
+ * filter `walkRunArtifactBytes` applies. Comparing this against a prior
+ * snapshot is a cheap, correct way to tell whether anything that contributes
+ * to the artifact total was added, removed, or renamed, without lstat-ing any
+ * file and without being fooled by uncounted control-file churn (the journal
+ * lock and truncation sentinel are created and removed on every append).
+ * Returns `undefined` if the run directory itself is gone.
+ */
+async function snapshotRunDirEntries(
+  runDir: string,
+): Promise<Map<string, string> | undefined> {
+  const result = new Map<string, string>();
+  const walk = async (dir: string, rel: string): Promise<boolean> => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    const files: string[] = [];
+    const subdirs: string[] = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        subdirs.push(entry.name);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const rel2 = rel === "" ? entry.name : `${rel}/${entry.name}`;
+      if (rel2 === "manifest.json") continue;
+      if (rel2 === EVIDENCE_ACTION_LOG) continue;
+      if (entry.name.startsWith(".")) continue;
+      files.push(entry.name);
+    }
+    files.sort();
+    subdirs.sort();
+    result.set(rel, files.join("\0"));
+    for (const name of subdirs) {
+      const childRel = rel === "" ? name : `${rel}/${name}`;
+      if (!(await walk(path.join(dir, name), childRel))) return false;
+    }
+    return true;
+  };
+  return (await walk(runDir, "")) ? result : undefined;
+}
+
+function dirEntriesEqual(
+  a: Map<string, string>,
+  b: Map<string, string>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [rel, signature] of a) {
+    if (b.get(rel) !== signature) return false;
+  }
+  return true;
+}
+
+/**
+ * Full recursive scan of every counted file under the run directory (every
+ * file except the action journal, the manifest, and dot-prefixed control/temp
+ * files; symlinks are never followed). This is the ground truth the cache in
+ * `measureRunArtifactBytes` falls back to whenever the directory-mtime
+ * snapshot shows the tree may have changed.
+ */
+async function walkRunArtifactBytes(runDir: string): Promise<number> {
   let total = 0;
   const walk = async (dir: string): Promise<void> => {
     let entries: fs.Dirent[];
@@ -941,9 +1017,12 @@ async function measureRunEvidenceBytes(runDir: string): Promise<number> {
       }
       if (!entry.isFile()) continue;
       const rel = path.relative(runDir, full);
-      // Exclude the manifest and any dot-prefixed control/temp file (the
-      // truncation sentinel, `.manifest.json.tmp-*`, pointer temps).
+      // Exclude the manifest, the journal (measured live, separately, since it
+      // is appended in place rather than replaced), and any dot-prefixed
+      // control/temp file (the truncation sentinel, `.manifest.json.tmp-*`,
+      // pointer temps).
       if (rel === "manifest.json") continue;
+      if (rel === EVIDENCE_ACTION_LOG) continue;
       if (entry.name.startsWith(".")) continue;
       try {
         const stat = await fs.promises.lstat(full);
@@ -956,6 +1035,62 @@ async function measureRunEvidenceBytes(runDir: string): Promise<number> {
   };
   await walk(runDir);
   return total;
+}
+
+/**
+ * Measure the cumulative on-disk bytes of every counted artifact under the run
+ * directory, excluding the action journal (whose live size the caller adds
+ * separately, since it is appended to in place). Because this reads real bytes
+ * on disk it stays consistent across processes: the cap cannot be evaded by
+ * spreading writes over many calls or many processes, or by writing artifact
+ * files directly without ever referencing them in a journaled action.
+ *
+ * A full recursive lstat scan is only performed the first time a run is seen,
+ * or when an entry-name snapshot (readdir only, no lstat) shows the counted
+ * tree actually changed since the last scan (a file was added, removed, or
+ * renamed somewhere in the tree). Otherwise the previously measured total is
+ * reused as-is, turning the common case — many actions in a row that write no
+ * new artifact — into a handful of `readdir` calls instead of a full recursive
+ * `readdir`+`lstat` of every file on every append.
+ */
+async function measureRunArtifactBytes(runDir: string): Promise<number> {
+  const cached = runByteCache.get(runDir);
+  const currentEntries = await snapshotRunDirEntries(runDir);
+  if (
+    cached !== undefined &&
+    currentEntries !== undefined &&
+    dirEntriesEqual(cached.entries, currentEntries)
+  ) {
+    return cached.artifactBytes;
+  }
+  const artifactBytes = await walkRunArtifactBytes(runDir);
+  if (currentEntries === undefined) {
+    forgetRunByteCache(runDir);
+  } else {
+    runByteCache.set(runDir, { artifactBytes, entries: currentEntries });
+  }
+  return artifactBytes;
+}
+
+/**
+ * Measure the cumulative on-disk evidence footprint of a run: the action
+ * journal plus every artifact file written under the run directory
+ * (screenshots, logs, and any other run-relative artifact). Control and summary
+ * files that are not auto-generated evidence — the manifest, the truncation
+ * sentinel, and transient dot-prefixed temp files — are excluded, as are
+ * symlinks (never followed, so a planted link cannot skew the count or escape
+ * the tree).
+ *
+ * Because this reads real bytes on disk, the count is inherently cumulative
+ * across appends and consistent across processes: any process appending to the
+ * same run observes the same total, so the cap cannot be evaded by spreading
+ * writes over many calls or many processes.
+ */
+async function measureRunEvidenceBytes(
+  runDir: string,
+  journalBytes: number,
+): Promise<number> {
+  return (await measureRunArtifactBytes(runDir)) + journalBytes;
 }
 
 async function repairTornJournalTail(
@@ -1065,8 +1200,12 @@ export async function appendAction(
       await repairTornJournalTail(handle);
       // Derive current usage from the run directory's real on-disk bytes (journal
       // + artifacts), so the cap is cumulative across every prior append and every
-      // process. `externalBytes` only adds bytes not yet under the run dir.
-      const used = (await measureRunEvidenceBytes(runDir)) + externalBytes;
+      // process. `externalBytes` only adds bytes not yet under the run dir. The
+      // journal's own live size comes straight off the open handle (already
+      // repaired above), since it is appended to in place rather than replaced.
+      const journalBytes = (await handle.stat()).size;
+      const used =
+        (await measureRunEvidenceBytes(runDir, journalBytes)) + externalBytes;
 
       if (used >= maxBytes) {
         // Already at or beyond the cap. Ensure the one-time marker exists, then
@@ -1230,7 +1369,6 @@ async function journalHasTruncationMarker(runDir: string): Promise<boolean> {
  */
 async function commitTruncationSentinel(
   sentinelPath: string,
-  runDir: string,
   ownerPid: number,
   ownerStartTicks: number | undefined,
 ): Promise<void> {
@@ -1241,18 +1379,7 @@ async function commitTruncationSentinel(
     committedAt: new Date().toISOString(),
   };
   if (ownerStartTicks !== undefined) commit.ownerStartTicks = ownerStartTicks;
-  pointerTmpCounter += 1;
-  const tmp = path.join(
-    runDir,
-    `${TRUNCATION_SENTINEL}.tmp-${ownerPid}-${pointerTmpCounter}`,
-  );
-  await fs.promises.writeFile(tmp, `${JSON.stringify(commit)}\n`, "utf8");
-  try {
-    await fs.promises.rename(tmp, sentinelPath);
-  } catch (error) {
-    await fs.promises.unlink(tmp).catch(() => {});
-    throw error;
-  }
+  await writeFileAtomic(sentinelPath, `${JSON.stringify(commit)}\n`);
 }
 
 /**
@@ -1311,12 +1438,7 @@ async function writeTruncationMarkerOnce(
             state.claim.ownerPid === ownerPid &&
             state.claim.ownerStartTicks === ownerStartTicks;
           if (ownedByCaller && (await journalHasTruncationMarker(runDir))) {
-            await commitTruncationSentinel(
-              sentinelPath,
-              runDir,
-              ownerPid,
-              ownerStartTicks,
-            );
+            await commitTruncationSentinel(sentinelPath, ownerPid, ownerStartTicks);
           }
           return false;
         }
@@ -1368,12 +1490,7 @@ async function writeTruncationMarkerOnce(
       // commit its sentinel (crash between append and commit). Never write a
       // second one: recover by committing the sentinel over the existing marker.
       if (await journalHasTruncationMarker(runDir)) {
-        await commitTruncationSentinel(
-          sentinelPath,
-          runDir,
-          ownerPid,
-          ownerStartTicks,
-        );
+        await commitTruncationSentinel(sentinelPath, ownerPid, ownerStartTicks);
         return false;
       }
 
@@ -1386,12 +1503,7 @@ async function writeTruncationMarkerOnce(
         );
       }
       appended = true;
-      await commitTruncationSentinel(
-        sentinelPath,
-        runDir,
-        ownerPid,
-        ownerStartTicks,
-      );
+      await commitTruncationSentinel(sentinelPath, ownerPid, ownerStartTicks);
       return true;
     } catch (error) {
       // The append failed, so no marker was written: clear our claim so the
@@ -1644,6 +1756,7 @@ export async function pruneFinalizedEvidenceRuns(
     const activeNow = await collectActiveRunIds(parent);
     if (activeNow.has(dirName)) continue;
     await fs.promises.rm(dir, { recursive: true, force: true });
+    forgetRunByteCache(dir);
     removed.push(dirName);
   }
   return removed;

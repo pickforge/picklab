@@ -60,6 +60,36 @@ describe("buildSupervisedBrowserCommand", () => {
     }
   });
 
+  it("bounds unbounded newline-free stderr instead of buffering it all", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-supervisor-"));
+    const browser = path.join(tmp, "browser.cjs");
+    fs.writeFileSync(
+      browser,
+      [
+        'const fs = require("fs");',
+        'fs.writeSync(2, "HEAD_MARKER_ABC");',
+        'fs.writeSync(2, "a".repeat(5 * 1024 * 1024));',
+        'fs.writeSync(2, "TAIL_MARKER_XYZ");',
+        "process.exit(0);",
+      ].join("\n"),
+    );
+    try {
+      const command = buildSupervisedBrowserCommand(
+        process.execPath,
+        process.execPath,
+        [browser],
+      );
+      const result = await runCommand(command.command, command.args);
+
+      expect(result.ok).toBe(true);
+      expect(result.stderr).toContain("TAIL_MARKER_XYZ");
+      expect(result.stderr).not.toContain("HEAD_MARKER_ABC");
+      expect(result.stderr.length).toBeLessThan(200 * 1024);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("rejects missing executable paths", () => {
     expect(() =>
       buildSupervisedBrowserCommand("", "/usr/bin/chromium", []),

@@ -39,6 +39,7 @@ const child = spawn(binary, args, {
   stdio: ["inherit", "inherit", "pipe"],
 });
 let stderrBuffer = "";
+const MAX_STDERR_BUFFER_BYTES = 64 * 1024;
 function forwardBrowserStderr(line) {
   process.stderr.write(
     line.replace(
@@ -64,6 +65,11 @@ child.stderr.setEncoding("utf8");
 child.stderr.on("data", (chunk) => {
   stderrBuffer += chunk;
   flushBrowserStderr();
+  // No newline arrived to flush a complete line; bound the buffer so an
+  // unbounded stream of newline-free stderr can never grow it forever.
+  if (stderrBuffer.length > MAX_STDERR_BUFFER_BYTES) {
+    stderrBuffer = stderrBuffer.slice(-MAX_STDERR_BUFFER_BYTES);
+  }
 });
 child.stderr.once("end", () => flushBrowserStderr(true));
 child.once("error", (error) => {
