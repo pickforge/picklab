@@ -1,4 +1,5 @@
 import type { EnvLike } from "@pickforge/picklab-core";
+import { resolveAskpassCapability } from "../provision/askpass.js";
 import {
   evaluateChecks,
   formatCheckLine,
@@ -7,6 +8,7 @@ import {
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
 import {
   executeProvisioning,
+  type ExecuteProvisioningResult,
   type ProvisioningSection,
   type StepResult,
 } from "../provision/executor.js";
@@ -29,6 +31,10 @@ export interface DoctorCliOptions {
 
 export interface DoctorFixReport {
   dryRun: boolean;
+  /** Mirrors `ExecuteProvisioningResult.status` so `--json` consumers can
+   * distinguish a declined/cancelled/sudo-cancelled fix run from a generic
+   * failure without string-matching `steps`/errors. */
+  status: ExecuteProvisioningResult["status"];
   steps: ProvisioningStep[];
   skipped: string[];
   results: StepResult[];
@@ -115,6 +121,7 @@ async function buildFixPlan(
           reason: `lab-user: ${labUserPrivilegeUnavailableMessage(
             snapshot.labUser.name,
           )}`,
+          context: "lab-user: ",
         },
         consent: {
           onDenied: "skip",
@@ -169,12 +176,13 @@ export async function runDoctor(
         log,
         privilege: {
           sudoPath: snapshot.sudo,
-          nonInteractive: process.stdin.isTTY !== true,
+          askpass: resolveAskpassCapability(env),
         },
       },
     );
     report.fix = {
       dryRun: opts.dryRun === true,
+      status: execution.status,
       steps: execution.plan.steps,
       skipped: execution.skipped,
       results: execution.results,

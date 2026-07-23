@@ -92,6 +92,12 @@ function makeFakeSdk(root: string, opts: FakeSdkOptions = {}): string {
 interface FakeEnvOptions {
   bins?: Record<string, string>;
   sdk?: string;
+  /** Stand in for a real graphical session + resolvable askpass helper
+   * (locked v1 contract) so privileged steps materialize into `sudo -A`
+   * instead of failing preflight. PickLab never ships its own helper, so
+   * tests that need one point SUDO_ASKPASS at a fake executable — none of
+   * the fake `sudo` stand-ins below actually invoke it. */
+  graphicalSudo?: boolean;
 }
 
 function makeEnv(
@@ -113,6 +119,12 @@ function makeEnv(
   };
   if (opts.sdk !== undefined) {
     env.ANDROID_HOME = opts.sdk;
+  }
+  if (opts.graphicalSudo === true) {
+    const helper = path.join(bin, "fake-askpass");
+    writeScript(helper, "exit 0");
+    env.DISPLAY = ":0";
+    env.SUDO_ASKPASS = helper;
   }
   return env;
 }
@@ -190,6 +202,7 @@ describe("picklab doctor", () => {
     const result = await runCli(["doctor", "--json", "--fix"], env, tmpDir);
     expect(result.code).toBe(0);
     const report = parseJson(result);
+    expect(report.fix.status).toBe("completed");
     expect(fs.statSync(env.PICKLAB_HOME!).isDirectory()).toBe(true);
     expect(report.fix.results).toEqual([
       { id: "picklab-home", ok: true, detail: expect.stringContaining("mkdir") },
@@ -202,6 +215,24 @@ describe("picklab doctor", () => {
         "Install sudo, or create the user manually as root: " +
         "useradd -r -M -s /usr/sbin/nologin picklab-lab",
     );
+    expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
+      .toEqual(["avd", "lab-user"]);
+  });
+
+  it("keeps the 'lab-user: ' skip prefix when the failure is askpass-unavailable rather than sudo-missing", async () => {
+    // sudo IS on PATH here (unlike the test above), so the lab-user section
+    // fails preflight on the askpass capability check instead — its skip
+    // reason must still carry the same "lab-user: " context its "avd: "
+    // sibling does (P3 fix: prepareSections previously dropped it for this
+    // failure mode).
+    const env = makeEnv(tmpDir, { bins: { sudo: "exit 0" } });
+    const result = await runCli(["doctor", "--json", "--fix"], env, tmpDir);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.fix.status).toBe("completed");
+    const skipped = (report.fix.skipped as string[]).join("\n");
+    expect(skipped).toContain("avd:");
+    expect(skipped).toMatch(/lab-user: (No graphical session detected|Graphical sudo prompts are only supported on Linux)/);
     expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
       .toEqual(["avd", "lab-user"]);
   });
@@ -269,6 +300,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(0);
     const report = parseJson(result);
     expect(report.ok).toBe(true);
+    expect(report.status).toBe("completed");
     const config = JSON.parse(
       fs.readFileSync(path.join(projectDir, ".picklab", "config.json"), "utf8"),
     ) as Record<string, unknown>;
@@ -290,9 +322,16 @@ describe("picklab init", () => {
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
   });
 
-  it("fails closed when --create-lab-user lacks --yes in a non-interactive session", async () => {
+  // Graphical sudo is Linux-only (locked v1 contract) — on any other
+  // platform the askpass preflight check always fails first, before the
+  // consent gate under test here even runs. Runs on Linux CI; skips
+  // harmlessly elsewhere (see also "picklab setup lab-user" below).
+  it.skipIf(process.platform !== "linux")(
+    "fails closed when --create-lab-user lacks --yes in a non-interactive session",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
       bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
     });
     const projectDir = path.join(tmpDir, "project");
@@ -305,6 +344,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect(report.ok).toBe(false);
+    expect(report.status).toBe("cancelled");
     expect((report.errors as string[]).join("\n")).toContain("--yes");
     expect(fs.existsSync(sudoLog)).toBe(false);
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
@@ -380,7 +420,10 @@ describe("picklab init", () => {
     expect(fs.existsSync(sudoLog)).toBe(false);
   });
 
-  it("plans lab-user sudo steps for desktop+android with explicit consent", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "plans lab-user sudo steps for desktop+android with explicit consent",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), {
       images: [IMAGE],
@@ -388,6 +431,7 @@ describe("picklab init", () => {
     });
     const env = makeEnv(tmpDir, {
       sdk,
+      graphicalSudo: true,
       bins: {
         Xvfb: "exit 0",
         xdotool: "exit 0",
@@ -425,7 +469,7 @@ describe("picklab init", () => {
       "persist-lab-user",
     ]);
     expect(plan.find((step) => step.id === "useradd").command.args).toEqual([
-      "-n",
+      "-A",
       "useradd",
       "-r",
       "-M",
@@ -465,6 +509,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect(report.ok).toBe(false);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain(
       'sdkmanager "system-images;android-35;google_apis;x86_64"',
     );
@@ -520,12 +565,51 @@ describe("picklab init", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
     expect((report.plan as Array<{ id: string }>).map((step) => step.id)).toEqual(
       ["project-config", "picklab-home"],
     );
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
+  });
+
+  it("fails closed with an actionable manual fallback when sudo exists but no graphical session is available", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const env = makeEnv(tmpDir, {
+      bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
+    });
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    const result = await runCli(
+      [
+        "init",
+        "--profile",
+        "generic",
+        "--yes",
+        "--create-lab-user",
+        "--json",
+      ],
+      env,
+      projectDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    const errors = (report.errors as string[]).join("\n");
+    // Linux CI hits the "no graphical session" branch (this env sets no
+    // DISPLAY/WAYLAND_DISPLAY); any other dev platform hits the always-Linux
+    // -only branch first (locked v1 contract scope) — both name the same
+    // manual fallback, which is what this test actually verifies end to end.
+    expect(errors).toContain(
+      process.platform === "linux"
+        ? "No graphical session detected"
+        : "only supported on Linux",
+    );
+    expect(errors).toContain(
+      "Run it yourself in a terminal: sudo useradd -r -M -s /usr/sbin/nologin picklab-lab",
+    );
+    expect(fs.existsSync(sudoLog)).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
   });
 
   it("retains earlier AVD sections when later lab-user privilege is unavailable", async () => {
@@ -586,11 +670,15 @@ describe("picklab init", () => {
     expect(fs.existsSync(env.PICKLAB_HOME!)).toBe(false);
   });
 
-  it("materializes selected sudo steps even when another section blocks execution", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "materializes selected sudo steps even when another section blocks execution",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const sdk = makeFakeSdk(path.join(tmpDir, "sdk"));
     const env = makeEnv(tmpDir, {
       sdk,
+      graphicalSudo: true,
       bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
     });
     const projectDir = path.join(tmpDir, "project");
@@ -613,7 +701,7 @@ describe("picklab init", () => {
     const useradd = report.plan.find(
       (step: { id: string }) => step.id === "useradd",
     );
-    expect(useradd.command.args.slice(0, 2)).toEqual(["-n", "useradd"]);
+    expect(useradd.command.args.slice(0, 2)).toEqual(["-A", "useradd"]);
     expect(fs.existsSync(sudoLog)).toBe(false);
   });
 
@@ -683,7 +771,10 @@ describe("picklab init", () => {
     expect(globalConfig.android.avdName).toBe("picklab-avd");
   });
 
-  it("preserves unprivileged and privileged step order in one init", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "preserves unprivileged and privileged step order in one init",
+    async () => {
     const sequenceLog = path.join(tmpDir, "sequence.log");
     const sdk = makeFakeSdk(path.join(tmpDir, "sdk"), { images: [IMAGE] });
     writeScript(
@@ -692,6 +783,7 @@ describe("picklab init", () => {
     );
     const env = makeEnv(tmpDir, {
       sdk,
+      graphicalSudo: true,
       bins: { sudo: `echo "sudo:$*" >> ${sequenceLog}\nexit 0` },
     });
     const projectDir = path.join(tmpDir, "project");
@@ -714,16 +806,24 @@ describe("picklab init", () => {
     expect(result.code).toBe(0);
     const sequence = fs.readFileSync(sequenceLog, "utf8").trim().split("\n");
     expect(sequence[0]).toBe("avdmanager");
-    expect(sequence.slice(1).every((line) => line.startsWith("sudo:-n "))).toBe(
+    expect(sequence.slice(1).every((line) => line.startsWith("sudo:-A "))).toBe(
       true,
     );
   });
 });
 
 describe("picklab setup lab-user", () => {
-  it("prints the provisioning plan in --dry-run without running sudo", async () => {
+  // Graphical sudo is Linux-only (locked v1 contract): resolveAskpassCapability
+  // gates on process.platform before even looking at DISPLAY/SUDO_ASKPASS, so
+  // any test that needs the "available" happy path to actually route a step
+  // through sudo can only run for real on Linux. These skip harmlessly on
+  // other dev platforms and run in full on Linux CI.
+  it.skipIf(process.platform !== "linux")(
+    "prints the provisioning plan in --dry-run without running sudo",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
       bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
     });
     const result = await runCli(
@@ -743,7 +843,7 @@ describe("picklab setup lab-user", () => {
       "persist-lab-user",
     ]);
     expect((report.plan as Array<any>)[0].command.args).toEqual([
-      "-n",
+      "-A",
       "useradd",
       "-r",
       "-M",
@@ -754,14 +854,20 @@ describe("picklab setup lab-user", () => {
     expect(fs.existsSync(sudoLog)).toBe(false);
   });
 
-  it("fails closed without --yes in a non-interactive session", async () => {
-    const env = makeEnv(tmpDir, { bins: { sudo: "exit 0" } });
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "fails closed without --yes in a non-interactive session",
+    async () => {
+    const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
+      bins: { sudo: "exit 0" },
+    });
     const result = await runCli(["setup", "lab-user", "--json"], env, tmpDir);
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect((report.errors as string[]).join("\n")).toContain("--yes");
     expect((report.plan as Array<any>)[0].command.args).toEqual([
-      "-n",
+      "-A",
       "useradd",
       "-r",
       "-M",
@@ -769,6 +875,31 @@ describe("picklab setup lab-user", () => {
       "/usr/sbin/nologin",
       "picklab-lab",
     ]);
+  });
+
+  it("fails closed with an actionable manual fallback when no graphical session is available", async () => {
+    const sudoLog = path.join(tmpDir, "sudo.log");
+    const env = makeEnv(tmpDir, {
+      bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--yes", "--json"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    const errors = (report.errors as string[]).join("\n");
+    // See the equivalent "picklab init" test above for why this branches.
+    expect(errors).toContain(
+      process.platform === "linux"
+        ? "No graphical session detected"
+        : "only supported on Linux",
+    );
+    expect(errors).toContain(
+      "Run it yourself in a terminal: sudo useradd -r -M -s /usr/sbin/nologin picklab-lab",
+    );
+    expect(fs.existsSync(sudoLog)).toBe(false);
   });
 
   it("does not print the already-existing user before consent", async () => {
@@ -789,9 +920,13 @@ describe("picklab setup lab-user", () => {
     expect(fs.existsSync(home)).toBe(false);
   });
 
-  it("prints the already-existing user before approved dry-run logs", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "prints the already-existing user before approved dry-run logs",
+    async () => {
     const home = path.join(tmpDir, "missing-home");
     const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
       bins: {
         getent: "echo 'picklab-lab:x:999:999::/var/empty:/bin/false'",
         sudo: "exit 0",
@@ -820,13 +955,18 @@ describe("picklab setup lab-user", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
     expect(report.plan).toEqual([]);
   });
 
-  it("runs each provisioning step through sudo and persists the config", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "runs each provisioning step through sudo and persists the config",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
       bins: { sudo: `printf '%s\\n' "$*" >> ${sudoLog}\nexit 0` },
     });
     const result = await runCli(
@@ -835,15 +975,17 @@ describe("picklab setup lab-user", () => {
       tmpDir,
     );
     expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.status).toBe("completed");
     const lines = fs
       .readFileSync(sudoLog, "utf8")
       .trim()
       .split("\n");
     expect(lines).toEqual([
-      "-n useradd -r -M -s /usr/sbin/nologin picklab-lab",
-      "-n mkdir -p /var/lib/picklab/lab-home",
-      "-n chown picklab-lab:picklab-lab /var/lib/picklab/lab-home",
-      "-n chmod 750 /var/lib/picklab/lab-home",
+      "-A useradd -r -M -s /usr/sbin/nologin picklab-lab",
+      "-A mkdir -p /var/lib/picklab/lab-home",
+      "-A chown picklab-lab:picklab-lab /var/lib/picklab/lab-home",
+      "-A chmod 750 /var/lib/picklab/lab-home",
     ]);
     const globalConfig = JSON.parse(
       fs.readFileSync(path.join(env.PICKLAB_HOME!, "config.json"), "utf8"),
@@ -854,9 +996,13 @@ describe("picklab setup lab-user", () => {
     });
   });
 
-  it("returns redacted partial results when a privileged step fails", async () => {
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "returns redacted partial results when a privileged step fails",
+    async () => {
     const sudoLog = path.join(tmpDir, "sudo.log");
     const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
       bins: {
         sudo:
           `printf '%s\\n' "$*" >> ${sudoLog}\n` +
@@ -871,6 +1017,9 @@ describe("picklab setup lab-user", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    // This step fails without a "sudo:"-prefixed diagnostic, so it's a
+    // generic step failure, not a sudo cancellation/denial.
+    expect(report.status).toBe("failed");
     expect(
       (report.results as Array<{ id: string; ok: boolean }>).map((step) => [
         step.id,
@@ -886,6 +1035,29 @@ describe("picklab setup lab-user", () => {
     expect(JSON.stringify(report)).not.toContain("planted-secret");
     expect(fs.existsSync(path.join(env.PICKLAB_HOME!, "config.json"))).toBe(
       false,
+    );
+  });
+
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "reports status: cancelled, distinct from failed/declined, when sudo denies or cancels a step",
+    async () => {
+    const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
+      bins: {
+        sudo: 'echo "sudo: a password is required" >&2\nexit 1',
+      },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--yes", "--json"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.status).toBe("cancelled");
+    expect((report.errors as string[]).join("\n")).toContain(
+      "sudo denied or cancelled",
     );
   });
 });

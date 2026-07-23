@@ -11,9 +11,27 @@ import {
   type EnvLike,
   type PicklabConfig,
 } from "@pickforge/picklab-core";
-import { formatStep, type ProvisioningPlan, type ProvisioningStep } from "./plan.js";
+import {
+  askpassUnavailableMessage,
+  type AskpassCapability,
+} from "./askpass.js";
+import {
+  formatStep,
+  type CommandStep,
+  type ProvisioningPlan,
+  type ProvisioningStep,
+} from "./plan.js";
 
 const DEFAULT_STEP_TIMEOUT_MS = 180_000;
+
+// Real `sudo` prefixes its own diagnostics with "sudo:" — auth failure,
+// cancellation (the askpass helper produced no password), and "no askpass
+// program specified" all take this shape. The wrapped command's own stderr
+// does not, so this is the fail-closed line between "sudo denied/cancelled
+// this" and "the privileged command itself failed" without ever parsing
+// prompt text or credentials (sudo never echoes those to its own stderr —
+// they go straight from the askpass helper into sudo's authentication path).
+const SUDO_DENIAL_RE = /^sudo:/im;
 
 export type PlanClassification =
   | "empty"
@@ -41,7 +59,19 @@ export interface ProvisioningPlanSection {
   };
   privilegeUnavailable?: {
     action?: "error" | "skip";
+    /** Used verbatim only when sudo itself is missing from PATH — the
+     * failure mode this field predates the askpass contract for. Ignored
+     * for an askpass-unavailable failure (see `context` below), since a
+     * static reason authored for "sudo not found" would otherwise paper
+     * over the real, state-correct askpass message. */
     reason: string;
+    /** Prefix (e.g. `"lab-user: "`) prepended, verbatim, to an
+     * askpass-unavailable message (headless/no-helper/unsupported-platform).
+     * `reason` doesn't apply to that failure mode (see above), so this is a
+     * section's only way to keep the same "<label>: " context its sibling
+     * skip/error reasons already carry — e.g. doctor's `--fix` skip list
+     * mixes "avd: ..." and "lab-user: ..." entries. */
+    context?: string;
   };
 }
 
@@ -71,7 +101,10 @@ export interface ExecuteProvisioningOptions {
   adapter?: ProvisioningExecutionAdapter;
   privilege?: {
     sudoPath: string | null;
-    nonInteractive?: boolean;
+    /** Pre-resolved via `resolveAskpassCapability` at command-invocation
+     * time (per the locked v1 contract). Missing is treated as `headless` —
+     * fail-closed, never an implicit "available". */
+    askpass?: AskpassCapability;
   };
   beforeExecute?: (plan: ProvisioningPlan) => void | Promise<void>;
 }
@@ -114,6 +147,28 @@ type PreparedSection =
     };
 
 class PrivilegeUnavailableError extends Error {}
+
+/** Preflight failure: the `sudo` binary itself isn't on PATH. Callers may
+ * override this reason with a section's static `privilegeUnavailable.reason`
+ * (e.g. `labUserPrivilegeUnavailableMessage`) — that override predates the
+ * askpass contract and was always written to describe exactly this case. */
+class SudoMissingError extends PrivilegeUnavailableError {}
+
+/** Preflight failure: sudo exists, but the locked v1 askpass contract's
+ * capability check didn't resolve to `available` (headless, no helper, or
+ * an unsupported platform). Its message is already the specific,
+ * state-correct, actionable one from `askpassUnavailableMessage` — a
+ * section's static `privilegeUnavailable.reason` (written only for the
+ * sudo-missing case above) must never paper over it with a stale, wrong
+ * "sudo not found" message. */
+class AskpassUnavailableError extends PrivilegeUnavailableError {}
+
+/** Thrown when a privileged command's own execution is denied or cancelled
+ * by sudo (auth failure, or the user dismissing the graphical prompt) — a
+ * distinct, actionable runtime state per the locked v1 contract, never
+ * retried automatically. Exported so custom adapters can raise the same
+ * state without re-implementing the `sudo:`-prefix heuristic. */
+export class PrivilegedCommandDeniedError extends Error {}
 
 export function classifyPlan(plan: ProvisioningPlan): PlanClassification {
   if (plan.steps.length === 0) return "empty";
@@ -167,6 +222,14 @@ async function executeLocalStep(
           result.stderr.trim() ||
           result.stdout.trim() ||
           (result.timedOut ? "timed out" : `exit code ${result.code}`);
+        if (step.privileged && SUDO_DENIAL_RE.test(result.stderr)) {
+          throw new PrivilegedCommandDeniedError(
+            `sudo denied or cancelled this privileged command: ${detail}. ` +
+              "No changes were made by this step. Approve the graphical " +
+              "sudo prompt and re-run, or run it yourself in a terminal: " +
+              manualSudoCommandFromMaterialized(step),
+          );
+        }
         throw new Error(
           `${command.cmd} ${command.args.join(" ")} failed: ${detail}`,
         );
@@ -187,27 +250,52 @@ async function executeLocalStep(
   }
 }
 
+/** Reconstruct the command line a user can paste into a terminal themselves
+ * — the manual fallback the locked v1 contract requires whenever graphical
+ * sudo isn't available. For the raw (pre-materialization) step. */
+function manualSudoCommand(step: CommandStep): string {
+  return `sudo ${step.command.cmd} ${step.command.args.join(" ")}`.trim();
+}
+
+/** Same fallback, reconstructed from an already-materialized `sudo -A <cmd>
+ * <args>` step (as seen inside `executeLocalStep`) by dropping the `-A`
+ * flag we added ourselves. Only ever called on steps this module
+ * materialized, so the `["-A", cmd, ...args]` shape is guaranteed. */
+function manualSudoCommandFromMaterialized(step: CommandStep): string {
+  return `sudo ${step.command.args.slice(1).join(" ")}`.trim();
+}
+
 function materializePrivilegedStep(
   step: ProvisioningStep,
   opts: ExecuteProvisioningOptions,
 ): ProvisioningStep {
   const sudoPath = opts.privilege?.sudoPath;
   if (sudoPath === undefined || sudoPath === null) {
-    throw new PrivilegeUnavailableError("sudo not found on PATH");
+    throw new SudoMissingError("sudo not found on PATH");
   }
   if (step.kind !== "command") {
     throw new Error(`Unsupported privileged provisioning step: ${step.kind}`);
+  }
+  // Missing capability is treated as `headless` — fail-closed, never an
+  // implicit "available" — so a caller that forgets to resolve+pass it
+  // cannot accidentally spawn sudo without a graphical prompt.
+  const capability: AskpassCapability =
+    opts.privilege?.askpass ?? { state: "headless" };
+  if (capability.state !== "available") {
+    throw new AskpassUnavailableError(
+      askpassUnavailableMessage(capability, manualSudoCommand(step)),
+    );
   }
   return {
     ...step,
     command: {
       ...step.command,
       cmd: sudoPath,
-      args: [
-        ...(opts.privilege?.nonInteractive === true ? ["-n"] : []),
-        step.command.cmd,
-        ...step.command.args,
-      ],
+      args: ["-A", step.command.cmd, ...step.command.args],
+      // SUDO_ASKPASS is the only environment variable this feature may
+      // inject (locked v1 contract) — every other key from the step's own
+      // `command.env` passes through untouched.
+      env: { ...step.command.env, SUDO_ASKPASS: capability.helper },
     },
   };
 }
@@ -268,6 +356,20 @@ function prepareSections(
         })),
       };
     } catch (error) {
+      if (error instanceof AskpassUnavailableError) {
+        // Always the specific, state-correct reason — never masked by a
+        // section's static privilegeUnavailable.reason (see class doc) —
+        // but still honors an explicit `context` prefix, so a section that
+        // labels its other skip/error reasons (e.g. doctor's "lab-user: ")
+        // keeps that same label here.
+        const context = section.privilegeUnavailable?.context;
+        return {
+          kind: "unavailable",
+          section,
+          reason:
+            context === undefined ? error.message : `${context}${error.message}`,
+        };
+      }
       if (error instanceof PrivilegeUnavailableError) {
         return {
           kind: "unavailable",
@@ -410,10 +512,22 @@ export async function executeProvisioning(
       results.push({ id: presentation.id, ok: true, detail: formatted });
     } catch (error) {
       const detail = redactSecrets((error as Error).message);
-      const message = `Step "${presentation.id}" failed: ${detail}`;
-      log(`[failed] ${title}: ${detail}`);
+      // sudo denial/cancellation is a distinct, actionable runtime state
+      // (locked v1 contract) — never folded into a generic "failed" and
+      // never retried automatically.
+      const cancelledBySudo = error instanceof PrivilegedCommandDeniedError;
+      const message = `Step "${presentation.id}" ${
+        cancelledBySudo ? "cancelled" : "failed"
+      }: ${detail}`;
+      log(`[${cancelledBySudo ? "cancelled" : "failed"}] ${title}: ${detail}`);
       results.push({ id: presentation.id, ok: false, detail: message });
-      return executionResult("failed", selected, skipped, results, [message]);
+      return executionResult(
+        cancelledBySudo ? "cancelled" : "failed",
+        selected,
+        skipped,
+        results,
+        [message],
+      );
     }
   }
   return executionResult("completed", selected, skipped, results, []);
