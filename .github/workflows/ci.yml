@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan dependency lockfiles
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2
+        with:
+          scan-args: |-
+            scan source
+            --recursive
+            ./
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
