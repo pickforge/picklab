@@ -103,3 +103,21 @@ export {
 } from "./session.js";
 
 export { findOnPath } from "./util.js";
+
+export {
+  endHumanTakeover,
+  recoverStaleHumanLease,
+  renewHumanTakeover,
+  startHumanTakeover,
+  type EndHumanTakeoverOptions,
+  type EndHumanTakeoverResult,
+  type HumanTakeoverHandle,
+  type StartHumanTakeoverOptions,
+  type TakeoverEndReason,
+} from "./takeover.js";
+
+export {
+  DEFAULT_TAKEOVER_WATCHDOG_POLL_MS,
+  runTakeoverWatchdogLoop,
+  type RunTakeoverWatchdogLoopOptions,
+} from "./takeover-watchdog.js";

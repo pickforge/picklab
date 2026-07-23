@@ -1,4 +1,4 @@
-import { runCommand } from "@pickforge/picklab-core";
+import { runCommand, withAgentPermit, type EnvLike } from "@pickforge/picklab-core";
 import { parseDisplayNumber } from "./display.js";
 
 const TYPE_DELAY_MS = 50;
@@ -25,6 +25,8 @@ export interface ClickArgsOptions {
 
 export interface ClickOptions extends ClickArgsOptions {
   display: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface MoveArgsOptions {
@@ -34,6 +36,8 @@ export interface MoveArgsOptions {
 
 export interface MoveOptions extends MoveArgsOptions {
   display: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface ScrollArgsOptions {
@@ -45,6 +49,8 @@ export interface ScrollArgsOptions {
 
 export interface ScrollOptions extends ScrollArgsOptions {
   display: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface DragArgsOptions {
@@ -58,6 +64,8 @@ export interface DragArgsOptions {
 
 export interface DragOptions extends DragArgsOptions {
   display: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface DoubleClickArgsOptions {
@@ -69,16 +77,22 @@ export interface DoubleClickArgsOptions {
 
 export interface DoubleClickOptions extends DoubleClickArgsOptions {
   display: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface TypeTextOptions {
   display: string;
   text: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 export interface PressKeyOptions {
   display: string;
   key: string;
+  sessionId: string;
+  env?: EnvLike;
 }
 
 function assertCoordinate(value: number, label: string): void {
@@ -273,67 +287,89 @@ async function runXdotool(
   });
 }
 
+/**
+ * Every desktop input call below is gated by `withAgentPermit`: it acquires
+ * a short-lived agent permit, rechecks for a live human lease, delivers the
+ * input only if none is found, and releases the permit in `finally` —
+ * fail-closed, per pickforge/picklab#21. No permit fitness (or a lease
+ * appearing before the recheck) means no input delivery.
+ */
+
 export async function click(opts: ClickOptions): Promise<void> {
-  await runXdotool(
-    opts.display,
-    buildClickArgs({ x: opts.x, y: opts.y, button: opts.button }),
-    INPUT_TIMEOUT_MS,
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(
+      opts.display,
+      buildClickArgs({ x: opts.x, y: opts.y, button: opts.button }),
+      INPUT_TIMEOUT_MS,
+    ),
   );
 }
 
 export async function move(opts: MoveOptions): Promise<void> {
-  await runXdotool(
-    opts.display,
-    buildMoveArgs({ x: opts.x, y: opts.y }),
-    INPUT_TIMEOUT_MS,
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(
+      opts.display,
+      buildMoveArgs({ x: opts.x, y: opts.y }),
+      INPUT_TIMEOUT_MS,
+    ),
   );
 }
 
 export async function scroll(opts: ScrollOptions): Promise<void> {
-  await runXdotool(
-    opts.display,
-    buildScrollArgs({
-      deltaX: opts.deltaX,
-      deltaY: opts.deltaY,
-      x: opts.x,
-      y: opts.y,
-    }),
-    INPUT_TIMEOUT_MS,
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(
+      opts.display,
+      buildScrollArgs({
+        deltaX: opts.deltaX,
+        deltaY: opts.deltaY,
+        x: opts.x,
+        y: opts.y,
+      }),
+      INPUT_TIMEOUT_MS,
+    ),
   );
 }
 
 export async function drag(opts: DragOptions): Promise<void> {
-  await runXdotool(
-    opts.display,
-    buildDragArgs({
-      fromX: opts.fromX,
-      fromY: opts.fromY,
-      toX: opts.toX,
-      toY: opts.toY,
-      button: opts.button,
-      durationMs: opts.durationMs,
-    }),
-    INPUT_TIMEOUT_MS + MAX_DRAG_DURATION_MS,
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(
+      opts.display,
+      buildDragArgs({
+        fromX: opts.fromX,
+        fromY: opts.fromY,
+        toX: opts.toX,
+        toY: opts.toY,
+        button: opts.button,
+        durationMs: opts.durationMs,
+      }),
+      INPUT_TIMEOUT_MS + MAX_DRAG_DURATION_MS,
+    ),
   );
 }
 
 export async function doubleClick(opts: DoubleClickOptions): Promise<void> {
-  await runXdotool(
-    opts.display,
-    buildDoubleClickArgs({
-      x: opts.x,
-      y: opts.y,
-      button: opts.button,
-      intervalMs: opts.intervalMs,
-    }),
-    INPUT_TIMEOUT_MS + MAX_DOUBLE_CLICK_INTERVAL_MS,
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(
+      opts.display,
+      buildDoubleClickArgs({
+        x: opts.x,
+        y: opts.y,
+        button: opts.button,
+        intervalMs: opts.intervalMs,
+      }),
+      INPUT_TIMEOUT_MS + MAX_DOUBLE_CLICK_INTERVAL_MS,
+    ),
   );
 }
 
 export async function typeText(opts: TypeTextOptions): Promise<void> {
-  await runXdotool(opts.display, buildTypeArgs(opts.text), TYPE_TIMEOUT_MS);
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(opts.display, buildTypeArgs(opts.text), TYPE_TIMEOUT_MS),
+  );
 }
 
 export async function pressKey(opts: PressKeyOptions): Promise<void> {
-  await runXdotool(opts.display, buildKeyArgs(opts.key), INPUT_TIMEOUT_MS);
+  await withAgentPermit(opts.sessionId, opts.env ?? process.env, () =>
+    runXdotool(opts.display, buildKeyArgs(opts.key), INPUT_TIMEOUT_MS),
+  );
 }

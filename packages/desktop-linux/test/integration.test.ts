@@ -582,20 +582,22 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
         expect(win.id).toMatch(/^\d+$/);
         expect(win.name).toContain("picklab-itest");
 
-        await click({ display: session.display, x: 40, y: 40 });
-        await typeText({ display: session.display, text: "echo picklab" });
-        await pressKey({ display: session.display, key: "Return" });
-        await pressKey({ display: session.display, key: "ctrl+shift+t" });
+        await click({ display: session.display, sessionId: session.id, env, x: 40, y: 40 });
+        await typeText({ display: session.display, sessionId: session.id, env, text: "echo picklab" });
+        await pressKey({ display: session.display, sessionId: session.id, env, key: "Return" });
+        await pressKey({ display: session.display, sessionId: session.id, env, key: "ctrl+shift+t" });
 
-        await move({ display: session.display, x: 120, y: 90 });
+        await move({ display: session.display, sessionId: session.id, env, x: 120, y: 90 });
         expect(await pointerLocation(session.display)).toEqual({
           x: 120,
           y: 90,
         });
 
-        await scroll({ display: session.display, deltaX: 0, deltaY: 2 });
+        await scroll({ display: session.display, sessionId: session.id, env, deltaX: 0, deltaY: 2 });
         await scroll({
           display: session.display,
+          sessionId: session.id,
+          env,
           deltaX: -1,
           deltaY: -1,
           x: 60,
@@ -608,6 +610,8 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
 
         await drag({
           display: session.display,
+          sessionId: session.id,
+          env,
           fromX: 30,
           fromY: 30,
           toX: 150,
@@ -619,7 +623,7 @@ describe.skipIf(!hasDesktopStack)("desktop integration (Xvfb + xdotool)", () => 
           y: 110,
         });
 
-        await doubleClick({ display: session.display, x: 45, y: 45 });
+        await doubleClick({ display: session.display, sessionId: session.id, env, x: 45, y: 45 });
         expect(await pointerLocation(session.display)).toEqual({
           x: 45,
           y: 45,

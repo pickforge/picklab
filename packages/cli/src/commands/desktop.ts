@@ -1,3 +1,4 @@
+import { withAgentPermit } from "@pickforge/picklab-core";
 import {
   click,
   desktopSessionLogDir,
@@ -49,13 +50,18 @@ export async function runDesktopLaunch(
 ): Promise<number> {
   return runReported(opts, async () => {
     const { id, display } = await resolveDesktop(opts);
-    const app = await launchApp({
-      display,
-      command,
-      args,
-      logDir: desktopSessionLogDir(id),
-      cwd: opts.cwd,
-    });
+    // A newly launched client on the shared display can grab input focus —
+    // gated the same as direct input, so it can never land while a human
+    // holds the takeover lease (pickforge/picklab#21 P1-E).
+    const app = await withAgentPermit(id, process.env, () =>
+      launchApp({
+        display,
+        command,
+        args,
+        logDir: desktopSessionLogDir(id),
+        cwd: opts.cwd,
+      }),
+    );
     const data: Record<string, unknown> = {
       sessionId: id,
       display,
@@ -155,7 +161,7 @@ export async function runDesktopClick(
     const parsedY = parseIntArg(y, "y");
     const button = parseButtonOption(opts.button);
     const { id, display } = await resolveDesktop(opts);
-    await click({ display, x: parsedX, y: parsedY, button });
+    await click({ display, sessionId: id, x: parsedX, y: parsedY, button });
     return {
       data: { sessionId: id, display, x: parsedX, y: parsedY, button: button ?? 1 },
       lines: [`clicked (${parsedX}, ${parsedY}) on ${display}`],
@@ -172,7 +178,7 @@ export async function runDesktopMove(
     const parsedX = parseIntArg(x, "x");
     const parsedY = parseIntArg(y, "y");
     const { id, display } = await resolveDesktop(opts);
-    await move({ display, x: parsedX, y: parsedY });
+    await move({ display, sessionId: id, x: parsedX, y: parsedY });
     return {
       data: { sessionId: id, display, x: parsedX, y: parsedY },
       lines: [`moved pointer to (${parsedX}, ${parsedY}) on ${display}`],
@@ -210,7 +216,7 @@ export async function runDesktopScroll(
       y = Number(match[2]);
     }
     const { id, display } = await resolveDesktop(opts);
-    await scroll({ display, deltaX: parsedDeltaX, deltaY: parsedDeltaY, x, y });
+    await scroll({ display, sessionId: id, deltaX: parsedDeltaX, deltaY: parsedDeltaY, x, y });
     const data: Record<string, unknown> = {
       sessionId: id,
       display,
@@ -256,6 +262,7 @@ export async function runDesktopDrag(
     const { id, display } = await resolveDesktop(opts);
     await drag({
       display,
+      sessionId: id,
       fromX: parsedFromX,
       fromY: parsedFromY,
       toX: parsedToX,
@@ -303,6 +310,7 @@ export async function runDesktopDoubleClick(
     const { id, display } = await resolveDesktop(opts);
     await doubleClick({
       display,
+      sessionId: id,
       x: parsedX,
       y: parsedY,
       button,
@@ -327,7 +335,7 @@ export async function runDesktopType(
 ): Promise<number> {
   return runReported(opts, async () => {
     const { id, display } = await resolveDesktop(opts);
-    await typeText({ display, text });
+    await typeText({ display, sessionId: id, text });
     return {
       data: { sessionId: id, display, length: text.length },
       lines: [`typed ${text.length} character(s) on ${display}`],
@@ -341,7 +349,7 @@ export async function runDesktopKey(
 ): Promise<number> {
   return runReported(opts, async () => {
     const { id, display } = await resolveDesktop(opts);
-    await pressKey({ display, key });
+    await pressKey({ display, sessionId: id, key });
     return {
       data: { sessionId: id, display, key },
       lines: [`pressed ${key} on ${display}`],

@@ -9,10 +9,13 @@ const SECRET_QUESTION_PATTERN =
 const SECRET_GUIDANCE =
   "This looks like a request for a secret (password, API key, token, 2FA " +
   "code, or other credential). Never collect secrets through this tool. " +
-  "Ask the user to enter the secret directly into the lab app through an " +
-  "explicit writable VNC control session (`--vnc-control`), or into the environment, then " +
-  "confirm out-of-band with kind " +
-  '"confirm" (e.g. "I\'ve entered the password, continue?").';
+  "Ask the user to run `picklab watch --control` to take temporary " +
+  "supervised control of the desktop over a writable VNC session, enter " +
+  "the secret themselves, and return control (or into the environment), " +
+  'then confirm out-of-band with kind "confirm" (e.g. "I\'ve entered the ' +
+  'password, continue?"). While control is held, agent desktop input and ' +
+  "the DevTools relay fail closed with a busy error; call " +
+  "`takeover_status` to check.";
 
 const NO_ELICITATION_GUIDANCE =
   "This client does not support elicitation. Relay the question to the " +

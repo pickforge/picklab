@@ -47,6 +47,7 @@ import {
 } from "./commands/session.js";
 import { runSetupAndroid } from "./commands/setup-android.js";
 import { runSetupLabUser } from "./commands/setup-lab-user.js";
+import { runTakeoverStatus, runTakeoverWatchdog } from "./commands/takeover.js";
 import { runWatch } from "./commands/watch.js";
 
 const require = createRequire(import.meta.url);
@@ -211,11 +212,46 @@ export function buildProgram(): Command {
     withDesktopSession(
       program
         .command("watch")
-        .description("Watch a running desktop-capable session read-only"),
+        .description("Watch a running desktop-capable session read-only")
+        .option(
+          "--control",
+          "pause agent input and grant a temporary writable viewer (supervised human takeover)",
+        ),
     ),
   ).action(async (opts) => {
     process.exitCode = await runWatch(opts);
   });
+
+  const takeover = program
+    .command("takeover")
+    .description("Inspect supervised human-takeover state for a session");
+
+  withJson(
+    withDesktopSession(
+      takeover
+        .command("status")
+        .description("Show whether a session is under human control"),
+    ),
+  ).action(async (opts) => {
+    process.exitCode = await runTakeoverStatus(opts);
+  });
+
+  // Internal, undocumented commands spawned by picklab itself — not a
+  // supported public CLI surface.
+  const internal = program.command("internal", { hidden: true });
+
+  internal
+    .command("takeover-watchdog")
+    .description(
+      "Actively reclaim a writable VNC session if its human lease goes " +
+        "stale; spawned detached by `watch --control`, not meant to be run directly",
+    )
+    .requiredOption("--session <id>", "session id")
+    .requiredOption("--lease <leaseId>", "lease id to watch")
+    .option("--interval <ms>", "poll interval in ms")
+    .action(async (opts) => {
+      process.exitCode = await runTakeoverWatchdog(opts);
+    });
 
   const browser = program
     .command("browser")

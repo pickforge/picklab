@@ -6,11 +6,17 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionRecord } from "@pickforge/picklab-core";
+import {
+  acquireHumanLease,
+  releaseHumanLease,
+  type SessionRecord,
+} from "@pickforge/picklab-core";
 import {
   createDeferred,
   CHROME_DEVTOOLS_MCP_BIN,
   CHROME_DEVTOOLS_MCP_VERSION,
+  TAKEOVER_BUSY_ERROR_CODE,
+  createTakeoverBusyIntercept,
   resolveDevtoolsMcpExecutable,
   resolveLiveBrowserSession,
   runDevtoolsMcpRelay,
@@ -226,6 +232,46 @@ describe("resolveLiveBrowserSession", () => {
   });
 });
 
+describe("createTakeoverBusyIntercept", () => {
+  it("blocks tools/call while a human lease is active, and only that", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-takeover-intercept-"));
+    temporaryDirectories.push(tmp);
+    const env = { PICKLAB_HOME: path.join(tmp, "home") };
+    const intercept = createTakeoverBusyIntercept("brow-aaaaaa11", env);
+
+    // No lease yet: everything passes through.
+    expect(
+      await intercept({ jsonrpc: "2.0", id: 1, method: "tools/call" }),
+    ).toBeUndefined();
+
+    const lease = await acquireHumanLease("brow-aaaaaa11", env);
+
+    // Non-tool-call requests and notifications (no id) are never blocked.
+    expect(
+      await intercept({ jsonrpc: "2.0", id: "x", method: "tools/list" }),
+    ).toBeUndefined();
+    expect(
+      await intercept({ jsonrpc: "2.0", method: "notifications/cancelled" }),
+    ).toBeUndefined();
+
+    const blocked = await intercept({ jsonrpc: "2.0", id: 2, method: "tools/call" });
+    expect(blocked).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      error: {
+        code: TAKEOVER_BUSY_ERROR_CODE,
+        message:
+          "PickLab: human control is active; agent input is paused until control returns",
+      },
+    });
+
+    await releaseHumanLease("brow-aaaaaa11", lease.leaseId, env);
+    expect(
+      await intercept({ jsonrpc: "2.0", id: 3, method: "tools/call" }),
+    ).toBeUndefined();
+  });
+});
+
 describe("runDevtoolsMcpRelay", () => {
   it("spawns Node with exact argv/env, relays protocol only, and redacts stderr", async () => {
     const dir = temporaryDirectory();
@@ -314,6 +360,37 @@ describe("runDevtoolsMcpRelay", () => {
       method: "tools/call",
       params: { before: true },
       observed: true,
+    });
+  });
+
+  it("intercepts a blocked request without ever reaching the child process", async () => {
+    const dir = temporaryDirectory();
+    const script = path.join(dir, "intercept-upstream.mjs");
+    fs.writeFileSync(script, 'process.stdin.pipe(process.stdout);\n');
+    const output: Buffer[] = [];
+    await runDevtoolsMcpRelay({
+      session: fakeSession(),
+      executable: fakeExecutable(script),
+      input: Readable.from(['{"jsonrpc":"2.0","id":9,"method":"tools/call"}\n']),
+      output: collect(output),
+      diagnostics: collect([]),
+      signalSource: new Signals(),
+      shutdownTimeoutMs: 200,
+      hooks: {
+        intercept: (message) =>
+          message.method === "tools/call"
+            ? {
+                jsonrpc: "2.0",
+                id: message.id as number,
+                error: { code: TAKEOVER_BUSY_ERROR_CODE, message: "busy" },
+              }
+            : undefined,
+      },
+    });
+    expect(JSON.parse(Buffer.concat(output).toString())).toEqual({
+      jsonrpc: "2.0",
+      id: 9,
+      error: { code: TAKEOVER_BUSY_ERROR_CODE, message: "busy" },
     });
   });
 

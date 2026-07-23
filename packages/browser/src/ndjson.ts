@@ -24,6 +24,20 @@ export type JsonRpcHook = (
   message: JsonRpcMessage,
 ) => JsonRpcMessage | void | Promise<JsonRpcMessage | void>;
 
+/**
+ * Per-record interception, checked before `hook`/forwarding. Returning a
+ * message short-circuits: that message is written to `interceptDestination`
+ * instead, and the original record is never forwarded to `destination`.
+ * Returning `undefined` falls through to the normal `hook`+forward path.
+ * Used by the DevTools relay's fail-closed human-takeover gate (
+ * pickforge/picklab#21) to answer a blocked `tools/call` with a synthetic
+ * busy error on the *response* stream, without ever reaching the upstream
+ * child process.
+ */
+export type JsonRpcIntercept = (
+  message: JsonRpcMessage,
+) => JsonRpcMessage | undefined | Promise<JsonRpcMessage | undefined>;
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -182,6 +196,30 @@ export function serializeJsonRpcMessage(message: JsonRpcMessage): Buffer {
   return Buffer.from(`${JSON.stringify(message)}\n`);
 }
 
+/**
+ * Runs `write` in turn, never overlapping with another write issued through
+ * the same serializer. Used to fully order writes to a stream that more than
+ * one independent pump can target — e.g. the DevTools relay's fail-closed
+ * intercept answering directly on the client-facing output stream while the
+ * child-response pump also writes to it (pickforge/picklab#21 P1-D) — so two
+ * concurrent producers can never have overlapping in-flight writes to the
+ * same destination, made explicit in the code rather than left as an
+ * incidental property of whichever `Writable` happens to be passed in.
+ */
+export type JsonRpcWriteSerializer = (write: () => Promise<void>) => Promise<void>;
+
+/** Create a fresh, independent write-ordering queue for `JsonRpcWriteSerializer`. */
+export function createJsonRpcWriteQueue(): JsonRpcWriteSerializer {
+  let queue: Promise<void> = Promise.resolve();
+  return (write) => {
+    const result = queue.then(write);
+    // A failed write must not permanently wedge the queue for later writers;
+    // only THIS call's returned promise carries the rejection.
+    queue = result.catch(() => {});
+    return result;
+  };
+}
+
 export async function writeWithBackpressure(
   destination: Writable,
   bytes: Buffer,
@@ -274,16 +312,37 @@ async function nextWithAbort<T>(
 
 export interface PumpJsonRpcNdjsonOptions {
   hook?: JsonRpcHook;
+  /** Checked before `hook`; see `JsonRpcIntercept`. Requires `interceptDestination`. */
+  intercept?: JsonRpcIntercept;
+  /** Where an `intercept` response is written instead of `destination`. */
+  interceptDestination?: Writable;
+  /**
+   * Serializes writes to `destination` against any other pump sharing the
+   * same stream via its own serializer from the same `createJsonRpcWriteQueue()`
+   * instance. Defaults to running the write immediately (no cross-pump
+   * ordering) — pass a shared queue when `destination` is also written by
+   * another pump/writer.
+   */
+  writeSerializer?: JsonRpcWriteSerializer;
+  /** Same as `writeSerializer`, but for writes to `interceptDestination`. */
+  interceptWriteSerializer?: JsonRpcWriteSerializer;
   signal?: AbortSignal;
   endDestination?: boolean;
   maxRecordBytes?: number;
 }
+
+const runWriteImmediately: JsonRpcWriteSerializer = (write) => write();
 
 export async function pumpJsonRpcNdjson(
   source: Readable,
   destination: Writable,
   opts: PumpJsonRpcNdjsonOptions = {},
 ): Promise<void> {
+  if (opts.intercept !== undefined && opts.interceptDestination === undefined) {
+    throw new Error("pumpJsonRpcNdjson: intercept requires interceptDestination");
+  }
+  const writeSerializer = opts.writeSerializer ?? runWriteImmediately;
+  const interceptWriteSerializer = opts.interceptWriteSerializer ?? runWriteImmediately;
   const decoder = new JsonRpcNdjsonBuffer(opts.maxRecordBytes);
   const iterator = source.iterator({ destroyOnReturn: false })[Symbol.asyncIterator]();
   try {
@@ -295,7 +354,17 @@ export async function pumpJsonRpcNdjson(
       const chunk =
         typeof item.value === "string" ? Buffer.from(item.value) : Buffer.from(item.value);
       for (const record of decoder.push(chunk)) {
-        await writeWithBackpressure(destination, await applyHook(record, opts.hook));
+        const intercepted =
+          opts.intercept === undefined ? undefined : await opts.intercept(record.message);
+        if (intercepted !== undefined) {
+          const interceptBytes = serializeJsonRpcMessage(intercepted);
+          await interceptWriteSerializer(() =>
+            writeWithBackpressure(opts.interceptDestination!, interceptBytes),
+          );
+          continue;
+        }
+        const forwardBytes = await applyHook(record, opts.hook);
+        await writeSerializer(() => writeWithBackpressure(destination, forwardBytes));
       }
     }
     decoder.end();

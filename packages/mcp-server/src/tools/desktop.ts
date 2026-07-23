@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { withAgentPermit } from "@pickforge/picklab-core";
 import {
   click,
   desktopSessionLogDir,
@@ -100,17 +101,22 @@ export function registerDesktopTools(
             target: { name: args.command },
           },
           async () => {
-            const app = await launchApp({
-              display,
-              command: args.command,
-              args: args.args ?? [],
-              env: ctx.env,
-              logDir: desktopSessionLogDir(id, ctx.env),
-              cwd:
-                args.cwd === undefined
-                  ? undefined
-                  : path.resolve(ctx.projectDir, args.cwd),
-            });
+            // A newly launched client on the shared display can grab input
+            // focus — gated the same as direct input, so it can never land
+            // while a human holds the takeover lease (pickforge/picklab#21 P1-E).
+            const app = await withAgentPermit(id, ctx.env, () =>
+              launchApp({
+                display,
+                command: args.command,
+                args: args.args ?? [],
+                env: ctx.env,
+                logDir: desktopSessionLogDir(id, ctx.env),
+                cwd:
+                  args.cwd === undefined
+                    ? undefined
+                    : path.resolve(ctx.projectDir, args.cwd),
+              }),
+            );
             const data: Record<string, unknown> = {
               sessionId: id,
               display,
@@ -221,6 +227,8 @@ export function registerDesktopTools(
           async () => {
             await click({
               display,
+              sessionId: id,
+              env: ctx.env,
               x: args.x,
               y: args.y,
               button: args.button,
@@ -263,7 +271,7 @@ export function registerDesktopTools(
             target: { x: args.x, y: args.y },
           },
           async () => {
-            await move({ display, x: args.x, y: args.y });
+            await move({ display, sessionId: id, env: ctx.env, x: args.x, y: args.y });
             return {
               data: { sessionId: id, display, x: args.x, y: args.y },
             };
@@ -318,6 +326,8 @@ export function registerDesktopTools(
           async () => {
             await scroll({
               display,
+              sessionId: id,
+              env: ctx.env,
               deltaX: args.deltaX,
               deltaY: args.deltaY,
               x: args.x,
@@ -375,6 +385,8 @@ export function registerDesktopTools(
           async () => {
             await drag({
               display,
+              sessionId: id,
+              env: ctx.env,
               fromX: args.fromX,
               fromY: args.fromY,
               toX: args.toX,
@@ -430,6 +442,8 @@ export function registerDesktopTools(
           async () => {
             await doubleClick({
               display,
+              sessionId: id,
+              env: ctx.env,
               x: args.x,
               y: args.y,
               button: args.button,
@@ -470,7 +484,7 @@ export function registerDesktopTools(
             typedValue: { value: args.text, inputType: "text" },
           },
           async () => {
-            await typeText({ display, text: args.text });
+            await typeText({ display, sessionId: id, env: ctx.env, text: args.text });
             return {
               data: { sessionId: id, display, length: args.text.length },
             };
@@ -502,7 +516,7 @@ export function registerDesktopTools(
             typedValue: { value: args.key },
           },
           async () => {
-            await pressKey({ display, key: args.key });
+            await pressKey({ display, sessionId: id, env: ctx.env, key: args.key });
             return { data: { sessionId: id, display, key: args.key } };
           },
         );
