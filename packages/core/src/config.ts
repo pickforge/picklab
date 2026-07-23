@@ -3,7 +3,9 @@ import path from "node:path";
 import {
   ensureDir,
   globalConfigPath,
+  legacyGlobalConfigPath,
   projectConfigPath,
+  resolveReadablePath,
   writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
@@ -16,12 +18,29 @@ export type PicklabProfile =
 
 export type ViewerMode = "manual" | "auto";
 
+/**
+ * Where new run artifacts (screenshots, manifests, evidence journals) are
+ * written. `home` (default) keeps them under the shared Pickforge company
+ * root, isolated per project; `project-local` restores the pre-#34 layout
+ * under `<project>/.picklab/runs`; `custom` targets an explicit absolute
+ * path. See `resolveRunStorage` in `storage.ts`.
+ */
+export type StorageMode = "home" | "project-local" | "custom";
+
+export interface StorageConfig {
+  mode?: StorageMode;
+  /** Required (and must be absolute) when `mode` is `"custom"`. */
+  path?: string;
+  [key: string]: unknown;
+}
+
 export interface PicklabConfig {
   profile?: PicklabProfile;
   android?: { avdName?: string; [key: string]: unknown };
   labUser?: { name?: string; home?: string; [key: string]: unknown };
   viewer?: { mode?: ViewerMode; [key: string]: unknown };
   evidence?: { enabled?: boolean; [key: string]: unknown };
+  storage?: StorageConfig;
   [key: string]: unknown;
 }
 
@@ -30,6 +49,7 @@ export const resolvedDefaults = {
   labUser: { name: "picklab-lab", home: "/var/lib/picklab/lab-home" },
   viewer: { mode: "manual" },
   evidence: { enabled: true },
+  storage: { mode: "home" },
 } as const satisfies PicklabConfig;
 
 /**
@@ -95,7 +115,11 @@ export async function loadConfig(
   projectDir: string,
   env: EnvLike = process.env,
 ): Promise<PicklabConfig> {
-  const global = await readConfigFile(globalConfigPath(env));
+  const globalPath = await resolveReadablePath(
+    globalConfigPath(env),
+    legacyGlobalConfigPath(env),
+  );
+  const global = await readConfigFile(globalPath);
   const project = await readConfigFile(projectConfigPath(projectDir));
   return deepMerge(
     deepMerge(deepMerge({}, resolvedDefaults), global),

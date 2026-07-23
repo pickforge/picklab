@@ -5,8 +5,14 @@ export {
   ensureDir,
   globalConfigPath,
   isProfileConfined,
+  legacyAgentsDir,
+  legacyGlobalConfigPath,
+  legacyPicklabHome,
+  legacySessionsDir,
+  listDirSafe,
   picklabHome,
   projectConfigPath,
+  resolveReadablePath,
   runsDir,
   sessionsDir,
   writeFileAtomic,
@@ -23,8 +29,19 @@ export {
   saveProjectConfig,
   type PicklabConfig,
   type PicklabProfile,
+  type StorageConfig,
+  type StorageMode,
   type ViewerMode,
 } from "./config.js";
+
+export {
+  canonicalProjectPath,
+  deriveProjectId,
+  projectId,
+  resolveRunStorage,
+  StorageConfigError,
+  type ResolvedRunStorage,
+} from "./storage.js";
 
 export {
   createRun,

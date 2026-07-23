@@ -483,7 +483,9 @@ export function buildProgram(): Command {
 
   const artifacts = program
     .command("artifacts")
-    .description("Inspect run artifacts recorded under .picklab/runs");
+    .description(
+      "Inspect recorded run artifacts (default storage: ~/.pickforge/picklab)",
+    );
 
   withJson(
     withProjectDir(
@@ -588,7 +590,7 @@ export function buildProgram(): Command {
   withJson(
     agents
       .command("add")
-      .description("Store a custom agent MCP config snippet under ~/.picklab/agents")
+      .description("Store a custom agent MCP config snippet under the PickLab home's agents dir")
       .requiredOption("--name <name>", "custom agent name")
       .requiredOption(
         "--mcp-command <command>",

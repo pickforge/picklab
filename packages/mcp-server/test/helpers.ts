@@ -44,7 +44,14 @@ export async function connectLab(opts: {
   projectDir: string;
   env: Record<string, string | undefined>;
 }): Promise<ConnectedLab> {
-  const server = createMcpServer(opts);
+  // Default new runs to the pre-#34 project-local layout so existing
+  // fixtures (`writeSyntheticRun`, hardcoded `.picklab/runs` assertions)
+  // keep working; individual tests can still override PICKLAB_STORAGE_MODE
+  // via opts.env to exercise the new "home" default explicitly.
+  const server = createMcpServer({
+    ...opts,
+    env: { PICKLAB_STORAGE_MODE: "project-local", ...opts.env },
+  });
   const client = new Client({ name: "picklab-test", version: "0.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

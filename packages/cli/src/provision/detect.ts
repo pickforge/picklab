@@ -8,6 +8,7 @@ import {
   type SystemImage,
 } from "@pickforge/picklab-android";
 import {
+  legacyPicklabHome,
   loadConfig,
   picklabHome,
   resolvedDefaults,
@@ -22,6 +23,10 @@ import {
 
 export interface DetectionSnapshot {
   picklabHome: { path: string; exists: boolean; writable: boolean };
+  /** Present only when the pre-#34 `~/.picklab` root still exists and
+   * differs from the current default (never when `PICKLAB_HOME` is set
+   * explicitly — that is the user's own root, not a legacy one). */
+  legacyHome: { path: string } | null;
   config: { ok: boolean; error: string | null; profile: PicklabProfile | null };
   desktop: {
     xvfb: string | null;
@@ -121,6 +126,11 @@ export async function collectSnapshot(
 
   const homePath = picklabHome(env);
   const homeExists = dirExists(homePath);
+  const legacyPath = legacyPicklabHome(env);
+  const legacyHome =
+    legacyPath !== undefined && legacyPath !== homePath && dirExists(legacyPath)
+      ? { path: legacyPath }
+      : null;
 
   const androidEnv = detectAndroidEnvironment({
     env,
@@ -138,6 +148,7 @@ export async function collectSnapshot(
       exists: homeExists,
       writable: homeExists && isWritable(homePath),
     },
+    legacyHome,
     config,
     desktop: {
       xvfb: findOnPath("Xvfb", env),

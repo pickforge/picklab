@@ -20,10 +20,12 @@ fuller model.
 
 ## Recorded evidence and screenshots
 
-Computer-use evidence is stored as local project data under
-`.picklab/runs/<runId>/`. `actions.jsonl` is the authoritative sanitized
-timeline; finalization produces an escaped, no-script `report.html` with a
-restrictive content security policy and no external requests.
+Computer-use evidence is stored as local run data, by default under
+`~/.pickforge/picklab/projects/<projectId>/runs/<runId>/` (outside the
+project; see the README's "Run storage" section for storage modes).
+`actions.jsonl` is the authoritative sanitized timeline; finalization
+produces an escaped, no-script `report.html` with a restrictive content
+security policy and no external requests.
 
 The recorder persists only allowlisted metadata. Typed and filled text becomes
 length plus input type. Failed network records keep method, URL origin/path

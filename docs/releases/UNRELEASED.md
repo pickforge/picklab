@@ -5,6 +5,19 @@ release description, then reset it after the release is published.
 
 ## User-facing changes
 
+- **Default run storage changed.** Screenshots, logs, manifests, and evidence
+  journals now default to `~/.pickforge/picklab/projects/<projectId>/runs/`
+  (outside the project) instead of `<project>/.picklab/runs/`, so a default
+  run no longer shows up in `git status`. `PICKLAB_HOME` now defaults to
+  `~/.pickforge/picklab` (was `~/.picklab`); the old default is still read
+  non-destructively as a fallback for existing global config, agent state,
+  and sessions — nothing is moved or deleted. `project-local` (restores the
+  previous layout) and `custom` (explicit absolute path) storage modes are
+  available via `.picklab/config.json`'s `storage` field or the
+  `PICKLAB_STORAGE_MODE` / `PICKLAB_STORAGE_PATH` env overrides. Existing
+  project-local runs remain discoverable by `artifact_list` /
+  `artifact_report` / MCP resources without migration. See the README's "Run
+  storage" section.
 - Added isolated headed Chrome/Chromium sessions, including CLI and MCP session
   lifecycle support and a static `picklab-browser` DevTools MCP entry.
 - Added `picklab watch` plus configurable manual/automatic VNC viewer attachment
@@ -26,6 +39,15 @@ release description, then reset it after the release is published.
 
 ## Internal/release changes
 
+- Added a single storage resolver (`resolveRunStorage`) covering home,
+  project-local, and custom modes with stable per-project id derivation
+  (sha256 of the canonical project path); routed run creation, the run
+  catalog, and active-evidence-pointer resolution in core, CLI, and MCP
+  through it. `openRunCatalog` now layers the resolved primary root with a
+  read-only legacy project-local fallback root for non-destructive discovery.
+  Added a legacy read-fallback (`resolveReadablePath`, per-entry) for global
+  config, agent state, and sessions across the `~/.picklab` →
+  `~/.pickforge/picklab` default-root change.
 - Added a private browser lifecycle package with confined ephemeral profiles,
   loopback-only CDP discovery, verified process-group teardown, concurrent
   session safety, and conservative dead-session reaping.
@@ -60,12 +82,22 @@ release description, then reset it after the release is published.
 - `bun install --frozen-lockfile`
 - `bun run typecheck`
 - Focused run catalog, run, evidence, CLI artifact, and MCP resource/tool suites.
-- `bun run test` (79 files, 958 passed / 2 skipped)
-- `bun run test:coverage` (79 files, 958 passed / 2 skipped; all thresholds met)
+- New `storage.test.ts` (project id derivation, all three storage modes, env
+  overrides) and `run-catalog.test.ts`'s "openRunCatalog storage modes" suite
+  (home default, legacy project-local discovery, project isolation, custom
+  mode), plus a `git status --porcelain` repo-cleanliness smoke test.
+- `bun run test` — same pre-existing failure set as unmodified `main` on this
+  (macOS) sandbox (Darwin lacks `/proc`, so PID-identity/Xvfb/x11vnc-driven
+  tests fail there and on CI's Linux runners this class does not apply);
+  verified test-by-test against `main` on this branch's dev sandbox.
 - `bun run build`
 
 ### Not tested yet
 
+- `bun run test:coverage` on a machine where the full suite runs clean (this
+  dev sandbox can't produce a coverage summary because the pre-existing
+  Darwin-only failures above stop the process before the v8 coverage
+  provider flushes it — reproduced identically on unmodified `main`).
 - Platform smoke checks outside Linux.
 - Live remote SSH-tunnel smoke test.
 - Tag-triggered npm publish and draft-release creation (runs only after merge and

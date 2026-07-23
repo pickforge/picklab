@@ -99,6 +99,18 @@ export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
     });
   }
 
+  if (s.legacyHome !== null) {
+    checks.push({
+      id: "legacy-home",
+      title: "Legacy PickLab home",
+      status: "warn",
+      detail: `${s.legacyHome.path} still exists (pre-#34 default)`,
+      hint:
+        "config, agent state, and sessions there are still read " +
+        "non-destructively as a fallback; nothing was moved or deleted",
+    });
+  }
+
   if (s.config.ok) {
     checks.push({
       id: "config",

@@ -82,6 +82,10 @@ function makeEnv(opts: EnvOptions = {}): Record<string, string> {
   return {
     HOME: home,
     PICKLAB_HOME: path.join(home, ".picklab"),
+    // Default new runs to the pre-#34 project-local layout so existing
+    // fixtures/assertions in this file keep working; tests that exercise the
+    // new "home" default explicitly override this via opts.extra.
+    PICKLAB_STORAGE_MODE: "project-local",
     PATH: pathParts.join(":"),
     ...(opts.extra ?? {}),
   };

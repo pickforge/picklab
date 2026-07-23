@@ -145,6 +145,7 @@ export interface ResolveScreenshotTargetOptions {
   defaultSlug: string;
   sessionId?: string;
   conflictError: string;
+  env?: EnvLike;
 }
 
 export async function resolveScreenshotTarget(
@@ -202,6 +203,7 @@ export async function resolveScreenshotTarget(
     opts.projectDir,
     opts.runSlug ?? opts.defaultSlug,
     opts.sessionId === undefined ? {} : { sessionId: opts.sessionId },
+    opts.env,
   );
   return {
     outPath: path.join(run.dir, "screenshots", "screenshot.png"),

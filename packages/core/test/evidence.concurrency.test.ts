@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,11 +52,16 @@ function run(args: string[]): Promise<ProcResult> {
 
 let project: string;
 
+// Pin storage to `project-local` (the layout these concurrency tests assert
+// against and spawn separate `bun` worker processes into via inherited
+// `process.env`) rather than the new `home` default.
 beforeEach(async () => {
   project = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-evc-"));
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await fs.promises.rm(project, { recursive: true, force: true });
 });
 

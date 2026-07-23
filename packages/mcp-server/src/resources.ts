@@ -160,7 +160,7 @@ async function listEvidenceRunFiles(
   ctx: ServerContext,
   fileName: typeof EVIDENCE_ACTION_LOG | typeof EVIDENCE_REPORT,
 ): Promise<string[]> {
-  const catalog = await openRunCatalog(ctx.projectDir);
+  const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
   const runIds: string[] = [];
   for (const entry of await catalog.list()) {
     if (!isEvidenceRun(entry.manifest)) continue;
@@ -175,7 +175,7 @@ async function listRunFiles(
   subdir: "screenshots" | "logs",
 ): Promise<Array<{ runId: string; name: string }>> {
   const entries: Array<{ runId: string; name: string }> = [];
-  const catalog = await openRunCatalog(ctx.projectDir);
+  const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
   for (const entry of await catalog.list()) {
     const runDir = entry.dir;
     const dir = path.join(runDir, subdir);
@@ -214,11 +214,11 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     "picklab://runs",
     {
       title: "PickLab runs",
-      description: "Index of recorded runs under .picklab/runs",
+      description: "Index of recorded runs (see picklab doctor for the resolved storage path)",
       mimeType: "application/json",
     },
     async (uri) => {
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const runs = (await catalog.list()).map(({ manifest }) => ({
         runId: manifest.runId,
         slug: manifest.slug,
@@ -243,7 +243,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     new ResourceTemplate("picklab://runs/{runId}/manifest", {
       list: async () => ({
         resources: (
-          await (await openRunCatalog(ctx.projectDir)).list()
+          await (await openRunCatalog(ctx.projectDir, ctx.env)).list()
         ).map(({ manifest }) => ({
           uri: `picklab://runs/${manifest.runId}/manifest`,
           name: `Run ${manifest.runId} manifest`,
@@ -258,7 +258,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const entry = await catalog.find(runId);
       if (entry === undefined) throw new Error(`Run not found: ${runId}`);
       let raw: string;
@@ -295,7 +295,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const entry = await catalog.find(runId);
       if (entry === undefined || !isEvidenceRun(entry.manifest)) {
         throw new Error(`Actions not found: ${runId}`);
@@ -348,7 +348,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     },
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const entry = await catalog.find(runId);
       if (entry === undefined || !isEvidenceRun(entry.manifest)) {
         throw new Error(`Report not found: ${runId}`);
@@ -393,7 +393,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
       if (!name.endsWith(".png")) {
         throw new Error(`Not a PNG screenshot: ${name}`);
       }
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const entry = await catalog.find(runId);
       if (entry === undefined) {
         throw new Error(`Screenshot not found: ${runId}/${name}`);
@@ -463,7 +463,7 @@ export function registerResources(server: McpServer, ctx: ServerContext): void {
     async (uri, variables) => {
       const runId = decodeVariable(variables, "runId");
       const name = decodeVariable(variables, "name");
-      const catalog = await openRunCatalog(ctx.projectDir);
+      const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
       const entry = await catalog.find(runId);
       if (entry === undefined) {
         throw new Error(`Log not found: ${runId}/${name}`);

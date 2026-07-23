@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVIDENCE_REPORT,
   appendAction,
@@ -24,9 +24,13 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "picklab-evidence-render-"));
   projectDir = path.join(root, "project");
   fs.mkdirSync(projectDir, { recursive: true });
+  // Isolate createRun's default storage resolution from the real developer
+  // home; the exact mode does not matter to these render-only assertions.
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   fs.rmSync(root, { recursive: true, force: true });
 });
 

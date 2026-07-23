@@ -9,6 +9,7 @@ import type { DetectionSnapshot } from "../src/provision/detect.js";
 function snapshot(
   overrides: {
     picklabHome?: Partial<DetectionSnapshot["picklabHome"]>;
+    legacyHome?: DetectionSnapshot["legacyHome"];
     config?: Partial<DetectionSnapshot["config"]>;
     desktop?: Partial<DetectionSnapshot["desktop"]>;
     android?: Partial<DetectionSnapshot["android"]>;
@@ -18,11 +19,12 @@ function snapshot(
 ): DetectionSnapshot {
   return {
     picklabHome: {
-      path: "/home/u/.picklab",
+      path: "/home/u/.pickforge/picklab",
       exists: true,
       writable: true,
       ...overrides.picklabHome,
     },
+    legacyHome: overrides.legacyHome ?? null,
     config: { ok: true, error: null, profile: null, ...overrides.config },
     desktop: {
       xvfb: "/usr/bin/Xvfb",
@@ -92,6 +94,21 @@ describe("evaluateChecks", () => {
     );
     expect(check.status).toBe("missing");
     expect(check.detail).toContain("not writable");
+  });
+
+  it("omits the legacy-home check when there is nothing to report", () => {
+    const checks = evaluateChecks(snapshot());
+    expect(checks.some((check) => check.id === "legacy-home")).toBe(false);
+  });
+
+  it("surfaces a detected legacy ~/.picklab home as a non-blocking warning", () => {
+    const check = checkById(
+      snapshot({ legacyHome: { path: "/home/u/.picklab" } }),
+      "legacy-home",
+    );
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("/home/u/.picklab");
+    expect(check.hint).toContain("non-destructively");
   });
 
   it("flags a broken config with its parse error", () => {

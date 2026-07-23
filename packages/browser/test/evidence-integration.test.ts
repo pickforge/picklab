@@ -9,7 +9,7 @@ import {
   destroySessionRecord,
   listRuns,
   readActions,
-  runsDir,
+  resolveRunStorage,
   type EnvLike,
   type SessionRecord,
 } from "@pickforge/picklab-core";
@@ -158,6 +158,7 @@ describe("browser evidence integration", () => {
     const evidence = await createDevtoolsEvidenceRecorder({
       projectDir,
       sessionId,
+      env: registryEnv,
     });
     expect(evidence).toBeDefined();
     const requests = [
@@ -205,9 +206,12 @@ describe("browser evidence integration", () => {
     expect(Buffer.concat(output).toString()).toContain(QUERY_TOKEN);
 
     await destroySessionRecord(sessionId, registryEnv, "failed");
-    const [finalized] = await listRuns(projectDir);
+    const [finalized] = await listRuns(projectDir, registryEnv);
     expect(finalized).toBeDefined();
-    const runDir = path.join(runsDir(projectDir), finalized!.runId);
+    const runDir = path.join(
+      (await resolveRunStorage(projectDir, registryEnv)).runsDir,
+      finalized!.runId,
+    );
     const reportPath = path.join(runDir, "report.html");
     const records = await readActions(runDir);
     const html = await fs.promises.readFile(reportPath, "utf8");

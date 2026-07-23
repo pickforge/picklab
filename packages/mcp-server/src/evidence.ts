@@ -53,8 +53,14 @@ async function evidenceRun(
 ): Promise<RunHandle | undefined> {
   const config = await loadConfig(ctx.projectDir, ctx.env);
   if (!isEvidenceEnabled(config)) return undefined;
-  return (await beginEvidenceRun(ctx.projectDir, sessionId, { slug: "computer-use" }))
-    .run;
+  return (
+    await beginEvidenceRun(
+      ctx.projectDir,
+      sessionId,
+      { slug: "computer-use" },
+      ctx.env,
+    )
+  ).run;
 }
 
 async function refreshFinalizedReport(run: RunHandle): Promise<void> {

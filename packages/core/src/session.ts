@@ -5,12 +5,15 @@ import { finalizeActiveEvidenceRun } from "./evidence.js";
 import { writeEvidenceReport } from "./evidence-render.js";
 import {
   ensureDir,
+  legacySessionsDir,
+  listDirSafe,
+  resolveReadablePath,
   sessionsDir,
-  runsDir,
   writeFileAtomic,
   type EnvLike,
 } from "./paths.js";
 import { isPidAlive, processIdentityMatches } from "./proc.js";
+import { resolveRunStorage } from "./storage.js";
 
 export type SessionType = "desktop" | "android" | "desktop+android" | "browser";
 export type SessionStatus = "starting" | "running" | "stopped" | "error";
@@ -151,7 +154,11 @@ export async function getSession(
   if (!isValidSessionId(id)) {
     return undefined;
   }
-  const filePath = sessionPath(id, env);
+  const legacyDir = legacySessionsDir(env);
+  const filePath = await resolveReadablePath(
+    sessionPath(id, env),
+    legacyDir === undefined ? undefined : path.join(legacyDir, `${id}.json`),
+  );
   let raw: string;
   try {
     raw = await fs.promises.readFile(filePath, "utf8");
@@ -174,15 +181,10 @@ export async function getSession(
 export async function listSessions(
   env: EnvLike = process.env,
 ): Promise<SessionRecord[]> {
-  let entries: string[];
-  try {
-    entries = await fs.promises.readdir(sessionsDir(env));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const legacyDir = legacySessionsDir(env);
+  const primaryEntries = await listDirSafe(sessionsDir(env));
+  const legacyEntries = legacyDir === undefined ? [] : await listDirSafe(legacyDir);
+  const entries = [...new Set([...primaryEntries, ...legacyEntries])];
 
   const records: SessionRecord[] = [];
   for (const entry of entries) {
@@ -304,13 +306,23 @@ export async function destroySessionRecord(
       record.projectDir,
       record.id,
       evidenceStatus,
+      env,
     ).catch(() => undefined);
     if (finalized !== undefined) {
+      const parent = (await resolveRunStorage(record.projectDir, env)).runsDir;
       await writeEvidenceReport(
-        path.join(runsDir(record.projectDir), finalized.runId),
+        path.join(parent, finalized.runId),
         finalized,
       ).catch(() => {});
     }
   }
-  await fs.promises.rm(sessionPath(id, env), { force: true });
+  // Remove from wherever the record actually lives (new home, or a legacy
+  // `~/.picklab` record read through the fallback) so an explicitly destroyed
+  // session never keeps reappearing in listSessions.
+  const legacyDir = legacySessionsDir(env);
+  const legacyPath =
+    legacyDir === undefined ? undefined : path.join(legacyDir, `${id}.json`);
+  await fs.promises.rm(await resolveReadablePath(sessionPath(id, env), legacyPath), {
+    force: true,
+  });
 }

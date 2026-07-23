@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -124,6 +124,86 @@ describe("resolvedDefaults", () => {
     expect(resolvedDefaults.labUser.home).toBe("/var/lib/picklab/lab-home");
     expect(resolvedDefaults.viewer.mode).toBe("manual");
     expect(resolvedDefaults.evidence.enabled).toBe(true);
+    expect(resolvedDefaults.storage.mode).toBe("home");
+  });
+});
+
+describe("loadConfig legacy home fallback", () => {
+  it("reads an existing ~/.picklab global config when PICKLAB_HOME is unset and the new default has nothing yet", async () => {
+    const fakeHome = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-fakehome-"),
+    );
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    try {
+      const legacyConfigDir = path.join(fakeHome, ".picklab");
+      await fs.promises.mkdir(legacyConfigDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(legacyConfigDir, "config.json"),
+        JSON.stringify({ profile: "android" }),
+      );
+
+      const config = await loadConfig(project, {});
+      expect(config.profile).toBe("android");
+      // Non-destructive: nothing was written to the new default location.
+      expect(
+        fs.existsSync(path.join(fakeHome, ".pickforge", "picklab")),
+      ).toBe(false);
+    } finally {
+      homedirSpy.mockRestore();
+      await fs.promises.rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the new default over the legacy home once the new one has a config", async () => {
+    const fakeHome = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-fakehome-"),
+    );
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    try {
+      await fs.promises.mkdir(path.join(fakeHome, ".picklab"), {
+        recursive: true,
+      });
+      await fs.promises.writeFile(
+        path.join(fakeHome, ".picklab", "config.json"),
+        JSON.stringify({ profile: "android" }),
+      );
+      await fs.promises.mkdir(
+        path.join(fakeHome, ".pickforge", "picklab"),
+        { recursive: true },
+      );
+      await fs.promises.writeFile(
+        path.join(fakeHome, ".pickforge", "picklab", "config.json"),
+        JSON.stringify({ profile: "generic" }),
+      );
+
+      const config = await loadConfig(project, {});
+      expect(config.profile).toBe("generic");
+    } finally {
+      homedirSpy.mockRestore();
+      await fs.promises.rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to ~/.picklab once PICKLAB_HOME is set explicitly", async () => {
+    const fakeHome = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-fakehome-"),
+    );
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    try {
+      await fs.promises.mkdir(path.join(fakeHome, ".picklab"), {
+        recursive: true,
+      });
+      await fs.promises.writeFile(
+        path.join(fakeHome, ".picklab", "config.json"),
+        JSON.stringify({ profile: "android" }),
+      );
+
+      const config = await loadConfig(project, env);
+      expect(config.profile).toBeUndefined();
+    } finally {
+      homedirSpy.mockRestore();
+      await fs.promises.rm(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 

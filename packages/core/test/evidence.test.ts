@@ -22,11 +22,18 @@ import { createRun, listRuns, RunHandle } from "../src/run.js";
 
 let project: string;
 
+// This file exercises the concurrency/security invariants of the run
+// catalog and claim protocol directly against `.picklab/runs`, so it pins
+// storage to `project-local` (the pre-#34 layout it was written against)
+// rather than the new `home` default. `home`-mode default behavior itself is
+// covered by storage.test.ts and run-catalog.test.ts.
 beforeEach(async () => {
   project = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-evi-"));
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await fs.promises.rm(project, { recursive: true, force: true });
 });
 
@@ -110,8 +117,8 @@ describe("beginEvidenceRun and the active pointer", () => {
     const a = await beginEvidenceRun(project, "desk-aaaaaa");
     const b = await beginEvidenceRun(project, "andr-bbbbbb");
     expect(a.run.runId).not.toBe(b.run.runId);
-    expect(fs.existsSync(activePointerPath(project, "desk-aaaaaa"))).toBe(true);
-    expect(fs.existsSync(activePointerPath(project, "andr-bbbbbb"))).toBe(true);
+    expect(fs.existsSync(await activePointerPath(project, "desk-aaaaaa"))).toBe(true);
+    expect(fs.existsSync(await activePointerPath(project, "andr-bbbbbb"))).toBe(true);
   });
 
   it("rejects unsafe session ids", async () => {
@@ -223,7 +230,7 @@ describe("pointer resolution and clearing", () => {
 
   it("treats an empty pointer as a peer mid-claim", async () => {
     await fs.promises.mkdir(runsRoot(), { recursive: true });
-    await fs.promises.writeFile(activePointerPath(project, "desk-claim0"), "");
+    await fs.promises.writeFile(await activePointerPath(project, "desk-claim0"), "");
     expect((await resolveActivePointer(project, "desk-claim0")).status).toBe(
       "claiming",
     );
@@ -232,7 +239,7 @@ describe("pointer resolution and clearing", () => {
   it("reports corrupt for unparseable pointer content", async () => {
     await fs.promises.mkdir(runsRoot(), { recursive: true });
     await fs.promises.writeFile(
-      activePointerPath(project, "desk-corr00"),
+      await activePointerPath(project, "desk-corr00"),
       "{ not json",
     );
     expect((await resolveActivePointer(project, "desk-corr00")).status).toBe(
@@ -250,11 +257,11 @@ describe("pointer resolution and clearing", () => {
   it("clears only stale/corrupt pointers by default, not active ones", async () => {
     const { run } = await beginEvidenceRun(project, "desk-keep00");
     expect(await clearActivePointer(project, "desk-keep00")).toBe(false);
-    expect(fs.existsSync(activePointerPath(project, "desk-keep00"))).toBe(true);
+    expect(fs.existsSync(await activePointerPath(project, "desk-keep00"))).toBe(true);
 
     await run.finish("failed");
     expect(await clearActivePointer(project, "desk-keep00")).toBe(true);
-    expect(fs.existsSync(activePointerPath(project, "desk-keep00"))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(project, "desk-keep00"))).toBe(false);
   });
 
   it("force-clears an active pointer when asked", async () => {
@@ -262,12 +269,12 @@ describe("pointer resolution and clearing", () => {
     expect(
       await clearActivePointer(project, "desk-force0", { force: true }),
     ).toBe(true);
-    expect(fs.existsSync(activePointerPath(project, "desk-force0"))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(project, "desk-force0"))).toBe(false);
   });
 
   it("compare-and-clears with expectRaw", async () => {
     await beginEvidenceRun(project, "desk-cas000");
-    const pointerPath = activePointerPath(project, "desk-cas000");
+    const pointerPath = await activePointerPath(project, "desk-cas000");
     const raw = await fs.promises.readFile(pointerPath, "utf8");
     expect(
       await clearActivePointer(project, "desk-cas000", { expectRaw: "other" }),
@@ -308,7 +315,7 @@ describe("pointer resolution and clearing", () => {
         }),
       ],
     ] as const) {
-      await fs.promises.writeFile(activePointerPath(project, session), content);
+      await fs.promises.writeFile(await activePointerPath(project, session), content);
       expect((await resolveActivePointer(project, session)).status).toBe(
         "corrupt",
       );
@@ -324,7 +331,7 @@ describe("pointer resolution and clearing", () => {
       ownerPid: 4_194_304,
       createdAt: new Date().toISOString(),
     });
-    await fs.promises.writeFile(activePointerPath(project, "desk-gone00"), raw);
+    await fs.promises.writeFile(await activePointerPath(project, "desk-gone00"), raw);
     expect((await resolveActivePointer(project, "desk-gone00")).status).toBe(
       "stale",
     );
@@ -362,7 +369,7 @@ describe("pointer resolution and clearing", () => {
     await expect(
       finalizeActiveEvidenceRun(project, sessionId),
     ).resolves.toBeUndefined();
-    expect(fs.existsSync(activePointerPath(project, sessionId))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(project, sessionId))).toBe(false);
     expect(fs.existsSync(path.join(project, "outside", "report.html"))).toBe(
       false,
     );
@@ -371,7 +378,7 @@ describe("pointer resolution and clearing", () => {
   it("recovers a corrupt pointer by starting a fresh run", async () => {
     await fs.promises.mkdir(runsRoot(), { recursive: true });
     await fs.promises.writeFile(
-      activePointerPath(project, "desk-corr01"),
+      await activePointerPath(project, "desk-corr01"),
       "{ garbage",
     );
     const { run, adopted } = await beginEvidenceRun(project, "desk-corr01");
@@ -396,7 +403,7 @@ describe("pointer resolution and clearing", () => {
       ownerStartTicks: 1, // and no /proc match, so identity is provably dead
       createdAt: new Date().toISOString(),
     })}\n`;
-    await fs.promises.writeFile(activePointerPath(project, "desk-dead00"), raw);
+    await fs.promises.writeFile(await activePointerPath(project, "desk-dead00"), raw);
     const resolution = await resolveActivePointer(project, "desk-dead00");
     expect(resolution.status).toBe("stale");
     if (resolution.status !== "stale") throw new Error("expected stale");
@@ -416,7 +423,7 @@ describe("pointer resolution and clearing", () => {
     const first = await beginEvidenceRun(project, "desk-dead01");
     // Simulate the creating process dying: rewrite the pointer's owner identity
     // to a dead/reused one while the manifest is still `running`.
-    const pointerPath = activePointerPath(project, "desk-dead01");
+    const pointerPath = await activePointerPath(project, "desk-dead01");
     const pointer = JSON.parse(await fs.promises.readFile(pointerPath, "utf8"));
     pointer.ownerPid = 4_194_304;
     pointer.ownerStartTicks = 1;
@@ -1037,7 +1044,7 @@ describe("truncation marker durability", () => {
 describe("begin claim recovery", () => {
   it("reclaims an owner-unknown (empty) claim and starts a run", async () => {
     await fs.promises.mkdir(runsRoot(), { recursive: true });
-    await fs.promises.writeFile(activePointerPath(project, "desk-empt00"), "");
+    await fs.promises.writeFile(await activePointerPath(project, "desk-empt00"), "");
     const { run, adopted } = await beginEvidenceRun(project, "desk-empt00");
     expect(adopted).toBe(false);
     const resolution = await resolveActivePointer(project, "desk-empt00");
@@ -1056,7 +1063,7 @@ describe("begin claim recovery", () => {
       claim: true,
       claimedAt: new Date().toISOString(),
     })}\n`;
-    await fs.promises.writeFile(activePointerPath(project, "desk-dclm00"), claim);
+    await fs.promises.writeFile(await activePointerPath(project, "desk-dclm00"), claim);
     // A claim record with owner identity resolves as `claiming`.
     const pre = await resolveActivePointer(project, "desk-dclm00");
     expect(pre.status).toBe("claiming");
@@ -1407,7 +1414,7 @@ describe("defensive filesystem errors propagate", () => {
     }
 
     // No active pointer is left behind.
-    expect(fs.existsSync(activePointerPath(project, "desk-pubfail"))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(project, "desk-pubfail"))).toBe(false);
     // The just-created run is finalized (failed), never a permanent running
     // orphan. Exactly one run exists and none are still running.
     const runs = await listRuns(project);
