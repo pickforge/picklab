@@ -1202,4 +1202,36 @@ describe("legacy session home fallback", () => {
       ),
     ).toBe(false);
   });
+
+  it("destroying a session that has copies at BOTH the legacy and new home removes both, so it cannot resurrect", async () => {
+    // A session created under the legacy home, later updated: writes always
+    // target the new home, leaving a stale copy at the legacy path too.
+    writeLegacySession("desk-1eaac5");
+    await updateSession("desk-1eaac5", { status: "running" }, {});
+
+    const legacyPath = path.join(
+      fakeHome,
+      ".picklab",
+      "sessions",
+      "desk-1eaac5.json",
+    );
+    const newPath = path.join(
+      fakeHome,
+      ".pickforge",
+      "picklab",
+      "sessions",
+      "desk-1eaac5.json",
+    );
+    expect(fs.existsSync(legacyPath)).toBe(true);
+    expect(fs.existsSync(newPath)).toBe(true);
+
+    await destroySessionRecord("desk-1eaac5", {});
+
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(newPath)).toBe(false);
+    expect(
+      (await listSessions({})).some((record) => record.id === "desk-1eaac5"),
+    ).toBe(false);
+    expect(await getSession("desk-1eaac5", {})).toBeUndefined();
+  });
 });

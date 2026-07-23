@@ -316,13 +316,17 @@ export async function destroySessionRecord(
       ).catch(() => {});
     }
   }
-  // Remove from wherever the record actually lives (new home, or a legacy
-  // `~/.picklab` record read through the fallback) so an explicitly destroyed
-  // session never keeps reappearing in listSessions.
+  // Remove BOTH the new-home and legacy copies unconditionally, not just
+  // whichever `resolveReadablePath` would currently pick for a read. A
+  // session created under the legacy home and later updated (writes always
+  // target the new home) leaves stale copies at both locations; removing
+  // only the new-home one would let it resurrect via the legacy read
+  // fallback in getSession/listSessions.
   const legacyDir = legacySessionsDir(env);
   const legacyPath =
     legacyDir === undefined ? undefined : path.join(legacyDir, `${id}.json`);
-  await fs.promises.rm(await resolveReadablePath(sessionPath(id, env), legacyPath), {
-    force: true,
-  });
+  await fs.promises.rm(sessionPath(id, env), { force: true });
+  if (legacyPath !== undefined) {
+    await fs.promises.rm(legacyPath, { force: true });
+  }
 }
