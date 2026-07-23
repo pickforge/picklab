@@ -24,6 +24,20 @@ export type JsonRpcHook = (
   message: JsonRpcMessage,
 ) => JsonRpcMessage | void | Promise<JsonRpcMessage | void>;
 
+/**
+ * Per-record interception, checked before `hook`/forwarding. Returning a
+ * message short-circuits: that message is written to `interceptDestination`
+ * instead, and the original record is never forwarded to `destination`.
+ * Returning `undefined` falls through to the normal `hook`+forward path.
+ * Used by the DevTools relay's fail-closed human-takeover gate (
+ * pickforge/picklab#21) to answer a blocked `tools/call` with a synthetic
+ * busy error on the *response* stream, without ever reaching the upstream
+ * child process.
+ */
+export type JsonRpcIntercept = (
+  message: JsonRpcMessage,
+) => JsonRpcMessage | undefined | Promise<JsonRpcMessage | undefined>;
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -274,6 +288,10 @@ async function nextWithAbort<T>(
 
 export interface PumpJsonRpcNdjsonOptions {
   hook?: JsonRpcHook;
+  /** Checked before `hook`; see `JsonRpcIntercept`. Requires `interceptDestination`. */
+  intercept?: JsonRpcIntercept;
+  /** Where an `intercept` response is written instead of `destination`. */
+  interceptDestination?: Writable;
   signal?: AbortSignal;
   endDestination?: boolean;
   maxRecordBytes?: number;
@@ -284,6 +302,9 @@ export async function pumpJsonRpcNdjson(
   destination: Writable,
   opts: PumpJsonRpcNdjsonOptions = {},
 ): Promise<void> {
+  if (opts.intercept !== undefined && opts.interceptDestination === undefined) {
+    throw new Error("pumpJsonRpcNdjson: intercept requires interceptDestination");
+  }
   const decoder = new JsonRpcNdjsonBuffer(opts.maxRecordBytes);
   const iterator = source.iterator({ destroyOnReturn: false })[Symbol.asyncIterator]();
   try {
@@ -295,6 +316,15 @@ export async function pumpJsonRpcNdjson(
       const chunk =
         typeof item.value === "string" ? Buffer.from(item.value) : Buffer.from(item.value);
       for (const record of decoder.push(chunk)) {
+        const intercepted =
+          opts.intercept === undefined ? undefined : await opts.intercept(record.message);
+        if (intercepted !== undefined) {
+          await writeWithBackpressure(
+            opts.interceptDestination!,
+            serializeJsonRpcMessage(intercepted),
+          );
+          continue;
+        }
         await writeWithBackpressure(destination, await applyHook(record, opts.hook));
       }
     }

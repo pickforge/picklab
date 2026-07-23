@@ -171,4 +171,40 @@ describe("pumpJsonRpcNdjson", () => {
       '{"jsonrpc":"2.0","id":2,"method":"two"}\n',
     ]);
   });
+
+  it("diverts an intercepted record to interceptDestination instead of forwarding or hooking", async () => {
+    const raw =
+      '{"jsonrpc":"2.0","id":1,"method":"tools/call"}\n' +
+      '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n';
+    const forwarded: Buffer[] = [];
+    const intercepted: Buffer[] = [];
+    let hookCalls = 0;
+    await pumpJsonRpcNdjson(Readable.from([raw]), collectingWritable(forwarded), {
+      hook: () => {
+        hookCalls += 1;
+        return undefined;
+      },
+      intercept: (message) =>
+        message.method === "tools/call"
+          ? { jsonrpc: "2.0", id: message.id as string | number, error: { code: -32050, message: "busy" } }
+          : undefined,
+      interceptDestination: collectingWritable(intercepted),
+    });
+    expect(Buffer.concat(intercepted).toString()).toBe(
+      '{"jsonrpc":"2.0","id":1,"error":{"code":-32050,"message":"busy"}}\n',
+    );
+    expect(Buffer.concat(forwarded).toString()).toBe(
+      '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+    );
+    // The hook only ever sees the record that fell through interception.
+    expect(hookCalls).toBe(1);
+  });
+
+  it("requires interceptDestination whenever intercept is set", async () => {
+    await expect(
+      pumpJsonRpcNdjson(Readable.from(['{"jsonrpc":"2.0","id":1,"method":"x"}\n']), collectingWritable([]), {
+        intercept: () => undefined,
+      }),
+    ).rejects.toThrow(/interceptDestination/);
+  });
 });

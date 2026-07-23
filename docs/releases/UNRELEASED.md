@@ -43,6 +43,23 @@ release description, then reset it after the release is published.
 - Added `picklab watch` plus configurable manual/automatic VNC viewer attachment
   for running desktop-capable sessions. VNC remains loopback-only and read-only
   by default; writable access requires the explicit `--vnc-control` path.
+- **Added supervised pause and human takeover (`picklab watch --control`).**
+  Pauses PickLab-managed agent input for a session, atomically acquires a
+  30-second-TTL / 5-second-heartbeat human lease, switches the session's VNC
+  to a temporary writable server for the duration, and hands control back —
+  reverting VNC to read-only, recording a fresh screenshot, and releasing the
+  lease — on every exit path: normal viewer close, terminal cancellation
+  (SIGINT/SIGTERM), a failed lease renewal, or a PickLab crash (recovered the
+  next time the session's VNC is touched). While a lease is held, every
+  desktop input call (CLI and MCP: click/move/scroll/drag/double-click/type/
+  key) and every DevTools relay `tools/call` request fails closed with a
+  stable busy error, checked immediately before delivery — never delivered
+  concurrently with human input. New `takeover_status` MCP tool and
+  `picklab takeover status` CLI command report lease state (agent-active,
+  human-active, or a stale/recoverable lease) without side effects.
+  `request_user_input`'s secret guidance now points at this flow instead of
+  the persistent, uncoordinated `--vnc-control`. See the README's
+  "Supervised pause and human takeover" section. (pickforge/picklab#21)
 - Added desktop mouse move, scroll, drag, and double-click controls to both the
   CLI and MCP server.
 - Added end-to-end computer-use evidence recording for desktop, Android, and
@@ -117,6 +134,26 @@ release description, then reset it after the release is published.
   `cancelled` executor status instead of a generic failure.
 - Added a framing-aware DevTools NDJSON relay with protocol validation,
   backpressure, bounded diagnostics, redacted failures, and evidence hooks.
+- Added the human-lease/agent-permit storage primitives backing supervised
+  takeover (`packages/core/src/takeover.ts`): an atomic (`wx`) `human.lease.json`
+  per session directory, short-lived per-action agent permit files under
+  `permits/`, and a fail-closed `withAgentPermit` (acquire permit → recheck
+  lease → execute only if clear → release in `finally`). Lease acquisition
+  publishes the lease before draining permits that predate it (sweeping ones
+  owned by a dead process), so writable VNC is never granted while an agent
+  action from before the lease could still be in flight. Staleness is
+  identity-or-TTL based (`isHumanLeaseStale`); a second live acquisition
+  attempt fails fast (`HumanLeaseHeldError`, one winner, no queueing). Desktop-
+  linux's `takeover.ts` (`startHumanTakeover`/`endHumanTakeover`/
+  `renewHumanTakeover`/`recoverStaleHumanLease`) layers VNC-mode switching,
+  fresh-screenshot capture, and lifecycle evidence (`takeover_start`/
+  `takeover_return`/`takeover_timeout`/`takeover_cancelled`/
+  `takeover_recovered`) on top; `ensureSessionVnc` (plain `watch`) now
+  self-heals a crash-orphaned writable VNC left by a stale lease instead of
+  refusing outright, while still refusing while a live lease holds it. The
+  DevTools relay gained a generic NDJSON `intercept` hook (answers a request
+  directly on the response stream instead of forwarding it to the child) used
+  for the same busy-error contract.
 - Added atomic, crash-recoverable evidence journals, active-run ownership,
   truncation markers, report publication, and symlink-safe resource access.
 - Hardened Android and evidence cleanup around process identity, atomic writes,
@@ -185,6 +222,39 @@ release description, then reset it after the release is published.
   changing production code) and can occasionally need extra wall-clock time
   under the same full-parallel load — a scheduling artifact, not a logic
   defect, and it stays within the pre-existing 43-45 Darwin noise band above.
+- New `core/test/takeover.test.ts` (15 tests): atomic lease acquisition/
+  staleness/renewal/release, permit drain (including sweeping a permit owned
+  by a dead process), `withAgentPermit` fail-closed and mid-flight-
+  invalidation behavior, `getTakeoverStatus`, and a real separate-process
+  (`bun`-spawned) race proving two concurrent lease claims yield exactly one
+  winner.
+- New `desktop-linux/test/takeover.test.ts` (11 tests): end-to-end
+  start/end-takeover VNC mode switching against real spawned fake-x11vnc
+  processes and real port listening (only the two `/proc`-dependent identity
+  functions are mocked, following `destroy.test.ts`'s existing pattern, so
+  this runs on Darwin too) — asserts the exact `-viewonly` flag sequence,
+  evidence transitions, lease renewal/expiry, crash recovery (stale lease +
+  orphaned writable VNC), and `ensureSessionVnc`'s self-heal vs. still-refuse-
+  while-live-lease branches. Real x11vnc/Xvfb hardware validation deferred.
+- New `browser/test/ndjson.test.ts` and `devtools-mcp.test.ts` intercept
+  coverage: diversion to `interceptDestination` without invoking `hook` or
+  forwarding to the child, the `interceptDestination` requirement, an
+  end-to-end relay test proving an intercepted `tools/call` never reaches the
+  spawned child process, and `createTakeoverBusyIntercept` unit coverage
+  (blocks only `tools/call` with an id while a live lease exists; passes
+  through notifications, other methods, and once the lease clears).
+- New `cli/test/watch-control.test.ts` (5, mocked desktop-linux takeover
+  functions), `cli/test/takeover-status.test.ts` (3), and
+  `cli/test/desktop-input-takeover.test.ts` (1, proves the CLI rejects
+  desktop input without ever invoking `xdotool` while a lease is held) —
+  cover `--control`'s reason selection (return/cancelled/timeout), the
+  `--control` + `waitForViewerExit: false` guard, and the no-viewer-available
+  path.
+- New `mcp-server/test/takeover.test.ts` (3): `takeover_status` across
+  agent-active/human-active/stale, and `desktop_click`/`desktop_type`/
+  `desktop_key` failing closed with the busy error while a lease is held,
+  using a synthetic session record (no real Xvfb/xdotool needed for the
+  fail-closed path).
 - `bun run build`
 
 ### Not tested yet
@@ -201,6 +271,20 @@ release description, then reset it after the release is published.
 - Live remote SSH-tunnel smoke test.
 - Tag-triggered npm publish and draft-release creation (runs only after merge and
   tag push).
+- Live supervised takeover proof on real hardware: a genuine `picklab watch
+  --control` against real Xvfb/x11vnc, taking control in an actual VNC
+  viewer, typing, and returning control, on a Linux desktop. All takeover
+  logic is proven with real spawned processes and real port listening except
+  the two `/proc`-only identity checks (mocked identically to the existing
+  `destroy.test.ts` pattern); this is a hardware/CI gap, not a logic gap.
+- A bare `kill -TERM <picklab-pid>` (not the whole foreground process group)
+  arriving while a real interactive VNC viewer window is still open: the
+  takeover's SIGTERM handler marks the session for a "cancelled" reason but
+  cannot itself close the already-open viewer (`openVncViewer`'s API has no
+  cancel handle), so cleanup only runs once the viewer exits on its own or a
+  process-group-wide SIGINT (the normal terminal Ctrl+C path, which reaches
+  the viewer child directly) closes both. Documented, not implemented;
+  extending `openVncViewer` with a cancel handle is a reasonable follow-up.
 
 ### Release blockers
 

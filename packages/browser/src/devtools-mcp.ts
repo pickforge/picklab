@@ -9,6 +9,7 @@ import {
 import { setTimeout as delay } from "node:timers/promises";
 import type { Readable, Writable } from "node:stream";
 import {
+  checkHumanLeaseBusy,
   listSessions,
   redactSecrets,
   sanitizeErrorText,
@@ -26,7 +27,45 @@ import {
   pumpJsonRpcNdjson,
   writeWithBackpressure,
   type JsonRpcHook,
+  type JsonRpcIntercept,
+  type JsonRpcMessage,
 } from "./ndjson.js";
+
+/** JSON-RPC error code for the stable "human control is active" busy response. */
+export const TAKEOVER_BUSY_ERROR_CODE = -32050;
+const TAKEOVER_BUSY_MESSAGE =
+  "PickLab: human control is active; agent input is paused until control returns";
+
+function jsonRpcRequestId(message: JsonRpcMessage): string | number | undefined {
+  return typeof message.id === "string" || typeof message.id === "number"
+    ? message.id
+    : undefined;
+}
+
+/**
+ * Fail-closed human-takeover gate for the DevTools relay
+ * (pickforge/picklab#21): while the session's human lease is active, every
+ * `tools/call` request is answered directly with a stable busy error instead
+ * of ever reaching the child Chrome DevTools MCP process. Notifications (no
+ * `id`) and non-tool-call requests pass through untouched.
+ */
+export function createTakeoverBusyIntercept(
+  sessionId: string,
+  env: EnvLike | undefined,
+): JsonRpcIntercept {
+  return async (message) => {
+    if (message.method !== "tools/call") return undefined;
+    const id = jsonRpcRequestId(message);
+    if (id === undefined) return undefined;
+    const lease = await checkHumanLeaseBusy(sessionId, env);
+    if (lease === undefined) return undefined;
+    return {
+      jsonrpc: "2.0",
+      id,
+      error: { code: TAKEOVER_BUSY_ERROR_CODE, message: TAKEOVER_BUSY_MESSAGE },
+    };
+  };
+}
 
 export const CHROME_DEVTOOLS_MCP_PACKAGE = "chrome-devtools-mcp";
 export const CHROME_DEVTOOLS_MCP_VERSION = "1.5.0";
@@ -180,6 +219,13 @@ export async function resolveLiveBrowserSession(
 export interface RelayHooks {
   beforeForward?: JsonRpcHook;
   afterResponse?: JsonRpcHook;
+  /**
+   * Checked before `beforeForward` on every agent -> child record. Returning
+   * a message answers the caller directly on `output` and the record is
+   * never forwarded to the child — used for the human-takeover fail-closed
+   * busy response (pickforge/picklab#21). See `JsonRpcIntercept`.
+   */
+  intercept?: JsonRpcIntercept;
 }
 
 function composeEvidenceHooks(
@@ -197,6 +243,7 @@ function composeEvidenceHooks(
       await evidence.afterResponse(message);
       return hooks?.afterResponse?.(message);
     },
+    intercept: hooks?.intercept,
   };
 }
 
@@ -376,6 +423,8 @@ export async function runDevtoolsMcpRelay(
   let terminationRequested = false;
   const inputPump = pumpJsonRpcNdjson(input, child.stdin, {
     hook: opts.hooks?.beforeForward,
+    intercept: opts.hooks?.intercept,
+    interceptDestination: opts.hooks?.intercept === undefined ? undefined : output,
     signal: inputAbort.signal,
     endDestination: true,
     maxRecordBytes: opts.maxRecordBytes,
@@ -546,6 +595,14 @@ export async function runProjectDevtoolsMcp(
   } catch (error) {
     reportEvidenceFailure(error);
   }
+  const takeoverIntercept = createTakeoverBusyIntercept(session.record.id, opts.env);
+  const hooksWithTakeoverGate: RelayHooks = {
+    ...opts.hooks,
+    intercept: async (message) => {
+      const busy = await takeoverIntercept(message);
+      return busy ?? (await opts.hooks?.intercept?.(message));
+    },
+  };
   try {
     return await runDevtoolsMcpRelay({
       session,
@@ -555,7 +612,7 @@ export async function runProjectDevtoolsMcp(
       diagnostics,
       env: opts.env,
       cwd: path.resolve(opts.projectDir),
-      hooks: composeEvidenceHooks(opts.hooks, evidence),
+      hooks: composeEvidenceHooks(hooksWithTakeoverGate, evidence),
       shutdownTimeoutMs: opts.shutdownTimeoutMs,
       maxRecordBytes: opts.maxRecordBytes,
       maxDiagnosticLineBytes: opts.maxDiagnosticLineBytes,

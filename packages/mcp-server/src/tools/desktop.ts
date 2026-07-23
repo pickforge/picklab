@@ -221,6 +221,8 @@ export function registerDesktopTools(
           async () => {
             await click({
               display,
+              sessionId: id,
+              env: ctx.env,
               x: args.x,
               y: args.y,
               button: args.button,
@@ -263,7 +265,7 @@ export function registerDesktopTools(
             target: { x: args.x, y: args.y },
           },
           async () => {
-            await move({ display, x: args.x, y: args.y });
+            await move({ display, sessionId: id, env: ctx.env, x: args.x, y: args.y });
             return {
               data: { sessionId: id, display, x: args.x, y: args.y },
             };
@@ -318,6 +320,8 @@ export function registerDesktopTools(
           async () => {
             await scroll({
               display,
+              sessionId: id,
+              env: ctx.env,
               deltaX: args.deltaX,
               deltaY: args.deltaY,
               x: args.x,
@@ -375,6 +379,8 @@ export function registerDesktopTools(
           async () => {
             await drag({
               display,
+              sessionId: id,
+              env: ctx.env,
               fromX: args.fromX,
               fromY: args.fromY,
               toX: args.toX,
@@ -430,6 +436,8 @@ export function registerDesktopTools(
           async () => {
             await doubleClick({
               display,
+              sessionId: id,
+              env: ctx.env,
               x: args.x,
               y: args.y,
               button: args.button,
@@ -470,7 +478,7 @@ export function registerDesktopTools(
             typedValue: { value: args.text, inputType: "text" },
           },
           async () => {
-            await typeText({ display, text: args.text });
+            await typeText({ display, sessionId: id, env: ctx.env, text: args.text });
             return {
               data: { sessionId: id, display, length: args.text.length },
             };
@@ -502,7 +510,7 @@ export function registerDesktopTools(
             typedValue: { value: args.key },
           },
           async () => {
-            await pressKey({ display, key: args.key });
+            await pressKey({ display, sessionId: id, env: ctx.env, key: args.key });
             return { data: { sessionId: id, display, key: args.key } };
           },
         );

@@ -159,6 +159,29 @@ project in `.picklab/config.json`:
 This does not block an explicitly requested screenshot command. Screenshot
 pixels cannot be redacted; see [SECURITY.md](SECURITY.md#recorded-evidence-and-screenshots).
 
+### Supervised pause and human takeover
+
+```sh
+picklab watch --session <id> --control   # pause the agent, take a temporary writable viewer
+picklab takeover status --session <id>   # check whether a session is under human control
+```
+
+`picklab watch --control` pauses PickLab-managed agent input for a session,
+grants a temporary writable VNC viewer for a human, and hands control back
+with a fresh screenshot and an evidence record once the viewer closes (or the
+terminal is interrupted). Unlike `--vnc-control`'s persistent writable
+session, control here is leased: while a human holds it, every desktop input
+call and every DevTools relay request fails closed with a stable busy error —
+`takeover_status` (MCP) / `picklab takeover status` (CLI) let an agent check
+before retrying, and `request_user_input` is the recommended way to ask a
+human to run it.
+
+The lease is a 30-second TTL, heartbeat-renewed-every-5-seconds record in the
+session's state directory. Closing the viewer, an interrupted terminal, or a
+PickLab crash all end up releasing it and reverting VNC to read-only — a
+crash is recovered automatically the next time the session's VNC is touched
+(e.g. a later `picklab watch`), never left writable indefinitely.
+
 ### Concurrent sessions
 
 Each session gets its own isolated display or emulator, so several agents and projects can run labs side by side. When a command or tool is called without an explicit session id, the default resolves per project: only running sessions created for the same project directory are considered. Pass `session` ids (CLI: `--session <id>`) to target a specific lab, including one belonging to another project.
@@ -215,7 +238,8 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 | --- | --- |
 | Setup | `doctor`, `init`, `setup lab-user`, `setup android` |
 | Sessions | `session create`, `session status [id]`, `session destroy <id\|--all>` |
-| Watch | `watch [--session <id>]` |
+| Watch | `watch [--session <id>] [--control]` |
+| Takeover | `takeover status [--session <id>]` |
 | Desktop | `desktop launch <cmd>`, `desktop screenshot`, `desktop click <x> <y>`, `desktop move <x> <y>`, `desktop scroll <deltaX> <deltaY>`, `desktop drag <fromX> <fromY> <toX> <toY>`, `desktop double-click <x> <y>`, `desktop type <text>`, `desktop key <keys>` |
 | Android | `android start`, `android install-apk <apk>`, `android launch-app <pkg>`, `android screenshot`, `android tap <x> <y>`, `android type <text>`, `android back`, `android home`, `android ui-tree`, `android logcat`, `android adb [args...]` |
 | Artifacts | `artifacts list`, `artifacts open <runId>`, `artifacts report [runId]` |
@@ -225,7 +249,7 @@ picklab agents add --name my-agent --mcp-command "picklab mcp serve"
 
 Session types: `desktop` (Xvfb, optional VNC), `android` (emulator on the dedicated AVD), `desktop+android`, and `browser` (isolated headed Chrome with loopback CDP). Most commands accept `--json` for machine-readable output and `--project-dir` to target another project.
 
-`session create --vnc` is read-only. When a human must enter a password, API key, or OTP directly into the lab app, `--vnc-control` creates an explicitly writable VNC session instead. Pause agent input while using it; coordinated human takeover is tracked separately.
+`session create --vnc` is read-only. `--vnc-control` creates an explicitly writable VNC session up front and does not coordinate with agent input — pause agent activity yourself while using it. For a coordinated, leased handoff instead, use `picklab watch --control` (see [Supervised pause and human takeover](#supervised-pause-and-human-takeover)), which fails agent input closed for the lease's duration and hands back a fresh screenshot automatically.
 
 Scroll deltas are integer wheel steps: positive `deltaY` scrolls down, negative up; positive `deltaX` scrolls right, negative left (put negative values after `--`, e.g. `picklab desktop scroll -- 0 -3`). `desktop scroll` accepts `--at <x,y>` to position the pointer first; `desktop drag` accepts `--button` and `--duration <ms>`; `desktop double-click` accepts `--button` and `--interval <ms>`.
 `picklab watch [--session <id>]` attaches a normal host-side VNC window to an
@@ -265,12 +289,13 @@ reported as suppressed for an explicitly writable `--vnc-control` session.
 
 ## MCP surface
 
-`picklab mcp serve` exposes 26 tools over stdio:
+`picklab mcp serve` exposes 27 tools over stdio:
 
 - Sessions: `session_create`, `session_status`, `session_destroy`
-- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_move`, `desktop_scroll`, `desktop_drag`, `desktop_double_click`, `desktop_type`, `desktop_key`
+- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_move`, `desktop_scroll`, `desktop_drag`, `desktop_double_click`, `desktop_type`, `desktop_key` — the seven input tools fail closed with a busy error while a human lease is active
 - Android: `android_start`, `android_install_apk`, `android_launch_app`, `android_screenshot`, `android_tap`, `android_type`, `android_back`, `android_home`, `android_get_ui_tree`, `android_logcat`, `android_run_adb`
 - Artifacts: `artifact_list`, `artifact_report`
+- Takeover: `takeover_status` — check whether a session is under human control (see [Supervised pause and human takeover](#supervised-pause-and-human-takeover)); read-only, always safe to call
 - User: `request_user_input` — ask the human a question (via MCP elicitation when the client supports it) and wait for the answer; never used for secrets
 
 Resources, addressable as `picklab://` URIs:
@@ -308,7 +333,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
 - The DevTools relay validates the installed upstream package name, exact version, declared bin, and confined real path before spawning Node with an argument array. Its browser URL is always derived as `http://127.0.0.1:<session-cdp-port>`.
 - Relay stdout is protocol-only. A pending JSON-RPC record is capped at 16 MiB. Upstream diagnostic lines are capped at 64 KiB, redacted, and forwarded only to stderr; an over-limit line is dropped with a safe notice. Upstream update checks and usage statistics are disabled.
-- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit writable escape hatch for human secret entry and does not yet coordinate with agent input.
+- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit, persistent writable escape hatch for human secret entry and does not coordinate with agent input. `picklab watch --control` is the coordinated alternative: an atomic, TTL-bounded lease gates a temporary writable VNC server, and every agent desktop-input call and DevTools relay request fails closed (a live human lease is checked immediately before delivery) for as long as it is held; a crash on either side is recovered — writable VNC never outlives its lease.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
 - Evidence timelines persist only allowlisted metadata; typed values become length/type metadata, and network headers, bodies, and URL queries are dropped. Static HTML reports escape page-controlled text and use a no-script, no-network CSP.
 - Screenshot files contain raw pixels and cannot be redacted. Avoid explicit captures on screens containing secrets, and use `evidence.enabled: false` when an action timeline is not appropriate. See [SECURITY.md](SECURITY.md#recorded-evidence-and-screenshots).

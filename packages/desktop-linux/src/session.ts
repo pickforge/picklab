@@ -7,9 +7,13 @@ import {
   createSession,
   destroySessionRecord,
   getSession,
+  isHumanLeaseStale,
   isPidAlive,
   processIdentityMatches,
   reapDeadRunningSessions,
+  readHumanLease,
+  recordTakeoverEvidence,
+  releaseHumanLease,
   sessionsDir,
   stopPid,
   stopProcessGroupVerified,
@@ -415,6 +419,56 @@ export async function stopOwnedSessionVnc(
   }
 }
 
+/**
+ * Recover a session left with a writable VNC server by a takeover whose
+ * owner process is gone (crash) or whose heartbeat lapsed (stale TTL): stop
+ * the recorded writable VNC, clear its record, record a `takeover_recovered`
+ * evidence entry, and release the stale lease. A *live* lease is left
+ * untouched — this only reclaims genuinely stale state. Exported for
+ * `@pickforge/picklab-desktop-linux`'s `takeover.ts` (a sibling module,
+ * imported one-directionally from here to avoid a cycle since `takeover.ts`
+ * already depends on this file's VNC primitives). Assumes the caller already
+ * holds the session's VNC lock (`withSessionVncLock`).
+ */
+export async function recoverStaleTakeoverLocked(
+  id: string,
+  record: SessionRecord,
+  registryEnv: EnvLike,
+): Promise<{ recovered: boolean }> {
+  const lease = await readHumanLease(id, registryEnv);
+  if (lease === undefined) return { recovered: false };
+  if (!isHumanLeaseStale(lease)) return { recovered: false };
+
+  const desktop = record.desktop;
+  if (desktop !== undefined && desktop.vncPid !== undefined && desktop.vncViewOnly !== true) {
+    await stopOwnedSessionVnc(id, desktop).catch(() => {});
+    await updateSession(
+      id,
+      {
+        desktop: {
+          ...desktop,
+          vncPid: undefined,
+          vncStartTimeTicks: undefined,
+          vncViewOnly: undefined,
+        },
+      },
+      registryEnv,
+    ).catch(() => {});
+  }
+
+  await recordTakeoverEvidence(record.projectDir, id, "takeover_recovered", {
+    env: registryEnv,
+    status: "error",
+  });
+
+  // Compare-and-delete by leaseId. A `false` result means a concurrent
+  // acquirer already replaced this lease (or released it themselves) between
+  // our read above and here — safe to leave alone either way; the VNC side
+  // effect above is idempotent and already reclaimed the stale writable VNC.
+  await releaseHumanLease(id, lease.leaseId, registryEnv);
+  return { recovered: true };
+}
+
 export async function ensureSessionVnc(
   id: string,
   opts: EnsureSessionVncOptions = {},
@@ -424,11 +478,11 @@ export async function ensureSessionVnc(
     throw new Error(`Session not found: ${id}`);
   }
   return withSessionVncLock(id, registryEnv, async () => {
-    const record = await getSession(id, registryEnv);
+    let record = await getSession(id, registryEnv);
     if (record === undefined) {
       throw new Error(`Session not found: ${id}`);
     }
-    const desktop = record.desktop;
+    let desktop = record.desktop;
     if (desktop?.display === undefined) {
       throw new Error(`Session ${id} is not desktop-capable`);
     }
@@ -452,16 +506,32 @@ export async function ensureSessionVnc(
         );
       }
       if (desktop.vncViewOnly !== true) {
-        throw new Error(
-          `Session ${id} has an active writable VNC server; watch requires server-enforced read-only VNC`,
-        );
+        // A writable VNC left running by a takeover whose owner is dead or
+        // whose heartbeat lapsed is recoverable: revert it to read-only and
+        // fall through to the normal ensure flow below. A *live* human lease
+        // is never touched — `recovered: false` keeps the original refusal.
+        const { recovered } = await recoverStaleTakeoverLocked(id, record, registryEnv);
+        if (!recovered) {
+          throw new Error(
+            `Session ${id} has an active writable VNC server; watch requires server-enforced read-only VNC`,
+          );
+        }
+        record = await getSession(id, registryEnv);
+        if (record === undefined) {
+          throw new Error(`Session not found: ${id}`);
+        }
+        desktop = record.desktop;
+        if (desktop?.display === undefined) {
+          throw new Error(`Session ${id} is not desktop-capable`);
+        }
+      } else {
+        if (desktop.vncPort === undefined) {
+          throw new Error(
+            `Session ${id} has an active VNC server with no port recorded`,
+          );
+        }
+        return { pid: desktop.vncPid, port: desktop.vncPort, reused: true };
       }
-      if (desktop.vncPort === undefined) {
-        throw new Error(
-          `Session ${id} has an active VNC server with no port recorded`,
-        );
-      }
-      return { pid: desktop.vncPid, port: desktop.vncPort, reused: true };
     }
 
     const vnc = await startVnc({

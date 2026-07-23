@@ -42,6 +42,7 @@ const EXPECTED_TOOLS = [
   "android_run_adb",
   "artifact_list",
   "artifact_report",
+  "takeover_status",
   "request_user_input",
 ];
 

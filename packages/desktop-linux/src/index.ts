@@ -103,3 +103,15 @@ export {
 } from "./session.js";
 
 export { findOnPath } from "./util.js";
+
+export {
+  endHumanTakeover,
+  recoverStaleHumanLease,
+  renewHumanTakeover,
+  startHumanTakeover,
+  type EndHumanTakeoverOptions,
+  type EndHumanTakeoverResult,
+  type HumanTakeoverHandle,
+  type StartHumanTakeoverOptions,
+  type TakeoverEndReason,
+} from "./takeover.js";

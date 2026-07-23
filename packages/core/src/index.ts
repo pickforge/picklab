@@ -183,6 +183,35 @@ export {
 } from "./session-lifecycle.js";
 
 export {
+  AGENT_PERMITS_DIR,
+  HUMAN_LEASE_DRAIN_TIMEOUT_MS,
+  HUMAN_LEASE_FILE,
+  HUMAN_LEASE_HEARTBEAT_MS,
+  HUMAN_LEASE_TTL_MS,
+  HumanControlActiveError,
+  HumanLeaseDrainTimeoutError,
+  HumanLeaseHeldError,
+  StaleHumanLeaseError,
+  acquireAgentPermit,
+  acquireHumanLease,
+  checkHumanLeaseBusy,
+  clearStaleHumanLease,
+  getTakeoverStatus,
+  isHumanLeaseStale,
+  readHumanLease,
+  recordTakeoverEvidence,
+  releaseAgentPermit,
+  releaseHumanLease,
+  renewHumanLease,
+  withAgentPermit,
+  type AcquireHumanLeaseOptions,
+  type AgentPermit,
+  type HumanLease,
+  type RecordTakeoverEvidenceOptions,
+  type TakeoverStatusResult,
+} from "./takeover.js";
+
+export {
   REAPER_CLEANUP_PENDING_META_KEY,
   createSession,
   destroySessionRecord,
