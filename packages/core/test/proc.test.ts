@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   isPidAlive,
+  isProcessGroupAlive,
   listProcessGroupMembers,
   parseProcStat,
   processIdentityMatches,
@@ -609,6 +610,97 @@ describe("process identity and group termination", () => {
       kill.mockRestore();
       read.mockRestore();
       readDir.mockRestore();
+    }
+  });
+});
+
+// isProcessGroupAlive is a kill(2) signal-0 probe, not a /proc read, so
+// (unlike listProcessGroupMembers) it is exercised for real here and runs on
+// every platform, including Darwin.
+describe("isProcessGroupAlive", () => {
+  it("is true for a live group and false once every member is gone", async () => {
+    const leader = spawn(node, ["-e", "setInterval(() => {}, 1000);"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = leader.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      expect(isProcessGroupAlive(pid)).toBe(true);
+      process.kill(-pid, "SIGKILL");
+      const deadline = Date.now() + 3000;
+      while (isProcessGroupAlive(pid) && Date.now() < deadline) {
+        await delay(20);
+      }
+      expect(isProcessGroupAlive(pid)).toBe(false);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  });
+
+  it("stays true when a leader is killed but a group member survives it, matching a crashed-supervisor-with-live-child scenario", async () => {
+    // The leader's own script spawns a member process in the same group
+    // (inherited by default, since the member itself is not detached), marks
+    // a readiness file once the member is actually up, then parks so it does
+    // not exit on its own.
+    const readyFile = path.join(
+      os.tmpdir(),
+      `picklab-proc-group-ready-${process.pid}-${Date.now()}`,
+    );
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const fs = require("node:fs");',
+      'const member = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });',
+      `member.once("spawn", () => fs.writeFileSync(${JSON.stringify(readyFile)}, "ready"));`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const leader = spawn(node, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = leader.pid;
+    if (pid === undefined) {
+      throw new Error("child process did not expose a pid");
+    }
+    try {
+      const readyDeadline = Date.now() + 3000;
+      while (!fs.existsSync(readyFile) && Date.now() < readyDeadline) {
+        await delay(20);
+      }
+      expect(fs.existsSync(readyFile)).toBe(true);
+      expect(isProcessGroupAlive(pid)).toBe(true);
+
+      // Kill only the leader directly (by pid, not by group), simulating a
+      // supervisor that crashed on its own while its child kept running.
+      leader.kill("SIGKILL");
+      await new Promise<void>((resolve) => leader.once("exit", () => resolve()));
+
+      // The group (identified by the now-dead leader's former pid) is still
+      // alive because its member is still running: a naive check that only
+      // asks "did the leader exit" would wrongly call this cleaned up.
+      expect(isProcessGroupAlive(pid)).toBe(true);
+
+      // The fix: signal the group by pgid, which still reaches the survivor,
+      // then confirm it is actually empty.
+      process.kill(-pid, "SIGKILL");
+      const killDeadline = Date.now() + 3000;
+      while (isProcessGroupAlive(pid) && Date.now() < killDeadline) {
+        await delay(20);
+      }
+      expect(isProcessGroupAlive(pid)).toBe(false);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+      fs.rmSync(readyFile, { force: true });
     }
   });
 });

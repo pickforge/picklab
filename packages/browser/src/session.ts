@@ -7,6 +7,7 @@ import {
   getSession,
   isDisplaySocketAlive,
   isPidAlive,
+  isProcessGroupAlive,
   isProfileConfined,
   processIdentityMatches,
   reapDeadRunningSessions,
@@ -182,17 +183,64 @@ async function waitForOwnedIdentity(
   }
 }
 
+const OWNED_GROUP_CONFIRM_TIMEOUT_MS = 1_000;
+const OWNED_GROUP_POLL_INTERVAL_MS = 20;
+
+/**
+ * Kill the daemon's whole process group, not just the daemon process itself.
+ * The supervisor spawns Chrome as a plain (non-detached) child, so Chrome
+ * shares the supervisor's process group (its pgid equals the supervisor's
+ * pid, set at spawn via `detached: true`). Signaling only the supervisor can
+ * orphan a live Chrome in the same group; signaling the group by its pgid
+ * reaches every current member regardless of whether the supervisor itself
+ * has already exited (e.g. crashed) by the time we act.
+ */
+function killOwnedBrowserProcessGroup(daemon: OwnedDaemonHandle): void {
+  try {
+    process.kill(-daemon.pid, "SIGKILL");
+    return;
+  } catch {
+    // Group signal failed (already gone, or unsupported); fall through to a
+    // direct kill so the supervisor itself is at least reaped.
+  }
+  try {
+    daemon.child.kill("SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+
+async function confirmOwnedGroupGone(pgid: number): Promise<boolean> {
+  const deadline = Date.now() + OWNED_GROUP_CONFIRM_TIMEOUT_MS;
+  while (isProcessGroupAlive(pgid)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(OWNED_GROUP_POLL_INTERVAL_MS);
+  }
+  return true;
+}
+
+/**
+ * Stop an owned browser daemon before its `/proc`-backed identity has been
+ * captured (or ever will be, if the daemon crashed outright). `daemon.pid` is
+ * safe to signal without a verified `ProcessIdentity`: it is our own
+ * just-spawned, not-yet-reaped child, so it cannot be a reused pid, and it
+ * doubles as the process-group id because `startDaemon` spawns it detached
+ * (making it its own session/group leader). Returns true only once the whole
+ * group is confirmed to have no live members, so a crashed supervisor can
+ * never leave an orphaned Chrome reported as cleaned up.
+ */
 async function stopOwnedBrowserDaemon(
   daemon: OwnedDaemonHandle,
 ): Promise<boolean> {
   try {
-    if (ownedDaemonExited(daemon)) return true;
-    const closed = new Promise<void>((resolve) => {
-      daemon.child.once("close", () => resolve());
-    });
-    daemon.child.kill("SIGKILL");
-    if (!ownedDaemonExited(daemon)) await closed;
-    return true;
+    const closed = ownedDaemonExited(daemon)
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          daemon.child.once("close", () => resolve());
+        });
+    killOwnedBrowserProcessGroup(daemon);
+    await closed;
+    return await confirmOwnedGroupGone(daemon.pid);
   } catch {
     return false;
   } finally {

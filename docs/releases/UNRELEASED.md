@@ -81,6 +81,17 @@ release description, then reset it after the release is published.
 - Added a private browser lifecycle package with confined ephemeral profiles,
   loopback-only CDP discovery, verified process-group teardown, concurrent
   session safety, and conservative dead-session reaping.
+- Hardened the pre-identity browser daemon cleanup window: if the owned
+  Chrome supervisor's `/proc` identity never resolves within the one-second
+  startup window (a pathological read failure, a supervisor crash, or both),
+  cleanup now signals the whole process group — not just the supervisor
+  process — and confirms via a portable, non-`/proc` `kill(2)` probe
+  (`isProcessGroupAlive`) that no group member survives before reporting the
+  session cleaned up. Previously an already-exited or individually-killed
+  supervisor could leave a same-group Chrome orphaned and alive while its
+  session record was marked fully cleaned up. Defensive hardening only (issue
+  #29, deferred from #28); no behavior change on the normal startup path, no
+  feature flag.
 - Centralized session lifecycle composition in core and routed dead-session
   reaping through typed desktop, Android, and browser teardown owners, removing
   duplicate CLI/MCP orchestration and core PID/profile stop implementations.
@@ -153,6 +164,13 @@ release description, then reset it after the release is published.
   e.g. `run-catalog.test.ts`'s root-precedence test and
   `devtools-mcp.test.ts`'s package-root assertion), and inline-screenshot/CDP
   association mismatches in `devtools-evidence.test.ts`.
+- New `proc.test.ts` `isProcessGroupAlive` coverage, including a real
+  spawned-leader-killed-with-a-surviving-member regression case, and a new
+  `packages/browser/test/pre-identity-cleanup.test.ts` integration
+  regression (mocked `readProcessIdentity`/`startXvfb`, real fake-Chrome
+  subprocess) proving a live Chrome left behind by an unresolved supervisor
+  identity is actually killed, not just reported clean; verified this
+  regression test fails against the pre-fix code and passes against the fix.
 - `bun run build`
 
 ### Not tested yet
