@@ -199,6 +199,7 @@ export {
   getTakeoverStatus,
   isHumanLeaseStale,
   readHumanLease,
+  readHumanLeaseRaw,
   recordTakeoverEvidence,
   releaseAgentPermit,
   releaseHumanLease,
@@ -207,6 +208,7 @@ export {
   type AcquireHumanLeaseOptions,
   type AgentPermit,
   type HumanLease,
+  type HumanLeaseSnapshot,
   type RecordTakeoverEvidenceOptions,
   type TakeoverStatusResult,
 } from "./takeover.js";

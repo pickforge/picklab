@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import {
   REAPER_CLEANUP_PENDING_META_KEY,
+  clearStaleHumanLease,
   createSession,
   destroySessionRecord,
   getSession,
@@ -12,8 +13,8 @@ import {
   processIdentityMatches,
   reapDeadRunningSessions,
   readHumanLease,
+  readHumanLeaseRaw,
   recordTakeoverEvidence,
-  releaseHumanLease,
   sessionsDir,
   stopPid,
   stopProcessGroupVerified,
@@ -435,9 +436,22 @@ export async function recoverStaleTakeoverLocked(
   record: SessionRecord,
   registryEnv: EnvLike,
 ): Promise<{ recovered: boolean }> {
-  const lease = await readHumanLease(id, registryEnv);
-  if (lease === undefined) return { recovered: false };
-  if (!isHumanLeaseStale(lease)) return { recovered: false };
+  const initial = await readHumanLease(id, registryEnv);
+  if (initial === undefined) return { recovered: false };
+  if (!isHumanLeaseStale(initial)) return { recovered: false };
+
+  // TOCTOU guard (pickforge/picklab#21 P1-C): the cheap check above can be
+  // arbitrarily stale by the time we act — a live owner's heartbeat may have
+  // renewed the lease in the gap. Re-read immediately before the destructive
+  // VNC stop and re-check staleness on THAT read; a lease that is no longer
+  // stale (renewed) is left completely untouched. `leaseId` alone cannot
+  // detect a renewal (it never changes), so the final release below
+  // compare-and-deletes on the exact raw bytes captured here, not just the id.
+  const snapshot = await readHumanLeaseRaw(id, registryEnv);
+  if (snapshot === undefined) return { recovered: false };
+  if (snapshot.lease !== undefined && !isHumanLeaseStale(snapshot.lease)) {
+    return { recovered: false };
+  }
 
   const desktop = record.desktop;
   if (desktop !== undefined && desktop.vncPid !== undefined && desktop.vncViewOnly !== true) {
@@ -461,11 +475,14 @@ export async function recoverStaleTakeoverLocked(
     status: "error",
   });
 
-  // Compare-and-delete by leaseId. A `false` result means a concurrent
-  // acquirer already replaced this lease (or released it themselves) between
-  // our read above and here — safe to leave alone either way; the VNC side
-  // effect above is idempotent and already reclaimed the stale writable VNC.
-  await releaseHumanLease(id, lease.leaseId, registryEnv);
+  // Compare-and-delete on the exact bytes captured at the final stale check
+  // above, not merely `leaseId` (which a renewal never changes). If the file
+  // changed again since — another renewal slipped in during the VNC stop
+  // itself — it is left alone rather than deleted out from under a possibly
+  // now-live claim. The VNC-stop decision above was correct at the instant it
+  // was made (two consecutive stale reads); this bounds the residual race to
+  // the width of `stopOwnedSessionVnc` alone, down from the whole function.
+  await clearStaleHumanLease(id, snapshot.raw, registryEnv);
   return { recovered: true };
 }
 

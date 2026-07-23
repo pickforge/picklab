@@ -1,5 +1,7 @@
 import { getTakeoverStatus, resolveDesktopCapableSession } from "@pickforge/picklab-core";
+import { runTakeoverWatchdogLoop } from "@pickforge/picklab-desktop-linux";
 import {
+  parseIntArg,
   resolveProjectDir,
   runReported,
   type BaseCliOptions,
@@ -41,4 +43,30 @@ export async function takeoverStatus(
 
 export async function runTakeoverStatus(opts: TakeoverStatusOptions): Promise<number> {
   return runReported(opts, () => takeoverStatus(opts));
+}
+
+export interface TakeoverWatchdogOptions {
+  session: string;
+  lease: string;
+  interval?: string;
+}
+
+/**
+ * Internal command, not part of the public CLI surface: the actively
+ * polling half of the "writable VNC never outlives its lease" crash-recovery
+ * path (pickforge/picklab#21 P0-A). `picklab watch --control` spawns this as
+ * a detached process alongside a takeover; it runs until the lease it is
+ * watching ends, is superseded, or goes stale (in which case it reclaims the
+ * writable VNC itself and exits) — see `runTakeoverWatchdogLoop`.
+ */
+export async function runTakeoverWatchdog(
+  opts: TakeoverWatchdogOptions,
+): Promise<number> {
+  await runTakeoverWatchdogLoop({
+    sessionId: opts.session,
+    leaseId: opts.lease,
+    pollIntervalMs:
+      opts.interval === undefined ? undefined : parseIntArg(opts.interval, "--interval"),
+  });
+  return 0;
 }

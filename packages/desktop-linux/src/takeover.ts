@@ -46,6 +46,8 @@ export interface HumanTakeoverHandle {
   vncStartTimeTicks: number;
   ttlMs: number;
   heartbeatMs: number;
+  /** The lease's current expiry, as of the last successful renewal. */
+  expiresAt: string;
   projectDir: string;
 }
 
@@ -162,11 +164,17 @@ export async function startHumanTakeover(
         },
         registryEnv,
       );
-      await renewHumanLease(id, lease.leaseId, registryEnv, {
+      const patched = await renewHumanLease(id, lease.leaseId, registryEnv, {
         vncPid: vnc.pid,
         vncStartTimeTicks: vnc.startTimeTicks,
         vncPort: vnc.port,
       });
+      if (patched === undefined) {
+        throw new Error(
+          `Human lease ${lease.leaseId} for session ${id} went stale before its writable VNC could be recorded`,
+        );
+      }
+      lease.expiresAt = patched.expiresAt;
     } catch (error) {
       await stopOwnedSessionVnc(id, {
         ...desktop,
@@ -190,6 +198,7 @@ export async function startHumanTakeover(
       vncStartTimeTicks: vnc.startTimeTicks,
       ttlMs: lease.ttlMs,
       heartbeatMs: lease.heartbeatMs,
+      expiresAt: lease.expiresAt,
       projectDir: record.projectDir,
     };
   });
@@ -200,14 +209,20 @@ export async function startHumanTakeover(
  * no longer ours — the caller must then end the takeover with reason
  * `"timeout"` rather than keep driving a writable VNC past its lease.
  */
+/**
+ * Renew a held lease's TTL. Returns the renewed lease (so callers can read
+ * its fresh `expiresAt` and reschedule their own hard-deadline backstop), or
+ * `undefined` if the lease was no longer renewable — already stale (TTL
+ * elapsed without a timely renewal: `renewHumanLease` itself refuses to
+ * resurrect a stale lease, see pickforge/picklab#21 P0-B) or held by someone
+ * else. The caller must treat `undefined` as "the lease is gone" and end the
+ * takeover immediately, not merely stop trying to renew.
+ */
 export async function renewHumanTakeover(
   handle: HumanTakeoverHandle,
   registryEnv: EnvLike = process.env,
-): Promise<boolean> {
-  const renewed = await renewHumanLease(handle.sessionId, handle.leaseId, registryEnv).catch(
-    () => undefined,
-  );
-  return renewed !== undefined;
+): Promise<HumanLease | undefined> {
+  return renewHumanLease(handle.sessionId, handle.leaseId, registryEnv).catch(() => undefined);
 }
 
 export interface EndHumanTakeoverOptions {

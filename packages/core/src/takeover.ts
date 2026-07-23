@@ -267,6 +267,32 @@ export async function readHumanLease(
   return raw === undefined ? undefined : parseHumanLease(raw);
 }
 
+/** A lease read together with its exact on-disk bytes. */
+export interface HumanLeaseSnapshot {
+  raw: string;
+  /** `undefined` when the raw content does not parse as a lease (corrupt). */
+  lease?: HumanLease;
+}
+
+/**
+ * Read a session's human lease together with its exact raw bytes, for
+ * callers that need to compare-and-delete on precisely what they observed
+ * (recovery's re-check-immediately-before-acting protocol) rather than only
+ * on `leaseId`, which does not change across a renewal and so cannot by
+ * itself detect "this lease was renewed since I last looked." Returns
+ * `undefined` only when no lease file exists at all.
+ */
+export async function readHumanLeaseRaw(
+  sessionId: string,
+  env: EnvLike = process.env,
+): Promise<HumanLeaseSnapshot | undefined> {
+  assertSafeSessionId(sessionId);
+  const raw = await readTextIfPresent(humanLeasePath(sessionId, env));
+  if (raw === undefined) return undefined;
+  const lease = parseHumanLease(raw);
+  return lease === undefined ? { raw } : { raw, lease };
+}
+
 /**
  * Whether a lease is stale: its owner process is dead (or its PID was
  * reused), or its TTL elapsed without a heartbeat renewal. Either condition
@@ -406,6 +432,12 @@ export async function renewHumanLease(
   const leasePath = humanLeasePath(sessionId, env);
   const current = await readHumanLease(sessionId, env);
   if (current === undefined || current.leaseId !== leaseId) return undefined;
+  // A lease that has already gone stale (TTL elapsed, or its recorded owner
+  // no longer matches this call's identity — e.g. reaped and reused) must
+  // never be resurrected by a late renewal: the owner lost the lease the
+  // instant it went stale, and a straggling renew must not extend it back to
+  // life out from under a recovery that may already be in flight.
+  if (isHumanLeaseStale(current, now)) return undefined;
   const updated: HumanLease = {
     ...current,
     expiresAt: new Date(now.getTime() + current.ttlMs).toISOString(),

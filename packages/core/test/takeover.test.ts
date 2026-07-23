@@ -223,6 +223,22 @@ describe("renewHumanLease / releaseHumanLease", () => {
     expect(await renewHumanLease("desk-c1", "not-the-owner", env)).toBeUndefined();
   });
 
+  it("refuses to resurrect a lease that has already gone stale by TTL, even for its own owner (P0-B)", async () => {
+    const lease = await acquireHumanLease("desk-c1b", env);
+    // The owner is this very process (alive), but the TTL has elapsed
+    // without a timely renewal — the agent must be able to observe the
+    // lease as free the instant that happens, so a straggling renewal must
+    // never bring it back to life out from under a recovery in flight.
+    const now = new Date(Date.parse(lease.expiresAt) + 1);
+    expect(isHumanLeaseStale(lease, now)).toBe(true);
+
+    expect(
+      await renewHumanLease("desk-c1b", lease.leaseId, env, {}, now),
+    ).toBeUndefined();
+    // Untouched: no expiresAt extension, no partial write.
+    expect(await readHumanLease("desk-c1b", env)).toEqual(lease);
+  });
+
   it("only releases the lease it owns", async () => {
     const lease = await acquireHumanLease("desk-c2", env);
     expect(await releaseHumanLease("desk-c2", "not-the-owner", env)).toBe(false);
