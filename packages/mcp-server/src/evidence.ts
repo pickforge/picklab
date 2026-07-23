@@ -124,6 +124,7 @@ function sanitizedTarget(
   return Object.keys(sanitized).length === 0 ? undefined : sanitized;
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function withMcpEvidence<T extends ToolReport>(
   ctx: ServerContext,
   options: McpEvidenceOptions<T>,

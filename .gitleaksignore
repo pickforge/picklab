@@ -1,0 +1,7 @@
+# Synthetic secret fixtures retained in Git history; tracked in pickforge/picklab#60.
+de467fbd14d00d4afa4946f610d05d724a6fa777:packages/browser/test/evidence-integration.test.ts:jwt:27
+d3e4353d8fbd470deaaab30c61c7fdb0c5b14727:packages/browser/test/evidence-integration.test.ts:jwt:27
+596c7c21cd5472c99db0f516988b5483354e2fe7:packages/core/test/redact.test.ts:jwt:258
+596c7c21cd5472c99db0f516988b5483354e2fe7:packages/core/test/evidence-sanitize.test.ts:jwt:12
+d00b06b3e14aaf1a29a7fc7d9e271619f2d6c41a:packages/cli/test/telemetry.test.ts:github-pat:83
+8bc348cfb7cc88f9e276a7102c063642609f2d18:packages/cli/test/telemetry.test.ts:github-pat:83

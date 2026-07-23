@@ -148,6 +148,7 @@ export interface ResolveScreenshotTargetOptions {
   env?: EnvLike;
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function resolveScreenshotTarget(
   opts: ResolveScreenshotTargetOptions,
 ): Promise<ScreenshotTarget> {

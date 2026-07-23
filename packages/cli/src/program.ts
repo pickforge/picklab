@@ -92,6 +92,7 @@ function withAndroidTarget(command: Command): Command {
   );
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function buildProgram(): Command {
   const program = new Command()
     .name("picklab")

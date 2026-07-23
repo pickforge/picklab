@@ -76,6 +76,10 @@ release description, then reset it after the release is published.
 
 ## Internal/release changes
 
+- Added blocking TypeScript complexity caps, ratcheted Vitest coverage floors,
+  Git-history secret scanning, dependency vulnerability scanning, and required
+  branch-protection checks for the complete CI gate baseline. Legacy complexity
+  and scanner exceptions remain explicitly tracked in pickforge/picklab#60.
 - Added a single storage resolver (`resolveRunStorage`) covering home,
   project-local, and custom modes with stable per-project id derivation
   (sha256 of the canonical project path); routed run creation, the run
@@ -178,6 +182,11 @@ release description, then reset it after the release is published.
 
 - `bun install --frozen-lockfile`
 - `bun run typecheck`
+- `bun run lint`
+- `bun run test:coverage` in a local Linux container (1,129 passed, 5 skipped;
+  82.47% lines and 86.13% branches)
+- `gitleaks git --redact --no-banner .`
+- `osv-scanner scan source --recursive .`
 - Focused run catalog, run, evidence, CLI artifact, and MCP resource/tool suites.
 - New `storage.test.ts` (project id derivation, all three storage modes, env
   overrides) and `run-catalog.test.ts`'s "openRunCatalog storage modes" suite
@@ -264,10 +273,6 @@ release description, then reset it after the release is published.
 
 ### Not tested yet
 
-- `bun run test:coverage` on a machine where the full suite runs clean (this
-  dev sandbox can't produce a coverage summary because the pre-existing
-  Darwin-only failures above stop the process before the v8 coverage
-  provider flushes it — reproduced identically on unmodified `main`).
 - Platform smoke checks outside Linux.
 - Real `sudo -A -v` graphical-prompt smoke on a live Linux desktop (approve
   and cancel) — the automated suite covers this with a stand-in `sudo`/

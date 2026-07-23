@@ -50,6 +50,7 @@ function isJsonRpcId(value: unknown): value is JsonRpcId {
   );
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export function assertJsonRpcMessage(value: unknown): asserts value is JsonRpcMessage {
   if (!isObject(value) || value.jsonrpc !== "2.0") {
     throw new Error('expected a JSON-RPC 2.0 object with jsonrpc: "2.0"');
@@ -333,6 +334,7 @@ export interface PumpJsonRpcNdjsonOptions {
 
 const runWriteImmediately: JsonRpcWriteSerializer = (write) => write();
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function pumpJsonRpcNdjson(
   source: Readable,
   destination: Writable,

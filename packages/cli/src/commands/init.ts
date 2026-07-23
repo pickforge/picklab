@@ -127,6 +127,7 @@ function planLabUserProvisioning(
   });
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 export async function runInit(
   opts: InitCliOptions,
   env: EnvLike = process.env,

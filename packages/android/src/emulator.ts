@@ -126,6 +126,7 @@ export function pickConsolePort(usedSerials: readonly string[]): number {
   );
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function waitForBoot(opts: WaitForBootOptions): Promise<void> {
   assertSerial(opts.serial);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
@@ -373,6 +374,7 @@ export async function stopEmulator(
   return stopped;
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 async function stopEmulatorProcess(
   opts: StopEmulatorOptions,
 ): Promise<boolean> {

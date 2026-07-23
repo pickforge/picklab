@@ -237,6 +237,7 @@ export async function runAndroidLogcat(
   });
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function runAndroidAdb(
   args: string[],
   opts: AndroidTargetOptions,

@@ -204,6 +204,7 @@ function structuredContent(message: JsonRpcMessage): Record<string, unknown> | u
     : undefined;
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 function diagnosticActions(
   message: JsonRpcMessage,
   sessionId: string,
@@ -396,6 +397,7 @@ async function captureInlinePng(
   return path.join("screenshots", filename);
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export async function createDevtoolsEvidenceRecorder(
   opts: CreateDevtoolsEvidenceRecorderOptions,
 ): Promise<DevtoolsEvidenceRecorder | undefined> {
@@ -452,6 +454,7 @@ export async function createDevtoolsEvidenceRecorder(
         report(error);
       }
     },
+    // eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
     afterResponse: async (message) => {
       try {
         const id = requestId(message);

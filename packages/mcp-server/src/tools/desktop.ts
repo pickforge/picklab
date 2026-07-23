@@ -59,6 +59,7 @@ async function resolveDesktop(
   return { id: record.id, display: requireDisplay(record) };
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function registerDesktopTools(
   server: McpServer,
   ctx: ServerContext,

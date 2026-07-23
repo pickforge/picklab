@@ -6,6 +6,33 @@ on:
   pull_request:
 
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan dependency lockfiles
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2
+        with:
+          scan-args: |-
+            scan source
+            --recursive
+            ./
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan Git history for secrets
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git --redact --no-banner /repo
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -22,6 +49,8 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - run: bun run typecheck
+
+      - run: bun run lint
 
       - name: Install desktop test dependencies
         run: |

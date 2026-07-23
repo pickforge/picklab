@@ -139,6 +139,7 @@ function describeCreated(summary: LocalSessionSummary): string {
 export async function runSessionCreate(
   opts: SessionCreateOptions,
 ): Promise<number> {
+  // eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
   return runReported(opts, async () => {
     const projectDir = resolveProjectDir(opts);
     const config = await loadConfig(projectDir);

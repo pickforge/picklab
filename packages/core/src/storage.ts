@@ -135,6 +135,7 @@ function isSameOrDescendant(ancestor: string, descendant: string): boolean {
  * This is the single resolver every run-creation and artifact-lookup path
  * (core, CLI, MCP) goes through, so they always agree on where runs live.
  */
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function resolveRunStorage(
   projectDir: string,
   env: EnvLike = process.env,
