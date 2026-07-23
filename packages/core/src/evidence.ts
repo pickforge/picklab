@@ -1672,10 +1672,16 @@ async function collectActiveRunIds(parent: string): Promise<Set<string>> {
 /**
  * Retain only the newest `keep` (default 20) finalized evidence runs per
  * project, deleting older finalized evidence run directories. Never prunes:
- * running/active runs (status `running` or referenced by an active pointer) or
- * legacy runs (no `evidenceVersion`). Returns the removed run ids.
+ * running/active runs (status `running` or referenced by an active pointer),
+ * legacy runs (no `evidenceVersion`), or anything outside the resolved
+ * storage mode's primary root. `openRunCatalog` layers a read-only legacy
+ * project-local root under home/custom mode purely for discovery
+ * (`artifact_list`/`report`/resources) — pruning that root would delete
+ * runs this process does not own and never migrated, so retention counting
+ * and removal are scoped to `entry.rootDir === resolved.runsDir` only.
  *
- * This is a primitive: no finalization producer calls it yet.
+ * `finalizeActiveEvidenceRun` calls this automatically after every
+ * finalization.
  */
 export async function pruneFinalizedEvidenceRuns(
   projectDir: string,
@@ -1683,8 +1689,12 @@ export async function pruneFinalizedEvidenceRuns(
   env: EnvLike = process.env,
 ): Promise<string[]> {
   const keep = opts.keep ?? EVIDENCE_RETENTION_KEEP;
+  const resolved = await resolveRunStorage(projectDir, env);
+  const primaryRootDir = path.resolve(resolved.runsDir);
   const catalog = await openRunCatalog(projectDir, env);
-  const entries = await catalog.list();
+  const entries = (await catalog.list()).filter(
+    (entry) => entry.rootDir === primaryRootDir,
+  );
   const activeByRoot = new Map<string, Set<string>>();
   for (const entry of entries) {
     if (!activeByRoot.has(entry.rootDir)) {

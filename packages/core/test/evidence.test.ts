@@ -1328,6 +1328,65 @@ describe("finalized-run retention", () => {
     expect(fs.existsSync(symDir)).toBe(true);
     expect(fs.existsSync(badDir)).toBe(true);
   });
+
+  it("never prunes pre-existing legacy project-local runs through the read-only fallback root", async () => {
+    // Reproduces the P0: home mode layers the legacy project-local root
+    // under the catalog purely for read discovery. Retention must count and
+    // delete only within the resolved primary (home) root — never treat the
+    // legacy root's runs as removal candidates just because the merged
+    // cross-root list exceeds `keep`.
+    const home = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-evi-prune-home-"),
+    );
+    const homeEnv = { PICKLAB_HOME: home };
+    try {
+      // 15 pre-existing legacy finalized runs (the file-level stub keeps
+      // `finalizedEvidenceRun`'s default env at project-local).
+      const legacyIds: string[] = [];
+      for (let i = 0; i < 15; i += 1) {
+        const minute = String(i).padStart(2, "0");
+        legacyIds.push(
+          await finalizedEvidenceRun(`2026-05-01T09:${minute}:00Z`),
+        );
+      }
+      // 10 new home-mode finalized runs.
+      const homeIds: string[] = [];
+      for (let i = 0; i < 10; i += 1) {
+        const minute = String(i).padStart(2, "0");
+        const run = await createRun(
+          project,
+          "evi",
+          { evidence: true, now: new Date(`2026-06-09T10:${minute}:00Z`) },
+          homeEnv,
+        );
+        await run.finish("completed");
+        homeIds.push(run.runId);
+      }
+
+      // 25 total across both roots; `keep: 5` would prune 20 of them if
+      // retention were computed over the merged catalog instead of the
+      // primary root alone.
+      const removed = await pruneFinalizedEvidenceRuns(
+        project,
+        { keep: 5 },
+        homeEnv,
+      );
+
+      expect(removed).toHaveLength(5);
+      expect(removed.sort()).toEqual(homeIds.slice(0, 5).sort());
+      // All 15 legacy runs survive untouched.
+      for (const id of legacyIds) {
+        expect(fs.existsSync(path.join(runsRoot(), id))).toBe(true);
+      }
+      // The 5 newest home runs survive; only the 5 oldest home runs are gone.
+      const survivingHomeIds = (await listRuns(project, homeEnv))
+        .map((r) => r.runId)
+        .filter((id) => homeIds.includes(id));
+      expect(survivingHomeIds.sort()).toEqual(homeIds.slice(5).sort());
+    } finally {
+      await fs.promises.rm(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("defensive filesystem errors propagate", () => {
