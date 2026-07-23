@@ -91,7 +91,11 @@ release description, then reset it after the release is published.
   supervisor could leave a same-group Chrome orphaned and alive while its
   session record was marked fully cleaned up. Defensive hardening only (issue
   #29, deferred from #28); no behavior change on the normal startup path, no
-  feature flag.
+  feature flag. The already-exited branch is documented as an accepted,
+  bounded pid-reuse residual (Node/libuv can reap before we observe the
+  exit, so a verified identity is not obtainable there by the issue's own
+  premise) and now pre-checks `isProcessGroupAlive` before signaling so a
+  fully vacated group is never blindly signaled.
 - Centralized session lifecycle composition in core and routed dead-session
   reaping through typed desktop, Android, and browser teardown owners, removing
   duplicate CLI/MCP orchestration and core PID/profile stop implementations.
@@ -166,11 +170,21 @@ release description, then reset it after the release is published.
   association mismatches in `devtools-evidence.test.ts`.
 - New `proc.test.ts` `isProcessGroupAlive` coverage, including a real
   spawned-leader-killed-with-a-surviving-member regression case, and a new
-  `packages/browser/test/pre-identity-cleanup.test.ts` integration
-  regression (mocked `readProcessIdentity`/`startXvfb`, real fake-Chrome
-  subprocess) proving a live Chrome left behind by an unresolved supervisor
-  identity is actually killed, not just reported clean; verified this
-  regression test fails against the pre-fix code and passes against the fix.
+  `packages/browser/test/pre-identity-cleanup.test.ts` with two integration
+  regressions (mocked `readProcessIdentity`/`startXvfb`, real fake-Chrome
+  subprocess): a live-supervisor case (identity read never resolves) and a
+  missing-supervisor case (a stand-in supervisor exits immediately after
+  spawning Chrome, exercising `stopOwnedBrowserDaemon`'s already-exited
+  branch). Both prove a live Chrome left behind is actually killed, not just
+  reported clean; verified both fail against the pre-fix code and pass
+  against the fix. The missing-supervisor case captures Chrome's pid
+  synchronously from its own `spawn()` return rather than waiting on Chrome's
+  script to self-report, after the wait-based version proved flaky under a
+  fully parallel `bun run test` on this dev sandbox; the live-supervisor case
+  still depends on Chrome's own self-reported marker (unavoidable without
+  changing production code) and can occasionally need extra wall-clock time
+  under the same full-parallel load — a scheduling artifact, not a logic
+  defect, and it stays within the pre-existing 43-45 Darwin noise band above.
 - `bun run build`
 
 ### Not tested yet
