@@ -2,6 +2,7 @@ import { Readable, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   createDeferred,
+  createJsonRpcWriteQueue,
   JsonRpcNdjsonBuffer,
   pumpJsonRpcNdjson,
   type JsonRpcMessage,
@@ -206,5 +207,82 @@ describe("pumpJsonRpcNdjson", () => {
         intercept: () => undefined,
       }),
     ).rejects.toThrow(/interceptDestination/);
+  });
+
+  it("createJsonRpcWriteQueue never overlaps two writers on the same destination", async () => {
+    const events: string[] = [];
+    let inFlight = false;
+    const destination = collectingWritable([], async (chunk) => {
+      if (inFlight) {
+        throw new Error(`overlapping write detected: ${chunk.toString()}`);
+      }
+      inFlight = true;
+      events.push(`start:${chunk.toString().trim()}`);
+      // A slow write for the first record — a concurrent second writer must
+      // wait for this to fully finish before its own write begins.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      events.push(`end:${chunk.toString().trim()}`);
+      inFlight = false;
+    });
+    const queue = createJsonRpcWriteQueue();
+    const first = queue(() => new Promise<void>((resolve) => {
+      destination.write(Buffer.from("first\n"), () => resolve());
+    }));
+    // Issued immediately after, while `first` is still in flight.
+    const second = queue(() => new Promise<void>((resolve) => {
+      destination.write(Buffer.from("second\n"), () => resolve());
+    }));
+    await Promise.all([first, second]);
+    expect(events).toEqual(["start:first", "end:first", "start:second", "end:second"]);
+  });
+
+  it("interleaving a busy rejection with an in-flight child response never produces a torn frame", async () => {
+    // Mirrors the DevTools relay's wiring: two independent pumps writing to
+    // the same client-facing stream through one shared write queue — the
+    // intercept path (busy rejection) and the normal forward path (child
+    // response), racing for real.
+    const output: Buffer[] = [];
+    const slowFirstWrite = collectingWritable(output, async () => {
+      // Only the *first* physical write to land is slowed, so the second
+      // writer's attempt genuinely overlaps in wall-clock time with the
+      // first's in-flight write — the scenario the queue must serialize.
+      if (output.length === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+    const queue = createJsonRpcWriteQueue();
+
+    const childResponsePump = pumpJsonRpcNdjson(
+      Readable.from(['{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n']),
+      slowFirstWrite,
+      { writeSerializer: queue },
+    );
+    const busyRejectionPump = pumpJsonRpcNdjson(
+      Readable.from(['{"jsonrpc":"2.0","id":2,"method":"tools/call"}\n']),
+      new Writable({ write: (_c, _e, cb) => cb() }), // never forwarded (intercepted)
+      {
+        intercept: (message) => ({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          error: { code: -32050, message: "busy" },
+        }),
+        interceptDestination: slowFirstWrite,
+        interceptWriteSerializer: queue,
+      },
+    );
+
+    await Promise.all([childResponsePump, busyRejectionPump]);
+
+    // Both writes landed as two complete, well-formed, individually parsed
+    // lines — never merged, torn, or interleaved mid-frame.
+    expect(output).toHaveLength(2);
+    const lines = output.map((chunk) => JSON.parse(chunk.toString()) as JsonRpcMessage);
+    const byId = new Map(lines.map((line) => [line.id, line]));
+    expect(byId.get(1)).toEqual({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+    expect(byId.get(2)).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      error: { code: -32050, message: "busy" },
+    });
   });
 });

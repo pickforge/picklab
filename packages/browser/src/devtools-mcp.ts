@@ -24,6 +24,7 @@ import {
 import { getBrowserSessionStatus, type BrowserSessionStatus } from "./session.js";
 import {
   JsonRpcProtocolError,
+  createJsonRpcWriteQueue,
   pumpJsonRpcNdjson,
   writeWithBackpressure,
   type JsonRpcHook,
@@ -48,6 +49,15 @@ function jsonRpcRequestId(message: JsonRpcMessage): string | number | undefined 
  * `tools/call` request is answered directly with a stable busy error instead
  * of ever reaching the child Chrome DevTools MCP process. Notifications (no
  * `id`) and non-tool-call requests pass through untouched.
+ *
+ * Evidencing asymmetry, by design: an MCP desktop-input tool blocked by the
+ * same lease (`withAgentPermit`, in `@pickforge/picklab-desktop-linux`) is
+ * evidenced as an `"error"`-status action, because it runs inside
+ * `withMcpEvidence`'s existing per-call action lifecycle. A blocked DevTools
+ * relay request has no equivalent per-call evidence lifecycle to hook —
+ * `beforeForward`/`afterResponse` are never invoked for an intercepted
+ * record — so it is not recorded as an evidence action. Both still fail
+ * closed identically; only the audit trail differs.
  */
 export function createTakeoverBusyIntercept(
   sessionId: string,
@@ -421,16 +431,26 @@ export async function runDevtoolsMcpRelay(
   const { outcome: exit, exited } = observeChildExit(child);
   const inputAbort = new AbortController();
   let terminationRequested = false;
+  // The intercept path (inputPump, answering directly on `output`) and the
+  // normal child-response forward path (outputPump, also writing to `output`)
+  // are two independent concurrent pumps that can both target the same
+  // client-facing stream. A shared write queue fully orders every write
+  // issued to `output` across both of them, so a busy-rejection response
+  // interleaved with an in-flight child response can never produce a torn or
+  // out-of-order frame on the wire (pickforge/picklab#21 P1-D).
+  const outputWriteQueue = createJsonRpcWriteQueue();
   const inputPump = pumpJsonRpcNdjson(input, child.stdin, {
     hook: opts.hooks?.beforeForward,
     intercept: opts.hooks?.intercept,
     interceptDestination: opts.hooks?.intercept === undefined ? undefined : output,
+    interceptWriteSerializer: opts.hooks?.intercept === undefined ? undefined : outputWriteQueue,
     signal: inputAbort.signal,
     endDestination: true,
     maxRecordBytes: opts.maxRecordBytes,
   });
   const outputPump = pumpJsonRpcNdjson(child.stdout, output, {
     hook: opts.hooks?.afterResponse,
+    writeSerializer: outputWriteQueue,
     maxRecordBytes: opts.maxRecordBytes,
   });
   const diagnosticsPump = pumpRedactedDiagnostics(

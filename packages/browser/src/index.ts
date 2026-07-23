@@ -48,6 +48,7 @@ export {
   DEFAULT_MAX_JSON_RPC_RECORD_BYTES,
   JsonRpcProtocolError,
   assertJsonRpcMessage,
+  createJsonRpcWriteQueue,
   pumpJsonRpcNdjson,
   serializeJsonRpcMessage,
   writeWithBackpressure,
@@ -56,6 +57,7 @@ export {
   type JsonRpcIntercept,
   type JsonRpcMessage,
   type JsonRpcRecord,
+  type JsonRpcWriteSerializer,
   type PumpJsonRpcNdjsonOptions,
 } from "./ndjson.js";
 
