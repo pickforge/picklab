@@ -420,6 +420,24 @@ export function processIdentityMatches(identity: ProcessIdentity): boolean {
   return startTicks !== undefined && startTicks === identity.startTicks;
 }
 
+/**
+ * Check whether any process in the given process group still exists, via a
+ * `kill(2)` signal-0 probe. Unlike `listProcessGroupMembers`, this does not
+ * read `/proc`, so it works on any POSIX platform (including Darwin) at the
+ * cost of being a yes/no existence check rather than a member list. Useful to
+ * confirm a group is empty when no `/proc`-backed `ProcessIdentity` for its
+ * leader is available yet, such as during the brief window between spawning
+ * an owned daemon and capturing its identity.
+ */
+export function isProcessGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** List the PIDs whose process group id equals `pgid`. */
 export function listProcessGroupMembers(pgid: number): number[] {
   let entries: string[];

@@ -122,6 +122,7 @@ export {
 export {
   CommandError,
   isPidAlive,
+  isProcessGroupAlive,
   listProcessGroupMembers,
   processIdentityMatches,
   readProcessIdentity,
