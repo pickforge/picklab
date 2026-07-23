@@ -153,7 +153,12 @@ release description, then reset it after the release is published.
   refusing outright, while still refusing while a live lease holds it. The
   DevTools relay gained a generic NDJSON `intercept` hook (answers a request
   directly on the response stream instead of forwarding it to the child) used
-  for the same busy-error contract.
+  for the same busy-error contract; its writes are funneled through a shared
+  write queue (`createJsonRpcWriteQueue`) alongside the normal child-response
+  pump so a busy rejection and an in-flight forwarded response can never
+  interleave on the wire. A blocked relay request is not recorded as an
+  evidence action, unlike a blocked MCP desktop-input tool call — the relay
+  has no equivalent per-call evidence lifecycle to hook.
 - Added atomic, crash-recoverable evidence journals, active-run ownership,
   truncation markers, report publication, and symlink-safe resource access.
 - Hardened Android and evidence cleanup around process identity, atomic writes,

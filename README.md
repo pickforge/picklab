@@ -171,16 +171,22 @@ grants a temporary writable VNC viewer for a human, and hands control back
 with a fresh screenshot and an evidence record once the viewer closes (or the
 terminal is interrupted). Unlike `--vnc-control`'s persistent writable
 session, control here is leased: while a human holds it, every desktop input
-call and every DevTools relay request fails closed with a stable busy error —
+tool (`desktop_click`/`move`/`scroll`/`drag`/`double_click`/`type`/`key`),
+`desktop_launch` (a newly launched client could otherwise grab input focus),
+and every DevTools relay request fail closed with a stable busy error —
 `takeover_status` (MCP) / `picklab takeover status` (CLI) let an agent check
 before retrying, and `request_user_input` is the recommended way to ask a
-human to run it.
+human to run it. `desktop_screenshot` is the only desktop tool left ungated
+(read-only).
 
 The lease is a 30-second TTL, heartbeat-renewed-every-5-seconds record in the
 session's state directory. Closing the viewer, an interrupted terminal, or a
-PickLab crash all end up releasing it and reverting VNC to read-only — a
-crash is recovered automatically the next time the session's VNC is touched
-(e.g. a later `picklab watch`), never left writable indefinitely.
+PickLab crash all release it and revert VNC to read-only. A crash of the
+`watch --control` process itself is reclaimed *actively*, not only the next
+time something else happens to touch the session: a detached watchdog
+process, spawned alongside the takeover and immune to a `SIGKILL` of its
+parent, polls the lease and stops a stale writable VNC on its own — writable
+VNC does not survive its lease going stale, whichever side crashes.
 
 ### Concurrent sessions
 
@@ -292,7 +298,7 @@ reported as suppressed for an explicitly writable `--vnc-control` session.
 `picklab mcp serve` exposes 27 tools over stdio:
 
 - Sessions: `session_create`, `session_status`, `session_destroy`
-- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_move`, `desktop_scroll`, `desktop_drag`, `desktop_double_click`, `desktop_type`, `desktop_key` — the seven input tools fail closed with a busy error while a human lease is active
+- Desktop: `desktop_launch`, `desktop_screenshot`, `desktop_click`, `desktop_move`, `desktop_scroll`, `desktop_drag`, `desktop_double_click`, `desktop_type`, `desktop_key` — all fail closed with a busy error while a human lease is active except `desktop_screenshot` (read-only). `desktop_launch` is gated too: a newly launched client can grab input focus on the shared display, which is exactly what the lease protects against.
 - Android: `android_start`, `android_install_apk`, `android_launch_app`, `android_screenshot`, `android_tap`, `android_type`, `android_back`, `android_home`, `android_get_ui_tree`, `android_logcat`, `android_run_adb`
 - Artifacts: `artifact_list`, `artifact_report`
 - Takeover: `takeover_status` — check whether a session is under human control (see [Supervised pause and human takeover](#supervised-pause-and-human-takeover)); read-only, always safe to call
@@ -333,7 +339,7 @@ A TypeScript monorepo. `@pickforge/picklab` is the published package; the rest a
 - All user inputs are spawned as argument arrays — never interpolated into shell strings.
 - The DevTools relay validates the installed upstream package name, exact version, declared bin, and confined real path before spawning Node with an argument array. Its browser URL is always derived as `http://127.0.0.1:<session-cdp-port>`.
 - Relay stdout is protocol-only. A pending JSON-RPC record is capped at 16 MiB. Upstream diagnostic lines are capped at 64 KiB, redacted, and forwarded only to stderr; an over-limit line is dropped with a safe notice. Upstream update checks and usage statistics are disabled.
-- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit, persistent writable escape hatch for human secret entry and does not coordinate with agent input. `picklab watch --control` is the coordinated alternative: an atomic, TTL-bounded lease gates a temporary writable VNC server, and every agent desktop-input call and DevTools relay request fails closed (a live human lease is checked immediately before delivery) for as long as it is held; a crash on either side is recovered — writable VNC never outlives its lease.
+- VNC binds to loopback only by default: `x11vnc` is started with `-localhost`, so the server listens on `127.0.0.1` and is not reachable from the network. Tunnel over SSH for remote access. Normal `--vnc` and `picklab watch` observation is server-enforced read-only (`-viewonly`); viewer exit never stops the session or its Xvfb/VNC processes. `--vnc-control` is an explicit, persistent writable escape hatch for human secret entry and does not coordinate with agent input. `picklab watch --control` is the coordinated alternative: an atomic, TTL-bounded lease gates a temporary writable VNC server, and every agent desktop-input call (including `desktop_launch`, which could otherwise grab input focus on the shared display) and DevTools relay request fails closed (a live human lease is checked immediately before delivery) for as long as it is held. A crash on either side is reclaimed actively — the controlling process force-ends on the first failed lease renewal (never waiting for the viewer to close) and carries a hard deadline timer at the lease's `expiresAt` as a backstop; a detached watchdog process, immune to a `SIGKILL` of its parent, independently polls and stops a stale writable VNC. Writable VNC never outlives its lease in wall-clock terms, on any exit path.
 - Artifacts are redacted by default: logcat output strips tokens and secrets before it is stored or returned. Only `android adb` is raw, and it says so.
 - Evidence timelines persist only allowlisted metadata; typed values become length/type metadata, and network headers, bodies, and URL queries are dropped. Static HTML reports escape page-controlled text and use a no-script, no-network CSP.
 - Screenshot files contain raw pixels and cannot be redacted. Avoid explicit captures on screens containing secrets, and use `evidence.enabled: false` when an action timeline is not appropriate. See [SECURITY.md](SECURITY.md#recorded-evidence-and-screenshots).
