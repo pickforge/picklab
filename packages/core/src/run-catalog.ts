@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runsDir } from "./paths.js";
+import { picklabHome, runsDir, type EnvLike } from "./paths.js";
+import { resolveRunStorage } from "./storage.js";
 import type { RunManifest } from "./run.js";
 
 const SAFE_ENTRY_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -470,26 +471,90 @@ export class RunCatalog {
   }
 }
 
-/** Current storage seam. #34 can replace this one-root resolution with modes. */
-export async function openRunCatalog(projectDir: string): Promise<RunCatalog> {
-  let realProject: string;
+async function realpathIfExists(dir: string): Promise<string | undefined> {
   try {
-    realProject = await fs.promises.realpath(projectDir);
+    return await fs.promises.realpath(dir);
   } catch (error) {
-    if (isMissing(error)) return new RunCatalog([]);
+    if (isMissing(error)) return undefined;
     throw error;
   }
-  return new RunCatalog([
-    {
-      dir: runsDir(projectDir),
-      expectedRealDir: path.join(realProject, ".picklab", "runs"),
-    },
-  ]);
+}
+
+/** The project-local `.picklab/runs` root, verified against the project
+ * directory's own real path. Used as the `project-local` mode's root, and as
+ * a non-destructive legacy discovery root for every other mode so runs
+ * written before #34 (or by an explicit project-local opt-out) stay
+ * discoverable without a migration. */
+async function projectLocalRoot(
+  projectDir: string,
+): Promise<RunCatalogRoot | undefined> {
+  const realProject = await realpathIfExists(projectDir);
+  if (realProject === undefined) return undefined;
+  return {
+    dir: runsDir(projectDir),
+    expectedRealDir: path.join(realProject, ".picklab", "runs"),
+  };
+}
+
+/**
+ * Open the run catalog for a project: the resolved storage mode's root as the
+ * highest-precedence source, plus (unless that root already is the
+ * project-local layout) the legacy project-local root as a read-only
+ * fallback. A root whose directory does not exist yet is simply absent from
+ * the catalog, not an error — the same behavior `RunCatalog.list()` already
+ * has for a missing root.
+ */
+export async function openRunCatalog(
+  projectDir: string,
+  env: EnvLike = process.env,
+): Promise<RunCatalog> {
+  const resolved = await resolveRunStorage(projectDir, env);
+  const roots: RunCatalogRoot[] = [];
+
+  if (resolved.mode === "project-local") {
+    const root = await projectLocalRoot(projectDir);
+    if (root !== undefined) roots.push(root);
+  } else if (resolved.mode === "home") {
+    const homeReal = await realpathIfExists(picklabHome(env));
+    if (homeReal !== undefined && resolved.projectId !== undefined) {
+      roots.push({
+        dir: resolved.runsDir,
+        expectedRealDir: path.join(
+          homeReal,
+          "projects",
+          resolved.projectId,
+          "runs",
+        ),
+      });
+    }
+  } else {
+    // custom: the configured absolute path is the trusted ancestor to verify
+    // the runs dir against (there is no project- or home-rooted ancestor to
+    // lean on for a fully user-specified location).
+    const customBase = path.dirname(resolved.runsDir);
+    const baseReal = await realpathIfExists(customBase);
+    if (baseReal !== undefined) {
+      roots.push({
+        dir: resolved.runsDir,
+        expectedRealDir: path.join(baseReal, "runs"),
+      });
+    }
+  }
+
+  if (resolved.mode !== "project-local") {
+    const legacyRoot = await projectLocalRoot(projectDir);
+    if (legacyRoot !== undefined) roots.push(legacyRoot);
+  }
+
+  return new RunCatalog(roots);
 }
 
 /** Compatibility projection for callers that only need manifests. */
-export async function listRuns(projectDir: string): Promise<RunManifest[]> {
-  return (await (await openRunCatalog(projectDir)).list()).map(
+export async function listRuns(
+  projectDir: string,
+  env: EnvLike = process.env,
+): Promise<RunManifest[]> {
+  return (await (await openRunCatalog(projectDir, env)).list()).map(
     (entry) => entry.manifest,
   );
 }

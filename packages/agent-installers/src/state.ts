@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { agentsDir, writeFileAtomic, type EnvLike } from "@pickforge/picklab-core";
+import {
+  agentsDir,
+  legacyAgentsDir,
+  resolveReadablePath,
+  writeFileAtomic,
+  type EnvLike,
+} from "@pickforge/picklab-core";
 
 export interface AgentStateEntry {
   registered: boolean;
@@ -20,12 +26,27 @@ export function agentsStatePath(env: EnvLike = process.env): string {
   return path.join(agentsDir(env), "state.json");
 }
 
+function legacyAgentsStatePath(env: EnvLike): string | undefined {
+  const dir = legacyAgentsDir(env);
+  return dir === undefined ? undefined : path.join(dir, "state.json");
+}
+
+/**
+ * Read agent registration state. Falls back to a pre-#34 `~/.picklab/agents`
+ * record when the new home has none yet, so "is this agent registered?"
+ * keeps answering correctly across the default-root change without a
+ * migration step. Writes (`recordAgentState`) always target the new home.
+ */
 export async function readAgentsState(
   env: EnvLike = process.env,
 ): Promise<AgentsState> {
+  const statePath = await resolveReadablePath(
+    agentsStatePath(env),
+    legacyAgentsStatePath(env),
+  );
   let raw: string;
   try {
-    raw = await fs.promises.readFile(agentsStatePath(env), "utf8");
+    raw = await fs.promises.readFile(statePath, "utf8");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") {

@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listRuns,
   readActions,
+  resolveRunStorage,
   saveProjectConfig,
+  type EnvLike,
 } from "@pickforge/picklab-core";
 import { withMcpEvidence } from "../src/evidence.js";
 import {
@@ -15,10 +17,12 @@ import {
 } from "./helpers.js";
 
 let dirs: LabDirs;
+let env: EnvLike;
 const sessionId = "desk-evidence";
 
 beforeEach(() => {
   dirs = makeLabDirs();
+  env = { PICKLAB_HOME: dirs.home };
 });
 
 afterEach(() => {
@@ -26,11 +30,10 @@ afterEach(() => {
 });
 
 async function evidenceRecords() {
-  const [manifest] = await listRuns(dirs.projectDir);
+  const [manifest] = await listRuns(dirs.projectDir, env);
   expect(manifest).toBeDefined();
-  return readActions(
-    path.join(dirs.projectDir, ".picklab", "runs", manifest!.runId),
-  );
+  const { runsDir } = await resolveRunStorage(dirs.projectDir, env);
+  return readActions(path.join(runsDir, manifest!.runId));
 }
 
 describe("MCP evidence producer", () => {

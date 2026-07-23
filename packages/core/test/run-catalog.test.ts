@@ -11,14 +11,21 @@ import {
 
 let root: string;
 
+// These tests build `RunCatalog` roots directly, or exercise `createRun` +
+// `openRunCatalog` against the literal `.picklab/runs` layout, so they pin
+// storage to `project-local`. Home-mode default resolution and the
+// home-primary + legacy-project-local layering are covered below in
+// "openRunCatalog storage modes".
 beforeEach(async () => {
   root = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), "picklab-run-catalog-"),
   );
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await fs.promises.rm(root, { recursive: true, force: true });
 });
 
@@ -212,5 +219,108 @@ describe("RunCatalog", () => {
       { dir: linkedRoot, expectedRealDir: realRoot },
     ]);
     expect(await catalog.list()).toEqual([]);
+  });
+});
+
+describe("openRunCatalog storage modes", () => {
+  // These tests set env explicitly per call (not via the file-level
+  // PICKLAB_STORAGE_MODE stub) so they exercise the real "home" default.
+  it("defaults new runs under the home root, isolated per project, with no files in the project dir", async () => {
+    const home = path.join(root, "home");
+    const project = path.join(root, "project");
+    await fs.promises.mkdir(project, { recursive: true });
+    const env = { PICKLAB_HOME: home };
+
+    const run = await createRun(project, "smoke", {}, env);
+
+    expect(run.dir.startsWith(path.join(home, "projects"))).toBe(true);
+    expect(fs.existsSync(path.join(project, ".picklab"))).toBe(false);
+
+    const entries = await (await openRunCatalog(project, env)).list();
+    expect(entries.map((entry) => entry.manifest.runId)).toEqual([run.runId]);
+  });
+
+  it("keeps pre-existing project-local runs discoverable without migration", async () => {
+    const home = path.join(root, "home");
+    const project = path.join(root, "project");
+    await fs.promises.mkdir(project, { recursive: true });
+    const env = { PICKLAB_HOME: home };
+    const legacyRoot = path.join(project, ".picklab", "runs");
+    await writeRun(legacyRoot, "legacy-run");
+
+    const newRun = await createRun(project, "fresh", {}, env);
+
+    const entries = await (await openRunCatalog(project, env)).list();
+    const ids = entries.map((entry) => entry.manifest.runId).sort();
+    expect(ids).toEqual(["legacy-run", newRun.runId].sort());
+    // Legacy data was only read, never written or moved.
+    expect(fs.existsSync(path.join(legacyRoot, "legacy-run"))).toBe(true);
+  });
+
+  it("keeps two different project paths fully isolated under the same home", async () => {
+    const home = path.join(root, "home");
+    const projectA = path.join(root, "project-a");
+    const projectB = path.join(root, "project-b");
+    await fs.promises.mkdir(projectA, { recursive: true });
+    await fs.promises.mkdir(projectB, { recursive: true });
+    const env = { PICKLAB_HOME: home };
+
+    const runA = await createRun(projectA, "a-run", {}, env);
+    const runB = await createRun(projectB, "b-run", {}, env);
+
+    expect(runA.dir).not.toBe(runB.dir);
+    const entriesA = await (await openRunCatalog(projectA, env)).list();
+    const entriesB = await (await openRunCatalog(projectB, env)).list();
+    expect(entriesA.map((e) => e.manifest.runId)).toEqual([runA.runId]);
+    expect(entriesB.map((e) => e.manifest.runId)).toEqual([runB.runId]);
+  });
+
+  it("restores the project-local layout when explicitly configured", async () => {
+    const home = path.join(root, "home");
+    const project = path.join(root, "project");
+    await fs.promises.mkdir(project, { recursive: true });
+    const env = { PICKLAB_HOME: home, PICKLAB_STORAGE_MODE: "project-local" };
+
+    const run = await createRun(project, "local", {}, env);
+
+    expect(run.dir).toBe(
+      path.join(project, ".picklab", "runs", run.runId),
+    );
+    expect(fs.existsSync(home)).toBe(false);
+  });
+
+  it("rejects custom mode without a path", async () => {
+    const project = path.join(root, "project");
+    await fs.promises.mkdir(project, { recursive: true });
+    await expect(
+      createRun(project, "x", {}, { PICKLAB_STORAGE_MODE: "custom" }),
+    ).rejects.toThrow(/storage path/i);
+  });
+
+  it("rejects custom mode with a relative path", async () => {
+    const project = path.join(root, "project");
+    await fs.promises.mkdir(project, { recursive: true });
+    await expect(
+      createRun(project, "x", {}, {
+        PICKLAB_STORAGE_MODE: "custom",
+        PICKLAB_STORAGE_PATH: "relative/artifacts",
+      }),
+    ).rejects.toThrow(/absolute/i);
+  });
+
+  it("writes under an explicit custom path", async () => {
+    const project = path.join(root, "project");
+    const custom = path.join(root, "custom-artifacts");
+    await fs.promises.mkdir(project, { recursive: true });
+    const env = {
+      PICKLAB_STORAGE_MODE: "custom",
+      PICKLAB_STORAGE_PATH: custom,
+    };
+
+    const run = await createRun(project, "x", {}, env);
+
+    expect(run.dir).toBe(path.join(custom, "runs", run.runId));
+    const entries = await (await openRunCatalog(project, env)).list();
+    expect(entries.map((e) => e.manifest.runId)).toEqual([run.runId]);
   });
 });

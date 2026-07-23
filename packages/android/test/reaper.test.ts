@@ -85,7 +85,12 @@ describe("android reaper tracking", () => {
       bootTimeoutMs: 5_000,
     });
 
-    const { run } = await beginEvidenceRun(projectDir, session.id);
+    const { run } = await beginEvidenceRun(
+      projectDir,
+      session.id,
+      {},
+      registryEnv,
+    );
 
     forceStopFailure = true;
     try {

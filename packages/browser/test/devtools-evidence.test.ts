@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listRuns,
   readActions,
@@ -19,9 +19,12 @@ beforeEach(async () => {
   projectDir = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), "picklab-devtools-evidence-"),
   );
+  // These tests assert against the literal `.picklab/runs` layout.
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await fs.promises.rm(projectDir, { recursive: true, force: true });
 });
 

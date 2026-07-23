@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, runsDir, writeFileAtomic } from "./paths.js";
+import { ensureDir, writeFileAtomic, type EnvLike } from "./paths.js";
+import { resolveRunStorage } from "./storage.js";
 
 export type RunStatus = "running" | "completed" | "failed";
 export type ArtifactType = "screenshot" | "log" | "report" | "other";
@@ -126,11 +127,12 @@ export async function createRun(
   projectDir: string,
   slug: string,
   opts: CreateRunOptions = {},
+  env: EnvLike = process.env,
 ): Promise<RunHandle> {
   assertValidSlug(slug);
   const now = opts.now ?? new Date();
   const baseName = `${formatTimestamp(now)}-${slug}`;
-  const parent = runsDir(projectDir);
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
   await ensureDir(parent);
 
   let runDir: string | undefined;

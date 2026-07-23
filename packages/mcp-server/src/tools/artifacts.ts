@@ -6,7 +6,8 @@ import {
   openRunCatalog,
   parseActionsJournal,
   renderRunReport,
-  runsDir,
+  resolveRunStorage,
+  type EnvLike,
   type RunCatalog,
   type RunCatalogEntry,
 } from "@pickforge/picklab-core";
@@ -15,12 +16,14 @@ import { runTool, type ServerContext } from "../context.js";
 export async function findRun(
   projectDir: string,
   runId: string | undefined,
+  env: EnvLike = process.env,
 ): Promise<{ catalog: RunCatalog; entry: RunCatalogEntry }> {
-  const catalog = await openRunCatalog(projectDir);
+  const catalog = await openRunCatalog(projectDir, env);
   const entry = await catalog.find(runId);
   if (entry === undefined) {
     if (runId === undefined) {
-      throw new Error(`No runs found under ${runsDir(projectDir)}`);
+      const { runsDir } = await resolveRunStorage(projectDir, env);
+      throw new Error(`No runs found under ${runsDir}`);
     }
     throw new Error(`Run not found: ${runId} (see the artifact_list tool)`);
   }
@@ -48,13 +51,14 @@ export function registerArtifactTools(
     {
       title: "List runs",
       description:
-        "List recorded runs (screenshots, logs, reports) under " +
-        ".picklab/runs in the project directory.",
+        "List recorded runs (screenshots, logs, reports). Runs default to " +
+        "the shared Pickforge home outside the project directory; see " +
+        "picklab doctor or the storage config docs for the resolved path.",
       inputSchema: {},
     },
     () =>
       runTool(async () => {
-        const catalog = await openRunCatalog(ctx.projectDir);
+        const catalog = await openRunCatalog(ctx.projectDir, ctx.env);
         const entries = await catalog.list();
         const runs = entries.map(({ manifest }) => ({
           runId: manifest.runId,
@@ -80,7 +84,11 @@ export function registerArtifactTools(
     },
     (args) =>
       runTool(async () => {
-        const { catalog, entry } = await findRun(ctx.projectDir, args.runId);
+        const { catalog, entry } = await findRun(
+          ctx.projectDir,
+          args.runId,
+          ctx.env,
+        );
         const { manifest, dir } = entry;
         const records = await readCatalogActions(catalog, entry);
         return {

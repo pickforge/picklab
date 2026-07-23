@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +6,16 @@ import { createRun, listRuns } from "../src/run.js";
 
 let project: string;
 
+// These tests assert against the literal `.picklab/runs` layout, so they pin
+// storage to `project-local` explicitly rather than the new `home` default
+// (covered by storage.test.ts).
 beforeEach(async () => {
   project = await fs.promises.mkdtemp(path.join(os.tmpdir(), "picklab-run-"));
+  vi.stubEnv("PICKLAB_STORAGE_MODE", "project-local");
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await fs.promises.rm(project, { recursive: true, force: true });
 });
 

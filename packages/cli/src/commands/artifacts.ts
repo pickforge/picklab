@@ -5,7 +5,7 @@ import {
   openRunCatalog,
   parseActionsJournal,
   renderRunReport,
-  runsDir,
+  resolveRunStorage,
   type RunCatalog,
   type RunCatalogEntry,
 } from "@pickforge/picklab-core";
@@ -32,7 +32,9 @@ export async function runArtifactsList(opts: BaseCliOptions): Promise<number> {
       data: { projectDir, runs },
       lines:
         runs.length === 0
-          ? [`no runs found under ${runsDir(projectDir)}`]
+          ? [
+              `no runs found under ${(await resolveRunStorage(projectDir)).runsDir}`,
+            ]
           : runs.map(
               (run) =>
                 `${run.runId}  ${run.status}  ${run.artifacts} artifact(s)`,
@@ -49,7 +51,8 @@ async function findRun(
   const entry = await catalog.find(runId);
   if (entry === undefined) {
     if (runId === undefined) {
-      throw new Error(`No runs found under ${runsDir(projectDir)}`);
+      const { runsDir } = await resolveRunStorage(projectDir);
+      throw new Error(`No runs found under ${runsDir}`);
     }
     throw new Error(`Run not found: ${runId} (see: picklab artifacts list)`);
   }

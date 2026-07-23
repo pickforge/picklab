@@ -280,7 +280,7 @@ describe("session registry", () => {
       { type: "desktop", projectDir, status: "running" },
       env,
     );
-    const { run } = await beginEvidenceRun(projectDir, session.id);
+    const { run } = await beginEvidenceRun(projectDir, session.id, {}, env);
 
     await destroySessionRecord(session.id, env);
 
@@ -295,7 +295,9 @@ describe("session registry", () => {
     ).toMatchObject({ status: "completed" });
     expect(await fs.promises.readFile(path.join(run.dir, "report.html"), "utf8"))
       .toContain("completed");
-    expect(fs.existsSync(activePointerPath(projectDir, session.id))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(projectDir, session.id, env))).toBe(
+      false,
+    );
   });
 
   it("finalizes active evidence when reaping a dead session", async () => {
@@ -310,7 +312,7 @@ describe("session registry", () => {
       },
       env,
     );
-    const { run } = await beginEvidenceRun(projectDir, stale.id);
+    const { run } = await beginEvidenceRun(projectDir, stale.id, {}, env);
     await appendAction(run.dir, {
       actionId: "before-reap",
       source: "mcp",
@@ -335,7 +337,9 @@ describe("session registry", () => {
     expect(await readActions(run.dir)).toHaveLength(1);
     expect(await fs.promises.readFile(path.join(run.dir, "report.html"), "utf8"))
       .toContain("desktop_click");
-    expect(fs.existsSync(activePointerPath(projectDir, stale.id))).toBe(false);
+    expect(fs.existsSync(await activePointerPath(projectDir, stale.id, env))).toBe(
+      false,
+    );
   });
 
   it("stops recorded helper pids before deleting dead running records", async () => {
@@ -1129,5 +1133,105 @@ describe("session registry", () => {
         }
       }
     }
+  });
+});
+
+describe("legacy session home fallback", () => {
+  let fakeHome: string;
+  let homedirSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    fakeHome = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "picklab-legacy-fakehome-"),
+    );
+    homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+  });
+
+  afterEach(async () => {
+    homedirSpy.mockRestore();
+    await fs.promises.rm(fakeHome, { recursive: true, force: true });
+  });
+
+  function writeLegacySession(id: string): void {
+    const dir = path.join(fakeHome, ".picklab", "sessions");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `${id}.json`),
+      JSON.stringify({
+        id,
+        type: "desktop",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        status: "stopped",
+        projectDir: "/legacy/project",
+      }),
+    );
+  }
+
+  it("reads a legacy ~/.picklab session when PICKLAB_HOME is unset", async () => {
+    writeLegacySession("desk-1eaac1");
+
+    const record = await getSession("desk-1eaac1", {});
+    expect(record?.projectDir).toBe("/legacy/project");
+  });
+
+  it("lists legacy sessions alongside new-home sessions", async () => {
+    writeLegacySession("desk-1eaac2");
+    const created = await createSession(
+      { type: "desktop", projectDir: "/new/project" },
+      {},
+    );
+
+    const ids = (await listSessions({})).map((record) => record.id).sort();
+    expect(ids).toEqual(["desk-1eaac2", created.id].sort());
+  });
+
+  it("does not fall back once PICKLAB_HOME is set explicitly", async () => {
+    writeLegacySession("desk-1eaac3");
+
+    expect(await getSession("desk-1eaac3", { PICKLAB_HOME: "/other" })).toBeUndefined();
+  });
+
+  it("destroying a session found via the legacy fallback removes it there, not just the new home", async () => {
+    writeLegacySession("desk-1eaac4");
+
+    await destroySessionRecord("desk-1eaac4", {});
+
+    expect(
+      fs.existsSync(
+        path.join(fakeHome, ".picklab", "sessions", "desk-1eaac4.json"),
+      ),
+    ).toBe(false);
+  });
+
+  it("destroying a session that has copies at BOTH the legacy and new home removes both, so it cannot resurrect", async () => {
+    // A session created under the legacy home, later updated: writes always
+    // target the new home, leaving a stale copy at the legacy path too.
+    writeLegacySession("desk-1eaac5");
+    await updateSession("desk-1eaac5", { status: "running" }, {});
+
+    const legacyPath = path.join(
+      fakeHome,
+      ".picklab",
+      "sessions",
+      "desk-1eaac5.json",
+    );
+    const newPath = path.join(
+      fakeHome,
+      ".pickforge",
+      "picklab",
+      "sessions",
+      "desk-1eaac5.json",
+    );
+    expect(fs.existsSync(legacyPath)).toBe(true);
+    expect(fs.existsSync(newPath)).toBe(true);
+
+    await destroySessionRecord("desk-1eaac5", {});
+
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(newPath)).toBe(false);
+    expect(
+      (await listSessions({})).some((record) => record.id === "desk-1eaac5"),
+    ).toBe(false);
+    expect(await getSession("desk-1eaac5", {})).toBeUndefined();
   });
 });

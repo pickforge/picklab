@@ -59,7 +59,64 @@ picklab artifacts report                 # render the latest run
 picklab session destroy --all
 ```
 
-Every screenshot, log, and action lands in `.picklab/runs/<runId>/` with a manifest, so a run is inspectable and reproducible after the fact.
+Every screenshot, log, and action lands in a run directory with a manifest, so a run is inspectable and reproducible after the fact. By default that run directory lives outside your project — see [Run storage](#run-storage) below.
+
+### Run storage
+
+By default, run artifacts (screenshots, logs, manifests, evidence journals)
+are written under the shared Pickforge company root, **not** inside your
+project — a default screenshot or run never shows up in `git status`:
+
+```text
+~/.pickforge/picklab/projects/<projectId>/runs/<runId>/
+```
+
+`<projectId>` is a stable id derived from the project's canonical (symlink-resolved)
+path: the same project always resolves to the same id, and different projects
+never collide. Use the platform home-directory equivalent on non-Linux systems.
+`PICKLAB_HOME` overrides the PickLab home root (default `~/.pickforge/picklab`);
+`picklab doctor` reports the resolved path.
+
+Two other modes are available via `storage` in the **global** config or the
+`PICKLAB_STORAGE_MODE` / `PICKLAB_STORAGE_PATH` environment overrides for
+automation and tests; `.picklab/config.json` (project-level) can select
+`project-local`, but not `custom` — see below:
+
+```json
+{
+  "storage": { "mode": "project-local" }
+}
+```
+
+- `home` (default) — the layout above.
+- `project-local` — restores the previous default: `.picklab/runs/` inside the
+  project. Generated files then do appear in the project's source-control
+  view; add `.picklab/runs/` to `.gitignore` if you opt into this mode.
+  Selectable from project or global config.
+- `custom` — an explicit absolute path outside the project directory:
+  `{ "storage": { "mode": "custom", "path": "/abs/path" } }` writes runs
+  under `<path>/runs/`. A relative path, a path equal to or nested inside the
+  project directory, or `custom` mode with no path, is rejected.
+
+**`custom` cannot be selected from project-level `.picklab/config.json`.**
+That file is repo-committed and travels with `git clone`; honoring a
+`custom` selection from it would let a cloned repository silently redirect
+run artifacts (screenshots, which may carry secrets) to any absolute path
+with no prompt. Only the user-owned global config or an env override may
+select `custom`. A project config that requests `custom` is ignored — the
+resolver falls back to global config's mode, then `home` — and `picklab
+doctor` surfaces the rejected request as a warning.
+
+`.picklab/config.json` itself always stays project-local regardless of
+`storage` mode — only generated runtime artifacts move.
+
+**Upgrading from an earlier version:** existing runs already written under a
+project's `.picklab/runs/` remain discoverable by `artifact_list` /
+`artifact_report` / MCP resources without any migration step — nothing is
+moved or deleted. Likewise, an existing `~/.picklab` global config, agent
+state, or session registry (the previous default PickLab home) is still read
+as a non-destructive fallback if the new `~/.pickforge/picklab` default has
+nothing yet; `picklab doctor` flags a detected legacy home.
 
 ### Evidence recording
 
@@ -68,7 +125,8 @@ desktop, Android, and session actions share the same append-only timeline as
 browser DevTools actions. Destroying a session, or reaping a dead one, finalizes
 the run and writes a static `report.html` filmstrip.
 
-A finalized evidence run under `.picklab/runs/<runId>/` contains:
+A finalized evidence run directory (see [Run storage](#run-storage) for where
+it lives) contains:
 
 - `manifest.json` — run identity, status, and evidence metadata
 - `actions.jsonl` — authoritative, append-only sanitized action timeline
@@ -144,7 +202,8 @@ For any other agent, add the stdio server yourself:
 
 `picklab-browser` is static. Each invocation discovers the one live browser session for the agent's project and derives its loopback CDP URL in memory, so recreating a session never requires an agent config edit. The relay runs the bundled, exact `chrome-devtools-mcp@1.5.0`; it does not use `npx` or connect to a personal browser.
 
-Custom agents can be stored under `~/.picklab/agents`:
+Custom agents can be stored under the PickLab home's `agents/` dir (default
+`~/.pickforge/picklab/agents`, override via `PICKLAB_HOME`):
 
 ```sh
 picklab agents add --name my-agent --mcp-command "picklab mcp serve"

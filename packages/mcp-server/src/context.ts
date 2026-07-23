@@ -144,5 +144,6 @@ export async function resolveScreenshotTarget(
     defaultSlug,
     sessionId,
     conflictError: 'Use either "out" or "runSlug", not both',
+    env: ctx.env,
   });
 }

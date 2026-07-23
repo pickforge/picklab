@@ -399,7 +399,7 @@ describe("android_start (fake sdk)", () => {
         ),
       ).toContain("session_destroy");
       expect(
-        fs.existsSync(activePointerPath(startDirs.projectDir, session.id)),
+        fs.existsSync(await activePointerPath(startDirs.projectDir, session.id)),
       ).toBe(false);
     } finally {
       killFakeEmulator(pidFile);

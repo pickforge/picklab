@@ -401,9 +401,12 @@ export async function createDevtoolsEvidenceRecorder(
 ): Promise<DevtoolsEvidenceRecorder | undefined> {
   const config = await loadConfig(opts.projectDir, opts.env);
   if (!isEvidenceEnabled(config)) return undefined;
-  const { run } = await beginEvidenceRun(opts.projectDir, opts.sessionId, {
-    slug: "computer-use",
-  });
+  const { run } = await beginEvidenceRun(
+    opts.projectDir,
+    opts.sessionId,
+    { slug: "computer-use" },
+    opts.env,
+  );
   const runStat = await fs.promises.lstat(run.dir);
   if (!runStat.isDirectory() || runStat.isSymbolicLink()) {
     throw new Error("Evidence run directory is not a real directory");

@@ -99,6 +99,37 @@ export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
     });
   }
 
+  if (s.legacyHome !== null) {
+    checks.push({
+      id: "legacy-home",
+      title: "Legacy PickLab home",
+      status: "warn",
+      detail: `${s.legacyHome.path} still exists (pre-#34 default)`,
+      hint:
+        "config, agent state, and sessions there are still read " +
+        "non-destructively as a fallback; nothing was moved or deleted",
+    });
+  }
+
+  if (s.storage.rejectedProjectCustom !== null) {
+    const requested = s.storage.rejectedProjectCustom.requestedPath;
+    checks.push({
+      id: "storage-custom-rejected",
+      title: "Project config requested custom storage",
+      status: "warn",
+      detail:
+        requested === undefined
+          ? "the project's .picklab/config.json requested storage.mode " +
+            '"custom" with no path; it was ignored'
+          : `the project's .picklab/config.json requested storage.mode ` +
+            `"custom" (path: ${requested}); it was ignored`,
+      hint:
+        "project-committed config cannot select custom storage (it travels " +
+        "with git clone); set storage.mode in the global config instead, " +
+        "or PICKLAB_STORAGE_MODE/PICKLAB_STORAGE_PATH",
+    });
+  }
+
   if (s.config.ok) {
     checks.push({
       id: "config",

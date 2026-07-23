@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ensureDir, runsDir, writeFileAtomic } from "./paths.js";
+import { ensureDir, writeFileAtomic, type EnvLike } from "./paths.js";
 import { openRunCatalog } from "./run-catalog.js";
+import { resolveRunStorage } from "./storage.js";
 import {
   isPidAlive,
   processIdentityMatches,
@@ -233,12 +234,14 @@ function manifestMatchesPointer(
 }
 
 /** Absolute path of the active-run pointer for a session. */
-export function activePointerPath(
+export async function activePointerPath(
   projectDir: string,
   sessionId: string,
-): string {
+  env: EnvLike = process.env,
+): Promise<string> {
   assertSafeSessionId(sessionId);
-  return path.join(runsDir(projectDir), `.active-${sessionId}.json`);
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
+  return path.join(parent, `.active-${sessionId}.json`);
 }
 
 function parsePointer(raw: string): ActiveEvidencePointer | undefined {
@@ -351,8 +354,11 @@ async function readManifest(
 export async function resolveActivePointer(
   projectDir: string,
   sessionId: string,
+  env: EnvLike = process.env,
 ): Promise<PointerResolution> {
-  const pointerPath = activePointerPath(projectDir, sessionId);
+  assertSafeSessionId(sessionId);
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
+  const pointerPath = path.join(parent, `.active-${sessionId}.json`);
   let raw: string;
   try {
     raw = await fs.promises.readFile(pointerPath, "utf8");
@@ -366,9 +372,7 @@ export async function resolveActivePointer(
   if (claim !== undefined) return { status: "claiming", raw, claim };
   const pointer = parsePointer(raw);
   if (pointer === undefined) return { status: "corrupt", raw };
-  const manifest = await readManifest(
-    path.join(runsDir(projectDir), pointer.runId),
-  );
+  const manifest = await readManifest(path.join(parent, pointer.runId));
   if (
     manifest === undefined ||
     manifest.status !== "running" ||
@@ -396,8 +400,11 @@ export async function clearActivePointer(
   projectDir: string,
   sessionId: string,
   opts: { expectRaw?: string; force?: boolean } = {},
+  env: EnvLike = process.env,
 ): Promise<boolean> {
-  const pointerPath = activePointerPath(projectDir, sessionId);
+  assertSafeSessionId(sessionId);
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
+  const pointerPath = path.join(parent, `.active-${sessionId}.json`);
   if (opts.force === true) {
     return unlinkIfPresent(pointerPath);
   }
@@ -413,7 +420,7 @@ export async function clearActivePointer(
     return unlinkIfMatches(pointerPath, current);
   }
   // Default: only clear a pointer that is genuinely stale/corrupt.
-  const resolution = await resolveActivePointer(projectDir, sessionId);
+  const resolution = await resolveActivePointer(projectDir, sessionId, env);
   if (resolution.status === "stale" || resolution.status === "corrupt") {
     return unlinkIfMatches(pointerPath, current);
   }
@@ -612,11 +619,12 @@ export async function beginEvidenceRun(
   projectDir: string,
   sessionId: string,
   opts: BeginEvidenceRunOptions = {},
+  env: EnvLike = process.env,
 ): Promise<BeginEvidenceRunResult> {
   assertSafeSessionId(sessionId);
-  const parent = runsDir(projectDir);
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
   await ensureDir(parent);
-  const pointerPath = activePointerPath(projectDir, sessionId);
+  const pointerPath = path.join(parent, `.active-${sessionId}.json`);
   const ownerPid = process.pid;
   const ownerStartTicks = readProcessStartTicks(ownerPid);
   const deadline = Date.now() + CLAIM_TOTAL_DEADLINE_MS;
@@ -635,7 +643,7 @@ export async function beginEvidenceRun(
       handle = await fs.promises.open(pointerPath, "wx");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const resolution = await resolveActivePointer(projectDir, sessionId);
+      const resolution = await resolveActivePointer(projectDir, sessionId, env);
       if (resolution.status === "active") {
         return adopt(resolution.pointer, resolution.manifest);
       }
@@ -652,15 +660,21 @@ export async function beginEvidenceRun(
             await delay(claimBackoff(attempt));
             continue;
           }
-          await clearActivePointer(projectDir, sessionId, {
-            expectRaw: resolution.raw,
-          });
+          await clearActivePointer(
+            projectDir,
+            sessionId,
+            { expectRaw: resolution.raw },
+            env,
+          );
           continue;
         }
         if (attempt >= EMPTY_CLAIM_GRACE_ATTEMPTS) {
-          await clearActivePointer(projectDir, sessionId, {
-            expectRaw: resolution.raw,
-          });
+          await clearActivePointer(
+            projectDir,
+            sessionId,
+            { expectRaw: resolution.raw },
+            env,
+          );
         }
         if (Date.now() >= deadline) break;
         await delay(claimBackoff(attempt));
@@ -671,9 +685,12 @@ export async function beginEvidenceRun(
         continue;
       }
       // stale or corrupt: clear exactly this content, then retry the claim.
-      await clearActivePointer(projectDir, sessionId, {
-        expectRaw: resolution.raw,
-      });
+      await clearActivePointer(
+        projectDir,
+        sessionId,
+        { expectRaw: resolution.raw },
+        env,
+      );
       continue;
     }
 
@@ -700,9 +717,12 @@ export async function beginEvidenceRun(
       }
     } catch (error) {
       await handle.close().catch(() => {});
-      await clearActivePointer(projectDir, sessionId, {
-        expectRaw: claimContent,
-      }).catch(() => {});
+      await clearActivePointer(
+        projectDir,
+        sessionId,
+        { expectRaw: claimContent },
+        env,
+      ).catch(() => {});
       // Fall back to unconditional cleanup if the claim was never readable.
       await unlinkIfMatches(pointerPath, "").catch(() => {});
       throw error;
@@ -713,12 +733,12 @@ export async function beginEvidenceRun(
     let run: RunHandle | undefined;
     try {
       if (opts._afterClaim !== undefined) await opts._afterClaim();
-      run = await createRun(projectDir, opts.slug ?? "evidence", {
-        now: opts.now,
-        sessionId,
-        meta: opts.meta,
-        evidence: true,
-      });
+      run = await createRun(
+        projectDir,
+        opts.slug ?? "evidence",
+        { now: opts.now, sessionId, meta: opts.meta, evidence: true },
+        env,
+      );
 
       const pointer: ActiveEvidencePointer = {
         evidenceVersion: EVIDENCE_VERSION,
@@ -762,14 +782,17 @@ export async function beginEvidenceRun(
       if (run !== undefined) {
         await run.finish("failed").catch(() => {});
       }
-      await clearActivePointer(projectDir, sessionId, {
-        expectRaw: claimContent,
-      }).catch(() => {});
+      await clearActivePointer(
+        projectDir,
+        sessionId,
+        { expectRaw: claimContent },
+        env,
+      ).catch(() => {});
 
       if (error instanceof ClaimLostError) {
         // Another owner took the session. Adopt it if it is active; otherwise
         // fall through to retry within the remaining budget.
-        const resolution = await resolveActivePointer(projectDir, sessionId);
+        const resolution = await resolveActivePointer(projectDir, sessionId, env);
         if (resolution.status === "active") {
           return adopt(resolution.pointer, resolution.manifest);
         }
@@ -794,9 +817,11 @@ export async function finalizeActiveEvidenceRun(
   projectDir: string,
   sessionId: string,
   status: RunStatus = "completed",
+  env: EnvLike = process.env,
 ): Promise<RunManifest | undefined> {
+  const parent = (await resolveRunStorage(projectDir, env)).runsDir;
   for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
-    const resolution = await resolveActivePointer(projectDir, sessionId);
+    const resolution = await resolveActivePointer(projectDir, sessionId, env);
     if (resolution.status === "absent") return undefined;
 
     if (resolution.status === "claiming") {
@@ -813,9 +838,12 @@ export async function finalizeActiveEvidenceRun(
         continue;
       }
       if (
-        await clearActivePointer(projectDir, sessionId, {
-          expectRaw: resolution.raw,
-        })
+        await clearActivePointer(
+          projectDir,
+          sessionId,
+          { expectRaw: resolution.raw },
+          env,
+        )
       ) {
         return undefined;
       }
@@ -823,9 +851,12 @@ export async function finalizeActiveEvidenceRun(
     }
     if (resolution.status === "corrupt") {
       if (
-        await clearActivePointer(projectDir, sessionId, {
-          expectRaw: resolution.raw,
-        })
+        await clearActivePointer(
+          projectDir,
+          sessionId,
+          { expectRaw: resolution.raw },
+          env,
+        )
       ) {
         return undefined;
       }
@@ -834,7 +865,7 @@ export async function finalizeActiveEvidenceRun(
 
     const pointer = resolution.pointer;
     if (pointer === undefined) continue;
-    const runDir = path.join(runsDir(projectDir), pointer.runId);
+    const runDir = path.join(parent, pointer.runId);
     const manifest =
       resolution.status === "active"
         ? resolution.manifest
@@ -845,9 +876,12 @@ export async function finalizeActiveEvidenceRun(
       !manifestMatchesPointer(manifest, pointer, sessionId)
     ) {
       if (
-        await clearActivePointer(projectDir, sessionId, {
-          expectRaw: resolution.raw,
-        })
+        await clearActivePointer(
+          projectDir,
+          sessionId,
+          { expectRaw: resolution.raw },
+          env,
+        )
       ) {
         return undefined;
       }
@@ -859,13 +893,16 @@ export async function finalizeActiveEvidenceRun(
       await new RunHandle(runDir, manifest).finish(status);
     }
     if (
-      !(await clearActivePointer(projectDir, sessionId, {
-        expectRaw: resolution.raw,
-      }))
+      !(await clearActivePointer(
+        projectDir,
+        sessionId,
+        { expectRaw: resolution.raw },
+        env,
+      ))
     ) {
       continue;
     }
-    await pruneFinalizedEvidenceRuns(projectDir);
+    await pruneFinalizedEvidenceRuns(projectDir, {}, env);
     return manifest;
   }
   throw new Error(
@@ -1635,18 +1672,29 @@ async function collectActiveRunIds(parent: string): Promise<Set<string>> {
 /**
  * Retain only the newest `keep` (default 20) finalized evidence runs per
  * project, deleting older finalized evidence run directories. Never prunes:
- * running/active runs (status `running` or referenced by an active pointer) or
- * legacy runs (no `evidenceVersion`). Returns the removed run ids.
+ * running/active runs (status `running` or referenced by an active pointer),
+ * legacy runs (no `evidenceVersion`), or anything outside the resolved
+ * storage mode's primary root. `openRunCatalog` layers a read-only legacy
+ * project-local root under home/custom mode purely for discovery
+ * (`artifact_list`/`report`/resources) — pruning that root would delete
+ * runs this process does not own and never migrated, so retention counting
+ * and removal are scoped to `entry.rootDir === resolved.runsDir` only.
  *
- * This is a primitive: no finalization producer calls it yet.
+ * `finalizeActiveEvidenceRun` calls this automatically after every
+ * finalization.
  */
 export async function pruneFinalizedEvidenceRuns(
   projectDir: string,
   opts: PruneEvidenceOptions = {},
+  env: EnvLike = process.env,
 ): Promise<string[]> {
   const keep = opts.keep ?? EVIDENCE_RETENTION_KEEP;
-  const catalog = await openRunCatalog(projectDir);
-  const entries = await catalog.list();
+  const resolved = await resolveRunStorage(projectDir, env);
+  const primaryRootDir = path.resolve(resolved.runsDir);
+  const catalog = await openRunCatalog(projectDir, env);
+  const entries = (await catalog.list()).filter(
+    (entry) => entry.rootDir === primaryRootDir,
+  );
   const activeByRoot = new Map<string, Set<string>>();
   for (const entry of entries) {
     if (!activeByRoot.has(entry.rootDir)) {
