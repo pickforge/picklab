@@ -12,6 +12,7 @@ import {
   loadConfig,
   picklabHome,
   resolvedDefaults,
+  resolveRunStorage,
   runCommand,
   type EnvLike,
   type PicklabProfile,
@@ -28,6 +29,10 @@ export interface DetectionSnapshot {
    * explicitly — that is the user's own root, not a legacy one). */
   legacyHome: { path: string } | null;
   config: { ok: boolean; error: string | null; profile: PicklabProfile | null };
+  /** Present when the project-committed `.picklab/config.json` requested
+   * `storage.mode: "custom"` and the resolver rejected it (repo config
+   * cannot select custom storage) and fell back to the next layer. */
+  storage: { rejectedProjectCustom: { requestedPath?: string } | null };
   desktop: {
     xvfb: string | null;
     xdotool: string | null;
@@ -132,6 +137,16 @@ export async function collectSnapshot(
       ? { path: legacyPath }
       : null;
 
+  let rejectedProjectCustom: { requestedPath?: string } | null = null;
+  try {
+    const resolvedStorage = await resolveRunStorage(projectDir, env);
+    rejectedProjectCustom = resolvedStorage.rejectedProjectCustom ?? null;
+  } catch {
+    // A resolver error (e.g. a broken global/env custom path) is not this
+    // check's concern; it surfaces wherever storage is actually resolved for
+    // a run.
+  }
+
   const androidEnv = detectAndroidEnvironment({
     env,
     homeDir: env.HOME !== undefined && env.HOME !== "" ? env.HOME : undefined,
@@ -150,6 +165,7 @@ export async function collectSnapshot(
     },
     legacyHome,
     config,
+    storage: { rejectedProjectCustom },
     desktop: {
       xvfb: findOnPath("Xvfb", env),
       xdotool: findOnPath("xdotool", env),

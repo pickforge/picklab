@@ -11,7 +11,7 @@ import {
   resolveRunStorage,
   StorageConfigError,
 } from "../src/storage.js";
-import { saveProjectConfig } from "../src/config.js";
+import { saveGlobalConfig, saveProjectConfig } from "../src/config.js";
 import { createRun } from "../src/run.js";
 
 const execFileAsync = promisify(execFile);
@@ -128,15 +128,31 @@ describe("resolveRunStorage", () => {
     expect(resolved.mode).toBe("home");
   });
 
-  it("resolves custom mode from config with an absolute path", async () => {
+  it("resolves custom mode from GLOBAL config with an absolute path", async () => {
+    const home = path.join(root, "home");
     const project = path.join(root, "project");
     const custom = path.join(root, "custom-artifacts");
     await fs.promises.mkdir(project, { recursive: true });
-    await saveProjectConfig(project, {
-      storage: { mode: "custom", path: custom },
+    await saveGlobalConfig({ storage: { mode: "custom", path: custom } }, {
+      PICKLAB_HOME: home,
     });
 
-    const resolved = await resolveRunStorage(project, {});
+    const resolved = await resolveRunStorage(project, { PICKLAB_HOME: home });
+
+    expect(resolved.mode).toBe("custom");
+    expect(resolved.runsDir).toBe(path.join(custom, "runs"));
+    expect(resolved.rejectedProjectCustom).toBeUndefined();
+  });
+
+  it("resolves custom mode from PICKLAB_STORAGE_MODE + PICKLAB_STORAGE_PATH", async () => {
+    const project = path.join(root, "project");
+    const custom = path.join(root, "custom-artifacts");
+    await fs.promises.mkdir(project, { recursive: true });
+
+    const resolved = await resolveRunStorage(project, {
+      PICKLAB_STORAGE_MODE: "custom",
+      PICKLAB_STORAGE_PATH: custom,
+    });
 
     expect(resolved.mode).toBe("custom");
     expect(resolved.runsDir).toBe(path.join(custom, "runs"));
@@ -161,6 +177,154 @@ describe("resolveRunStorage", () => {
         PICKLAB_STORAGE_PATH: "relative/path",
       }),
     ).rejects.toThrow(/absolute/i);
+  });
+
+  describe("project-committed config cannot select custom (P1)", () => {
+    it("ignores a project-config custom request and falls back to home, flagging the rejection", async () => {
+      const home = path.join(root, "home");
+      const project = path.join(root, "project");
+      const hostilePath = path.join(root, "attacker-controlled");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveProjectConfig(project, {
+        storage: { mode: "custom", path: hostilePath },
+      });
+
+      const resolved = await resolveRunStorage(project, {
+        PICKLAB_HOME: home,
+      });
+
+      expect(resolved.mode).toBe("home");
+      expect(resolved.runsDir.startsWith(home)).toBe(true);
+      expect(resolved.rejectedProjectCustom).toEqual({
+        requestedPath: hostilePath,
+      });
+    });
+
+    it("falls back to global config's mode (not the hostile path) when the project requests custom", async () => {
+      const home = path.join(root, "home");
+      const project = path.join(root, "project");
+      const hostilePath = path.join(root, "attacker-controlled");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveGlobalConfig({ storage: { mode: "project-local" } }, {
+        PICKLAB_HOME: home,
+      });
+      await saveProjectConfig(project, {
+        storage: { mode: "custom", path: hostilePath },
+      });
+
+      const resolved = await resolveRunStorage(project, {
+        PICKLAB_HOME: home,
+      });
+
+      expect(resolved.mode).toBe("project-local");
+      expect(resolved.rejectedProjectCustom).toBeDefined();
+    });
+
+    it("still allows project config to select project-local", async () => {
+      const project = path.join(root, "project");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveProjectConfig(project, { storage: { mode: "project-local" } });
+
+      const resolved = await resolveRunStorage(project, {});
+
+      expect(resolved.mode).toBe("project-local");
+      expect(resolved.rejectedProjectCustom).toBeUndefined();
+    });
+
+    it("still allows project config to select home", async () => {
+      const home = path.join(root, "home");
+      const project = path.join(root, "project");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveGlobalConfig({ storage: { mode: "project-local" } }, {
+        PICKLAB_HOME: home,
+      });
+      await saveProjectConfig(project, { storage: { mode: "home" } });
+
+      const resolved = await resolveRunStorage(project, {
+        PICKLAB_HOME: home,
+      });
+
+      expect(resolved.mode).toBe("home");
+      expect(resolved.rejectedProjectCustom).toBeUndefined();
+    });
+
+    it("lets an env override select custom even when project config also requests it", async () => {
+      const project = path.join(root, "project");
+      const custom = path.join(root, "custom-artifacts");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveProjectConfig(project, {
+        storage: { mode: "custom", path: "/should-be-ignored" },
+      });
+
+      const resolved = await resolveRunStorage(project, {
+        PICKLAB_STORAGE_MODE: "custom",
+        PICKLAB_STORAGE_PATH: custom,
+      });
+
+      expect(resolved.mode).toBe("custom");
+      expect(resolved.runsDir).toBe(path.join(custom, "runs"));
+      // The env override made the mode selection moot, so no rejection is
+      // reported; the project's path was never consulted either way.
+      expect(resolved.rejectedProjectCustom).toBeUndefined();
+    });
+
+    it("an env mode override never uses the project layer's custom path", async () => {
+      const home = path.join(root, "home");
+      const project = path.join(root, "project");
+      await fs.promises.mkdir(project, { recursive: true });
+      await saveProjectConfig(project, {
+        storage: { mode: "custom", path: "/should-never-be-used" },
+      });
+
+      // env selects custom but supplies no path, and global config has none
+      // either: this must fail closed (missing path), never silently reuse
+      // the project layer's path.
+      await expect(
+        resolveRunStorage(project, {
+          PICKLAB_HOME: home,
+          PICKLAB_STORAGE_MODE: "custom",
+        }),
+      ).rejects.toThrow(StorageConfigError);
+    });
+  });
+
+  describe("custom path containment (P2)", () => {
+    it("rejects a custom path equal to the project directory", async () => {
+      const project = path.join(root, "project");
+      await fs.promises.mkdir(project, { recursive: true });
+
+      await expect(
+        resolveRunStorage(project, {
+          PICKLAB_STORAGE_MODE: "custom",
+          PICKLAB_STORAGE_PATH: project,
+        }),
+      ).rejects.toThrow(/outside the project directory/i);
+    });
+
+    it("rejects a custom path nested inside the project directory", async () => {
+      const project = path.join(root, "project");
+      await fs.promises.mkdir(project, { recursive: true });
+
+      await expect(
+        resolveRunStorage(project, {
+          PICKLAB_STORAGE_MODE: "custom",
+          PICKLAB_STORAGE_PATH: path.join(project, "artifacts"),
+        }),
+      ).rejects.toThrow(/outside the project directory/i);
+    });
+
+    it("accepts a custom path that is a sibling of the project directory", async () => {
+      const project = path.join(root, "project");
+      const sibling = path.join(root, "project-artifacts");
+      await fs.promises.mkdir(project, { recursive: true });
+
+      const resolved = await resolveRunStorage(project, {
+        PICKLAB_STORAGE_MODE: "custom",
+        PICKLAB_STORAGE_PATH: sibling,
+      });
+
+      expect(resolved.runsDir).toBe(path.join(sibling, "runs"));
+    });
   });
 });
 

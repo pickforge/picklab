@@ -12,12 +12,17 @@ release description, then reset it after the release is published.
   `~/.pickforge/picklab` (was `~/.picklab`); the old default is still read
   non-destructively as a fallback for existing global config, agent state,
   and sessions — nothing is moved or deleted. `project-local` (restores the
-  previous layout) and `custom` (explicit absolute path) storage modes are
-  available via `.picklab/config.json`'s `storage` field or the
-  `PICKLAB_STORAGE_MODE` / `PICKLAB_STORAGE_PATH` env overrides. Existing
-  project-local runs remain discoverable by `artifact_list` /
-  `artifact_report` / MCP resources without migration. See the README's "Run
-  storage" section.
+  previous layout, selectable from project or global config) and `custom`
+  (explicit absolute path outside the project directory) storage modes are
+  available via the user-owned global config's `storage` field or the
+  `PICKLAB_STORAGE_MODE` / `PICKLAB_STORAGE_PATH` env overrides — a
+  project-committed `.picklab/config.json` cannot select `custom` (it
+  travels with `git clone`; a cloned repo requesting it falls back to home
+  with a `picklab doctor` warning, never a silent redirect of screenshots to
+  an attacker-chosen path). Existing project-local runs remain discoverable
+  by `artifact_list` / `artifact_report` / MCP resources without migration,
+  and retention pruning never touches them — only the resolved primary
+  storage root is ever pruned. See the README's "Run storage" section.
 - Added isolated headed Chrome/Chromium sessions, including CLI and MCP session
   lifecycle support and a static `picklab-browser` DevTools MCP entry.
 - Added `picklab watch` plus configurable manual/automatic VNC viewer attachment
@@ -45,9 +50,19 @@ release description, then reset it after the release is published.
   catalog, and active-evidence-pointer resolution in core, CLI, and MCP
   through it. `openRunCatalog` now layers the resolved primary root with a
   read-only legacy project-local fallback root for non-destructive discovery.
+  The resolver applies a source allowlist so only the global config layer or
+  an env override may select `custom` storage (project config may still
+  select `project-local` or `home`), and rejects a custom path that equals
+  or is nested inside the project directory. `pruneFinalizedEvidenceRuns`
+  scopes its retention candidate set to the resolved primary root
+  (`entry.rootDir`) so the read-only legacy fallback root is never a removal
+  candidate.
   Added a legacy read-fallback (`resolveReadablePath`, per-entry) for global
   config, agent state, and sessions across the `~/.picklab` →
-  `~/.pickforge/picklab` default-root change.
+  `~/.pickforge/picklab` default-root change. `destroySessionRecord` now
+  removes both the new-home and legacy copies of a session record
+  unconditionally, so a record that exists at both locations cannot
+  resurrect via the legacy read fallback after being destroyed.
 - Added a private browser lifecycle package with confined ephemeral profiles,
   loopback-only CDP discovery, verified process-group teardown, concurrent
   session safety, and conservative dead-session reaping.
@@ -86,10 +101,16 @@ release description, then reset it after the release is published.
   overrides) and `run-catalog.test.ts`'s "openRunCatalog storage modes" suite
   (home default, legacy project-local discovery, project isolation, custom
   mode), plus a `git status --porcelain` repo-cleanliness smoke test.
-- `bun run test` — same pre-existing failure set as unmodified `main` on this
-  (macOS) sandbox (Darwin lacks `/proc`, so PID-identity/Xvfb/x11vnc-driven
-  tests fail there and on CI's Linux runners this class does not apply);
-  verified test-by-test against `main` on this branch's dev sandbox.
+- `bun run test` — same pre-existing failure set as unmodified `main`,
+  verified test-by-test against `main` on this branch's (macOS) dev sandbox.
+  These are platform-environment failures, not specific to this change; on
+  CI's Linux runners this class does not apply. At least three distinct
+  causes, none `/proc`-only as previously stated here:
+  process-identity/Xvfb/x11vnc verification (Darwin has no `/proc`; most of
+  the count), a macOS tmpdir realpath mismatch (`/var` vs `/private/var`,
+  e.g. `run-catalog.test.ts`'s root-precedence test and
+  `devtools-mcp.test.ts`'s package-root assertion), and inline-screenshot/CDP
+  association mismatches in `devtools-evidence.test.ts`.
 - `bun run build`
 
 ### Not tested yet

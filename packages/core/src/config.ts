@@ -111,16 +111,47 @@ export async function readConfigFile(filePath: string): Promise<PicklabConfig> {
   }
 }
 
-export async function loadConfig(
+export interface ConfigLayers {
+  /** The user-owned global config layer (never travels with `git clone`). */
+  global: PicklabConfig;
+  /** The project-committed `.picklab/config.json` layer. */
+  project: PicklabConfig;
+}
+
+/**
+ * Read the global and project config layers separately, without merging
+ * them. Most callers want the merged view (`loadConfig`); this exists for
+ * callers — currently only `resolveRunStorage` — that must know which layer
+ * a value came from because the two layers carry different trust levels
+ * (project config is repo-committed and travels with `git clone`; global
+ * config is local and user-owned).
+ */
+export async function loadConfigLayers(
   projectDir: string,
   env: EnvLike = process.env,
-): Promise<PicklabConfig> {
+): Promise<ConfigLayers> {
+  // `resolveReadablePath` picks one whole file, never merges the new and
+  // legacy homes field-by-field: whichever one exists (new preferred) is
+  // read entirely on its own. That's safe here only because the caller
+  // (`loadConfig`, below) re-merges the result over `resolvedDefaults` and
+  // under the project layer anyway, so an all-or-nothing pick of the global
+  // layer still composes correctly with the rest of the precedence chain.
+  // A caller that needs partial-field legacy/new blending would need a
+  // different primitive.
   const globalPath = await resolveReadablePath(
     globalConfigPath(env),
     legacyGlobalConfigPath(env),
   );
   const global = await readConfigFile(globalPath);
   const project = await readConfigFile(projectConfigPath(projectDir));
+  return { global, project };
+}
+
+export async function loadConfig(
+  projectDir: string,
+  env: EnvLike = process.env,
+): Promise<PicklabConfig> {
+  const { global, project } = await loadConfigLayers(projectDir, env);
   return deepMerge(
     deepMerge(deepMerge({}, resolvedDefaults), global),
     project,

@@ -77,9 +77,10 @@ never collide. Use the platform home-directory equivalent on non-Linux systems.
 `PICKLAB_HOME` overrides the PickLab home root (default `~/.pickforge/picklab`);
 `picklab doctor` reports the resolved path.
 
-Two other modes are available via `storage` in `.picklab/config.json`
-(project-level) or the global config, or the `PICKLAB_STORAGE_MODE` /
-`PICKLAB_STORAGE_PATH` environment overrides for automation and tests:
+Two other modes are available via `storage` in the **global** config or the
+`PICKLAB_STORAGE_MODE` / `PICKLAB_STORAGE_PATH` environment overrides for
+automation and tests; `.picklab/config.json` (project-level) can select
+`project-local`, but not `custom` — see below:
 
 ```json
 {
@@ -91,9 +92,20 @@ Two other modes are available via `storage` in `.picklab/config.json`
 - `project-local` — restores the previous default: `.picklab/runs/` inside the
   project. Generated files then do appear in the project's source-control
   view; add `.picklab/runs/` to `.gitignore` if you opt into this mode.
-- `custom` — an explicit absolute path: `{ "storage": { "mode": "custom", "path": "/abs/path" } }`
-  writes runs under `<path>/runs/`. A relative path, or `custom` mode with no
-  path, is rejected.
+  Selectable from project or global config.
+- `custom` — an explicit absolute path outside the project directory:
+  `{ "storage": { "mode": "custom", "path": "/abs/path" } }` writes runs
+  under `<path>/runs/`. A relative path, a path equal to or nested inside the
+  project directory, or `custom` mode with no path, is rejected.
+
+**`custom` cannot be selected from project-level `.picklab/config.json`.**
+That file is repo-committed and travels with `git clone`; honoring a
+`custom` selection from it would let a cloned repository silently redirect
+run artifacts (screenshots, which may carry secrets) to any absolute path
+with no prompt. Only the user-owned global config or an env override may
+select `custom`. A project config that requests `custom` is ignored — the
+resolver falls back to global config's mode, then `home` — and `picklab
+doctor` surfaces the rejected request as a warning.
 
 `.picklab/config.json` itself always stays project-local regardless of
 `storage` mode — only generated runtime artifacts move.

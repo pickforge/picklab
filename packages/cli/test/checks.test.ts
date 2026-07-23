@@ -10,6 +10,7 @@ function snapshot(
   overrides: {
     picklabHome?: Partial<DetectionSnapshot["picklabHome"]>;
     legacyHome?: DetectionSnapshot["legacyHome"];
+    storage?: DetectionSnapshot["storage"];
     config?: Partial<DetectionSnapshot["config"]>;
     desktop?: Partial<DetectionSnapshot["desktop"]>;
     android?: Partial<DetectionSnapshot["android"]>;
@@ -25,6 +26,7 @@ function snapshot(
       ...overrides.picklabHome,
     },
     legacyHome: overrides.legacyHome ?? null,
+    storage: overrides.storage ?? { rejectedProjectCustom: null },
     config: { ok: true, error: null, profile: null, ...overrides.config },
     desktop: {
       xvfb: "/usr/bin/Xvfb",
@@ -109,6 +111,36 @@ describe("evaluateChecks", () => {
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("/home/u/.picklab");
     expect(check.hint).toContain("non-destructively");
+  });
+
+  it("omits the storage-custom-rejected check when nothing was rejected", () => {
+    const checks = evaluateChecks(snapshot());
+    expect(
+      checks.some((check) => check.id === "storage-custom-rejected"),
+    ).toBe(false);
+  });
+
+  it("surfaces a rejected project-config custom storage request as a non-blocking warning", () => {
+    const check = checkById(
+      snapshot({
+        storage: {
+          rejectedProjectCustom: { requestedPath: "/attacker/path" },
+        },
+      }),
+      "storage-custom-rejected",
+    );
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("/attacker/path");
+    expect(check.hint).toContain("global config");
+  });
+
+  it("surfaces a rejected request even with no requested path", () => {
+    const check = checkById(
+      snapshot({ storage: { rejectedProjectCustom: {} } }),
+      "storage-custom-rejected",
+    );
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("no path");
   });
 
   it("flags a broken config with its parse error", () => {
