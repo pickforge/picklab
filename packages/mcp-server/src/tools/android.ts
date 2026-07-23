@@ -74,6 +74,7 @@ function targetData(target: AndroidTarget): Record<string, unknown> {
   return data;
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function registerAndroidTools(
   server: McpServer,
   ctx: ServerContext,

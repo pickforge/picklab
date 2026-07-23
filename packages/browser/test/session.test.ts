@@ -809,6 +809,7 @@ describe.skipIf(!hasXvfb)("partial-failure cleanup (fake binaries)", () => {
     expect(await getSession(id, registryEnv)).toBeUndefined();
   }, TEST_TIMEOUT_MS);
 
+  // eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
   it("preserves retry state or completes cleanup across the supervisor reap race", async () => {
     const sessionsPath = path.join(home, "sessions");
     fs.mkdirSync(sessionsPath, { recursive: true });

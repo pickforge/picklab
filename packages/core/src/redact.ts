@@ -150,6 +150,7 @@ function isEmbeddingBoundary(text: string, index: number): boolean {
  * XML/JSON embedding: a quote that does not open a value ends the header so
  * the surrounding document's delimiters survive.
  */
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 function redactCookiePairs(
   text: string,
   start: number,

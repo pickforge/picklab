@@ -79,6 +79,7 @@ export function desktopSessionLogDir(
   return path.join(sessionsDir(registryEnv), id);
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 export async function createDesktopSession(
   opts: CreateDesktopSessionOptions,
 ): Promise<DesktopSessionHandle> {
@@ -350,6 +351,7 @@ async function acquireSessionVncLock(
       } catch (error) {
         const code = errorCode(error);
         if (code === "ENOENT") {
+          // eslint-disable-next-line max-depth -- Legacy gate debt: pickforge/picklab#60
           if ((await getSession(id, registryEnv)) === undefined) {
             throw new Error(`Session not found: ${id}`);
           }
@@ -494,6 +496,7 @@ export async function ensureSessionVnc(
   if ((await getSession(id, registryEnv)) === undefined) {
     throw new Error(`Session not found: ${id}`);
   }
+  // eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
   return withSessionVncLock(id, registryEnv, async () => {
     let record = await getSession(id, registryEnv);
     if (record === undefined) {

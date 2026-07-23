@@ -205,6 +205,7 @@ export async function sessionStatusEntry(
   return entry;
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function registerSessionTools(
   server: McpServer,
   ctx: ServerContext,

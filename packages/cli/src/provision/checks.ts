@@ -71,6 +71,7 @@ function pathCheck(
   return { id, title, status: missingStatus, detail: "not found", hint };
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function evaluateChecks(s: DetectionSnapshot): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
 

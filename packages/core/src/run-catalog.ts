@@ -134,6 +134,7 @@ async function rootAndRunStillMatch(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 async function readVerifiedRootFile(
   root: RunCatalogRoot,
   dirName: string,

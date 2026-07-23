@@ -208,6 +208,7 @@ async function listRunFiles(
   return entries;
 }
 
+// eslint-disable-next-line max-lines-per-function -- Legacy gate debt: pickforge/picklab#60
 export function registerResources(server: McpServer, ctx: ServerContext): void {
   server.registerResource(
     "runs",

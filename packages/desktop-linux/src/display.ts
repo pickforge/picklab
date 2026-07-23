@@ -318,6 +318,7 @@ async function failedAttempt(
   };
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 async function attemptStartXvfb(
   display: string,
   opts: StartXvfbOptions,
@@ -389,6 +390,7 @@ async function attemptStartXvfb(
           return failedAttempt("lost-race", partial, daemon, timeoutMs);
         }
         if (alive && (lockPid === null || lockPid === daemon.pid)) {
+          // eslint-disable-next-line max-depth -- Legacy gate debt: pickforge/picklab#60
           if (isAborted(opts.signal)) {
             return failedAttempt("aborted", partial, daemon, timeoutMs);
           }

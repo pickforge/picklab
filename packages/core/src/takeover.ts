@@ -333,6 +333,7 @@ export interface AcquireHumanLeaseOptions {
  * lease this call just created is released and `HumanLeaseDrainTimeoutError`
  * is thrown — "timeout aborts cleanly."
  */
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function acquireHumanLease(
   sessionId: string,
   env: EnvLike = process.env,

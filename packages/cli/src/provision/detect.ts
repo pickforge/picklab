@@ -102,6 +102,7 @@ export async function labUserExists(
   }
 }
 
+// eslint-disable-next-line complexity -- Legacy gate debt: pickforge/picklab#60
 export async function collectSnapshot(
   opts: CollectSnapshotOptions = {},
 ): Promise<DetectionSnapshot> {

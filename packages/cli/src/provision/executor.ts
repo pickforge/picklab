@@ -388,6 +388,7 @@ function prepareSections(
   });
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 export async function executeProvisioning(
   sections: readonly ProvisioningSection[],
   opts: ExecuteProvisioningOptions = {},
@@ -457,6 +458,7 @@ export async function executeProvisioning(
           skipped.push(decision.reason);
         } else {
           addError(decision.reason, decision.kind);
+          // eslint-disable-next-line max-depth -- Legacy gate debt: pickforge/picklab#60
           if (section.consent.retainPlanOnDenied === true) {
             selected.push(...entry.steps);
           }

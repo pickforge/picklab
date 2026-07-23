@@ -401,6 +401,7 @@ async function stopChild(
   return exit;
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- Legacy gate debt: pickforge/picklab#60
 export async function runDevtoolsMcpRelay(
   opts: RunDevtoolsMcpRelayOptions,
 ): Promise<RelayExit> {
