@@ -644,6 +644,49 @@ describe("privileged execution via graphical sudo (askpass)", () => {
     },
   );
 
+  it("prefixes an askpass-unavailable reason with the section's privilegeUnavailable.context, like its sibling skip reasons", async () => {
+    // Regression: a section's static privilegeUnavailable.reason only ever
+    // applied to the sudo-missing failure mode; an askpass-unavailable
+    // failure used to drop the section's own "lab-user: "-style context
+    // entirely. `context` is the section's dedicated way to keep it.
+    const result = await executeProvisioning(
+      [
+        {
+          kind: "plan",
+          plan: { steps: [command("root", true)] },
+          privilegeUnavailable: {
+            action: "skip",
+            reason: "lab-user: sudo not found on PATH",
+            context: "lab-user: ",
+          },
+        },
+      ],
+      { privilege: { sudoPath, askpass: { state: "headless" } } },
+    );
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]).toMatch(/^lab-user: No graphical session detected/);
+    // The sudo-missing-only reason must never leak into this failure mode.
+    expect(result.skipped[0]).not.toContain("sudo not found on PATH");
+  });
+
+  it("uses the bare askpass-unavailable message when the section supplies no context", async () => {
+    const result = await executeProvisioning(
+      [
+        {
+          kind: "plan",
+          plan: { steps: [command("root", true)] },
+          privilegeUnavailable: {
+            action: "skip",
+            reason: "some other static reason",
+          },
+        },
+      ],
+      { privilege: { sudoPath, askpass: { state: "headless" } } },
+    );
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]).toMatch(/^No graphical session detected/);
+  });
+
   it("fails preflight when privilege.askpass is omitted entirely (fail-closed default)", async () => {
     const result = await executeProvisioning(
       [approved({ steps: [command("root", true)] })],

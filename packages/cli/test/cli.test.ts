@@ -202,6 +202,7 @@ describe("picklab doctor", () => {
     const result = await runCli(["doctor", "--json", "--fix"], env, tmpDir);
     expect(result.code).toBe(0);
     const report = parseJson(result);
+    expect(report.fix.status).toBe("completed");
     expect(fs.statSync(env.PICKLAB_HOME!).isDirectory()).toBe(true);
     expect(report.fix.results).toEqual([
       { id: "picklab-home", ok: true, detail: expect.stringContaining("mkdir") },
@@ -214,6 +215,24 @@ describe("picklab doctor", () => {
         "Install sudo, or create the user manually as root: " +
         "useradd -r -M -s /usr/sbin/nologin picklab-lab",
     );
+    expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
+      .toEqual(["avd", "lab-user"]);
+  });
+
+  it("keeps the 'lab-user: ' skip prefix when the failure is askpass-unavailable rather than sudo-missing", async () => {
+    // sudo IS on PATH here (unlike the test above), so the lab-user section
+    // fails preflight on the askpass capability check instead — its skip
+    // reason must still carry the same "lab-user: " context its "avd: "
+    // sibling does (P3 fix: prepareSections previously dropped it for this
+    // failure mode).
+    const env = makeEnv(tmpDir, { bins: { sudo: "exit 0" } });
+    const result = await runCli(["doctor", "--json", "--fix"], env, tmpDir);
+    expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.fix.status).toBe("completed");
+    const skipped = (report.fix.skipped as string[]).join("\n");
+    expect(skipped).toContain("avd:");
+    expect(skipped).toMatch(/lab-user: (No graphical session detected|Graphical sudo prompts are only supported on Linux)/);
     expect((report.fix.skipped as string[]).map((entry) => entry.split(":")[0]))
       .toEqual(["avd", "lab-user"]);
   });
@@ -281,6 +300,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(0);
     const report = parseJson(result);
     expect(report.ok).toBe(true);
+    expect(report.status).toBe("completed");
     const config = JSON.parse(
       fs.readFileSync(path.join(projectDir, ".picklab", "config.json"), "utf8"),
     ) as Record<string, unknown>;
@@ -324,6 +344,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect(report.ok).toBe(false);
+    expect(report.status).toBe("cancelled");
     expect((report.errors as string[]).join("\n")).toContain("--yes");
     expect(fs.existsSync(sudoLog)).toBe(false);
     expect(fs.existsSync(path.join(projectDir, ".picklab"))).toBe(false);
@@ -488,6 +509,7 @@ describe("picklab init", () => {
     expect(result.code).toBe(1);
     const report = parseJson(result);
     expect(report.ok).toBe(false);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain(
       'sdkmanager "system-images;android-35;google_apis;x86_64"',
     );
@@ -543,6 +565,7 @@ describe("picklab init", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
     expect((report.plan as Array<{ id: string }>).map((step) => step.id)).toEqual(
       ["project-config", "picklab-home"],
@@ -932,6 +955,7 @@ describe("picklab setup lab-user", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    expect(report.status).toBe("failed");
     expect((report.errors as string[]).join("\n")).toContain("sudo not found");
     expect(report.plan).toEqual([]);
   });
@@ -951,6 +975,8 @@ describe("picklab setup lab-user", () => {
       tmpDir,
     );
     expect(result.code).toBe(0);
+    const report = parseJson(result);
+    expect(report.status).toBe("completed");
     const lines = fs
       .readFileSync(sudoLog, "utf8")
       .trim()
@@ -991,6 +1017,9 @@ describe("picklab setup lab-user", () => {
     );
     expect(result.code).toBe(1);
     const report = parseJson(result);
+    // This step fails without a "sudo:"-prefixed diagnostic, so it's a
+    // generic step failure, not a sudo cancellation/denial.
+    expect(report.status).toBe("failed");
     expect(
       (report.results as Array<{ id: string; ok: boolean }>).map((step) => [
         step.id,
@@ -1006,6 +1035,29 @@ describe("picklab setup lab-user", () => {
     expect(JSON.stringify(report)).not.toContain("planted-secret");
     expect(fs.existsSync(path.join(env.PICKLAB_HOME!, "config.json"))).toBe(
       false,
+    );
+  });
+
+  // Linux-only (see rationale above).
+  it.skipIf(process.platform !== "linux")(
+    "reports status: cancelled, distinct from failed/declined, when sudo denies or cancels a step",
+    async () => {
+    const env = makeEnv(tmpDir, {
+      graphicalSudo: true,
+      bins: {
+        sudo: 'echo "sudo: a password is required" >&2\nexit 1',
+      },
+    });
+    const result = await runCli(
+      ["setup", "lab-user", "--yes", "--json"],
+      env,
+      tmpDir,
+    );
+    expect(result.code).toBe(1);
+    const report = parseJson(result);
+    expect(report.status).toBe("cancelled");
+    expect((report.errors as string[]).join("\n")).toContain(
+      "sudo denied or cancelled",
     );
   });
 });

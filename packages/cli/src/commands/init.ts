@@ -10,6 +10,7 @@ import {
 import { collectSnapshot, type DetectionSnapshot } from "../provision/detect.js";
 import {
   executeProvisioning,
+  type ExecuteProvisioningResult,
   type ProvisioningSection,
   type StepResult,
 } from "../provision/executor.js";
@@ -34,6 +35,11 @@ export interface InitCliOptions {
 
 export interface InitReport {
   ok: boolean;
+  /** Mirrors `ExecuteProvisioningResult.status` so `--json` consumers can
+   * distinguish a declined/cancelled/sudo-cancelled provisioning run from a
+   * generic failure without string-matching `errors`. `"failed"` before an
+   * execution ever runs. */
+  status: ExecuteProvisioningResult["status"];
   profile: PicklabProfile;
   projectDir: string;
   dryRun: boolean;
@@ -183,6 +189,7 @@ export async function runInit(
 
   const report: InitReport = {
     ok: false,
+    status: "failed",
     profile,
     projectDir,
     dryRun: opts.dryRun === true,
@@ -210,6 +217,7 @@ export async function runInit(
   report.plan = execution.plan.steps;
   report.results = execution.results;
   report.ok = execution.ok;
+  report.status = execution.status;
   if (!execution.ok) {
     const errors =
       execution.errors.length > 0 ? execution.errors : ["provisioning failed"];

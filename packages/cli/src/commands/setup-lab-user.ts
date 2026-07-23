@@ -3,6 +3,7 @@ import { resolveAskpassCapability } from "../provision/askpass.js";
 import { collectSnapshot } from "../provision/detect.js";
 import {
   executeProvisioning,
+  type ExecuteProvisioningResult,
   type StepResult,
 } from "../provision/executor.js";
 import type { ProvisioningStep } from "../provision/plan.js";
@@ -22,6 +23,11 @@ export interface SetupLabUserCliOptions {
 
 export interface SetupLabUserReport {
   ok: boolean;
+  /** Mirrors `ExecuteProvisioningResult.status` so `--json` consumers can
+   * distinguish a declined/cancelled/sudo-cancelled provisioning run from a
+   * generic failure without string-matching `errors`. `"failed"` before an
+   * execution ever runs (e.g. an invalid lab user name/home). */
+  status: ExecuteProvisioningResult["status"];
   name: string;
   home: string;
   userExists: boolean;
@@ -52,6 +58,7 @@ export async function runSetupLabUser(
   });
   const report: SetupLabUserReport = {
     ok: false,
+    status: "failed",
     name: snapshot.labUser.name,
     home: snapshot.labUser.home,
     userExists: snapshot.labUser.exists,
@@ -121,6 +128,7 @@ export async function runSetupLabUser(
   report.plan = execution.plan.steps;
   report.results = execution.results;
   report.ok = execution.ok;
+  report.status = execution.status;
   if (!execution.ok) {
     report.errors.push(execution.error ?? "provisioning failed");
   }

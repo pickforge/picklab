@@ -59,7 +59,19 @@ export interface ProvisioningPlanSection {
   };
   privilegeUnavailable?: {
     action?: "error" | "skip";
+    /** Used verbatim only when sudo itself is missing from PATH — the
+     * failure mode this field predates the askpass contract for. Ignored
+     * for an askpass-unavailable failure (see `context` below), since a
+     * static reason authored for "sudo not found" would otherwise paper
+     * over the real, state-correct askpass message. */
     reason: string;
+    /** Prefix (e.g. `"lab-user: "`) prepended, verbatim, to an
+     * askpass-unavailable message (headless/no-helper/unsupported-platform).
+     * `reason` doesn't apply to that failure mode (see above), so this is a
+     * section's only way to keep the same "<label>: " context its sibling
+     * skip/error reasons already carry — e.g. doctor's `--fix` skip list
+     * mixes "avd: ..." and "lab-user: ..." entries. */
+    context?: string;
   };
 }
 
@@ -346,8 +358,17 @@ function prepareSections(
     } catch (error) {
       if (error instanceof AskpassUnavailableError) {
         // Always the specific, state-correct reason — never masked by a
-        // section's static privilegeUnavailable.reason (see class doc).
-        return { kind: "unavailable", section, reason: error.message };
+        // section's static privilegeUnavailable.reason (see class doc) —
+        // but still honors an explicit `context` prefix, so a section that
+        // labels its other skip/error reasons (e.g. doctor's "lab-user: ")
+        // keeps that same label here.
+        const context = section.privilegeUnavailable?.context;
+        return {
+          kind: "unavailable",
+          section,
+          reason:
+            context === undefined ? error.message : `${context}${error.message}`,
+        };
       }
       if (error instanceof PrivilegeUnavailableError) {
         return {
