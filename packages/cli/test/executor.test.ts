@@ -2,13 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AskpassCapability } from "../src/provision/askpass.js";
 import {
   classifyPlan,
+  createLocalExecutionAdapter,
   executeProvisioning,
+  PrivilegedCommandDeniedError,
   type ProvisioningExecutionAdapter,
   type ProvisioningSection,
 } from "../src/provision/executor.js";
 import type { ProvisioningPlan, ProvisioningStep } from "../src/provision/plan.js";
+
+const AVAILABLE_ASKPASS: AskpassCapability = {
+  state: "available",
+  helper: "/usr/bin/ksshaskpass",
+};
 
 let tmpDir: string;
 
@@ -333,7 +341,7 @@ describe("executeProvisioning", () => {
         },
       ],
       {
-        privilege: { sudoPath: "/usr/bin/sudo", nonInteractive: true },
+        privilege: { sudoPath: "/usr/bin/sudo", askpass: AVAILABLE_ASKPASS },
       },
     );
     expect(result.status).toBe("declined");
@@ -342,7 +350,7 @@ describe("executeProvisioning", () => {
       command: {
         cmd: "/usr/bin/sudo",
         args: [
-          "-n",
+          "-A",
           "useradd",
           "-r",
           "-M",
@@ -350,6 +358,7 @@ describe("executeProvisioning", () => {
           "/usr/sbin/nologin",
           "picklab-lab",
         ],
+        env: { SUDO_ASKPASS: "/usr/bin/ksshaskpass" },
       },
     });
     expect(raw).toMatchObject({ command: { cmd: "useradd" } });
@@ -394,7 +403,7 @@ describe("executeProvisioning", () => {
           },
         },
       ],
-      { privilege: { sudoPath: null, nonInteractive: true } },
+      { privilege: { sudoPath: null } },
     );
     expect(result.status).toBe("failed");
     expect(result.error).toBe("same missing sudo message");
@@ -430,7 +439,7 @@ describe("executeProvisioning", () => {
         },
         { kind: "blocked", reason: "later error" },
       ],
-      { privilege: { sudoPath: null, nonInteractive: true } },
+      { privilege: { sudoPath: null } },
     );
 
     expect(result.plan.steps.map((step) => step.id)).toEqual(["mk"]);
@@ -533,5 +542,194 @@ describe("executeProvisioning", () => {
         fs.readFileSync(path.join(projectDir, ".picklab", "config.json"), "utf8"),
       ),
     ).toEqual({ profile: "generic" });
+  });
+});
+
+// pickforge/picklab#27 — "Shared graphical sudo (askpass) security contract
+// — locked v1". These tests cover the contract's verification list for the
+// PickLab side: available/missing/headless preflight, cancellation, env
+// propagation, arg-array safety, and redaction.
+describe("privileged execution via graphical sudo (askpass)", () => {
+  const sudoPath = "/usr/bin/sudo";
+
+  it("materializes sudo -A with the resolved helper, adding only SUDO_ASKPASS to the env", () => {
+    const adapter = createLocalExecutionAdapter({
+      privilege: { sudoPath, askpass: AVAILABLE_ASKPASS },
+    });
+    const step = command("root", true, ["-r", "-M", "picklab-lab"]);
+    if (step.kind !== "command") throw new Error("expected a command step");
+    step.command.env = { ANDROID_HOME: "/sdk" };
+
+    const materialized = adapter.materialize(step);
+    if (materialized.kind !== "command") {
+      throw new Error("expected a command step");
+    }
+    expect(materialized.command).toEqual({
+      cmd: sudoPath,
+      args: ["-A", process.execPath, "-r", "-M", "picklab-lab"],
+      env: { ANDROID_HOME: "/sdk", SUDO_ASKPASS: "/usr/bin/ksshaskpass" },
+    });
+    // The raw step (and its env object) is untouched by materialization.
+    expect(step.command.env).toEqual({ ANDROID_HOME: "/sdk" });
+  });
+
+  it("adds SUDO_ASKPASS as the only env key when the raw step declares no env", () => {
+    const adapter = createLocalExecutionAdapter({
+      privilege: { sudoPath, askpass: AVAILABLE_ASKPASS },
+    });
+    const materialized = adapter.materialize(command("root", true));
+    if (materialized.kind !== "command") {
+      throw new Error("expected a command step");
+    }
+    expect(materialized.command.env).toEqual({
+      SUDO_ASKPASS: "/usr/bin/ksshaskpass",
+    });
+  });
+
+  it("keeps a hostile argv element as one array entry through materialization (never a shell string)", () => {
+    const adapter = createLocalExecutionAdapter({
+      privilege: { sudoPath, askpass: AVAILABLE_ASKPASS },
+    });
+    const hostile = "$(touch /tmp/pwn) `evil`; rm -rf / | cat";
+    const materialized = adapter.materialize(command("root", true, [hostile]));
+    if (materialized.kind !== "command") {
+      throw new Error("expected a command step");
+    }
+    expect(materialized.command.args).toEqual([
+      "-A",
+      process.execPath,
+      hostile,
+    ]);
+    expect(materialized.command.args).toHaveLength(3);
+  });
+
+  it.each([
+    ["headless" as const, /graphical session/i],
+    ["no-helper" as const, /SUDO_ASKPASS helper/i],
+    ["unsupported-platform" as const, /only supported on Linux/i],
+  ])(
+    "fails preflight, before any mutation, when askpass capability is %s",
+    async (state, expected) => {
+      const target = path.join(tmpDir, "should-not-exist");
+      const result = await executeProvisioning(
+        [
+          {
+            kind: "plan",
+            plan: {
+              steps: [
+                {
+                  id: "mk",
+                  title: "mk",
+                  kind: "mkdir",
+                  privileged: false,
+                  dir: target,
+                },
+              ],
+            },
+          },
+          {
+            kind: "plan",
+            plan: { steps: [command("root", true)] },
+            consent: { decide: async () => ({ kind: "approved" }) },
+          },
+        ],
+        { privilege: { sudoPath, askpass: { state } } },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error).toMatch(expected);
+      expect(result.error).toContain("Run it yourself in a terminal: sudo");
+      expect(result.plan.steps.map((step) => step.id)).toEqual(["mk"]);
+      expect(result.results).toEqual([]);
+      expect(fs.existsSync(target)).toBe(false);
+    },
+  );
+
+  it("fails preflight when privilege.askpass is omitted entirely (fail-closed default)", async () => {
+    const result = await executeProvisioning(
+      [approved({ steps: [command("root", true)] })],
+      { privilege: { sudoPath } },
+    );
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/graphical session/i);
+  });
+
+  it(
+    "surfaces sudo cancellation/denial as a distinct 'cancelled' status, " +
+      "with no retry and an actionable manual fallback",
+    async () => {
+      const fakeSudo = path.join(tmpDir, "fake-sudo.cjs");
+      const record = path.join(tmpDir, "fake-sudo-invocations.log");
+      fs.writeFileSync(
+        fakeSudo,
+        "#!/usr/bin/env node\n" +
+          `require("fs").appendFileSync(${JSON.stringify(record)}, "invoked\\n");\n` +
+          'process.stderr.write("sudo: a password is required\\n");\n' +
+          "process.exit(1);\n",
+      );
+      fs.chmodSync(fakeSudo, 0o755);
+
+      const result = await executeProvisioning(
+        [
+          approved({
+            steps: [command("root", true, ["-r", "-M", "picklab-lab"])],
+          }),
+        ],
+        { privilege: { sudoPath: fakeSudo, askpass: AVAILABLE_ASKPASS } },
+      );
+
+      expect(result.status).toBe("cancelled");
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("sudo denied or cancelled");
+      expect(result.error).toContain("run it yourself in a terminal: sudo");
+      expect(result.results).toEqual([
+        {
+          id: "root",
+          ok: false,
+          detail: expect.stringContaining("cancelled"),
+        },
+      ]);
+      // No automatic retry loop: the stand-in sudo ran exactly once.
+      expect(fs.readFileSync(record, "utf8").trim().split("\n")).toEqual([
+        "invoked",
+      ]);
+    },
+  );
+
+  it("redacts credential-shaped text out of a sudo denial message before it reaches the result", async () => {
+    const fakeSudo = path.join(tmpDir, "fake-sudo-secret.cjs");
+    fs.writeFileSync(
+      fakeSudo,
+      "#!/usr/bin/env node\n" +
+        'process.stderr.write("sudo: a password is required (token=planted-secret)\\n");\n' +
+        "process.exit(1);\n",
+    );
+    fs.chmodSync(fakeSudo, 0o755);
+
+    const result = await executeProvisioning(
+      [approved({ steps: [command("root", true)] })],
+      { privilege: { sudoPath: fakeSudo, askpass: AVAILABLE_ASKPASS } },
+    );
+
+    expect(result.status).toBe("cancelled");
+    expect(JSON.stringify(result)).not.toContain("planted-secret");
+    expect(result.error).toContain("[REDACTED]");
+  });
+
+  it("lets a custom adapter raise the same distinct cancelled state via the exported error class", async () => {
+    const result = await executeProvisioning(
+      [approved({ steps: [command("root", true)] })],
+      {
+        adapter: {
+          materialize: (step) => step,
+          execute: async () => {},
+          executePrivileged: async () => {
+            throw new PrivilegedCommandDeniedError(
+              "sudo denied or cancelled this privileged command: test double",
+            );
+          },
+        },
+      },
+    );
+    expect(result.status).toBe("cancelled");
   });
 });

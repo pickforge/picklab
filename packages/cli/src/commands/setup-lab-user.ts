@@ -1,4 +1,5 @@
 import type { EnvLike } from "@pickforge/picklab-core";
+import { resolveAskpassCapability } from "../provision/askpass.js";
 import { collectSnapshot } from "../provision/detect.js";
 import {
   executeProvisioning,
@@ -108,7 +109,7 @@ export async function runSetupLabUser(
       log,
       privilege: {
         sudoPath: snapshot.sudo,
-        nonInteractive: process.stdin.isTTY !== true,
+        askpass: resolveAskpassCapability(env),
       },
       beforeExecute: () => {
         if (opts.json !== true && snapshot.labUser.exists) {

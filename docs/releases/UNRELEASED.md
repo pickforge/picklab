@@ -5,6 +5,21 @@ release description, then reset it after the release is published.
 
 ## User-facing changes
 
+- **Privileged provisioning now runs through graphical `sudo` on Linux
+  (`picklab setup lab-user`, `picklab init --create-lab-user`,
+  `picklab doctor --fix`).** Instead of a plain terminal password prompt,
+  PickLab detects a graphical session (`WAYLAND_DISPLAY`/`DISPLAY`) and a
+  `SUDO_ASKPASS` helper (your own `SUDO_ASKPASS`, or the first of
+  `ksshaskpass`/`ssh-askpass`/`lxqt-openssh-askpass`/the standard distro
+  paths) before spawning anything privileged, then runs `sudo -A` with that
+  helper — the only environment variable this feature injects. PickLab never
+  ships or installs its own helper, and never captures, logs, or persists the
+  password prompt. Headless sessions, a missing helper, or a non-Linux
+  platform (macOS/Windows are out of scope this release) fail closed with an
+  actionable error naming the manual `sudo ...` fallback — no automatic
+  fallback to a plain interactive password prompt. A cancelled or denied
+  graphical prompt surfaces as a distinct failure with no retry. See the
+  README's "Security model" section. (pickforge/picklab#27)
 - **Default run storage changed.** Screenshots, logs, manifests, and evidence
   journals now default to `~/.pickforge/picklab/projects/<projectId>/runs/`
   (outside the project) instead of `<project>/.picklab/runs/`, so a default
@@ -75,6 +90,16 @@ release description, then reset it after the release is published.
 - Centralized CLI provisioning policy for plan classification, consent,
   dry-runs, ordered preflight failures/skips, adapter-owned sudo routing,
   cancellation, redacted presentation plans, and partial results.
+- Added `packages/cli/src/provision/askpass.ts`, a pure four-state capability
+  detector (`available`/`no-helper`/`headless`/`unsupported-platform`)
+  implementing the "Shared graphical sudo (askpass) security contract —
+  locked v1" shared with pickforge/pickforge#215/#258
+  (`crates/pickforge-core/src/process/askpass.rs`); wired it into the
+  provisioning executor's privileged-step materialization (`sudo -A` +
+  `SUDO_ASKPASS`, arg-array only) and into `setup lab-user`/`doctor
+  --fix`/`init`. sudo-level denial/cancellation (detected from sudo's own
+  `sudo:`-prefixed diagnostics, never prompt text) now surfaces as a distinct
+  `cancelled` executor status instead of a generic failure.
 - Added a framing-aware DevTools NDJSON relay with protocol validation,
   backpressure, bounded diagnostics, redacted failures, and evidence hooks.
 - Added atomic, crash-recoverable evidence journals, active-run ownership,
@@ -101,6 +126,23 @@ release description, then reset it after the release is published.
   overrides) and `run-catalog.test.ts`'s "openRunCatalog storage modes" suite
   (home default, legacy project-local discovery, project isolation, custom
   mode), plus a `git status --porcelain` repo-cleanliness smoke test.
+- New `askpass.test.ts` (capability detection: headless/graphical, user-set
+  vs. probe-list priority, empty-value handling, Linux/non-Linux gating) and
+  an extended `executor.test.ts` "privileged execution via graphical sudo"
+  suite (materialization to `sudo -A` + `SUDO_ASKPASS`, env-propagation
+  proving only that key is added, arg-array safety for hostile argv,
+  preflight failure for each non-available capability state, sudo
+  cancellation/denial via a stand-in `sudo` script surfacing a distinct
+  `cancelled` status with no retry, and redaction of a planted secret in a
+  sudo denial message). Extended `cli.test.ts` with real end-to-end coverage
+  routing `setup lab-user`/`init --create-lab-user` through a fake graphical
+  `sudo -A` + `SUDO_ASKPASS` helper, plus platform-appropriate manual-fallback
+  assertions for the no-session/no-helper/non-Linux cases. The
+  happy-path/cancellation `cli.test.ts` cases that need a real Linux
+  graphical-session capability are `skipIf(process.platform !== "linux")`
+  (this dev sandbox is macOS); they run in full on Linux CI.
+  Real `sudo -A -v` hardware smoke (a live graphical prompt, not a stand-in)
+  is not covered here and is deferred to a real Linux desktop.
 - `bun run test` — same pre-existing failure set as unmodified `main`,
   verified test-by-test against `main` on this branch's (macOS) dev sandbox.
   These are platform-environment failures, not specific to this change; on
@@ -120,6 +162,10 @@ release description, then reset it after the release is published.
   Darwin-only failures above stop the process before the v8 coverage
   provider flushes it — reproduced identically on unmodified `main`).
 - Platform smoke checks outside Linux.
+- Real `sudo -A -v` graphical-prompt smoke on a live Linux desktop (approve
+  and cancel) — the automated suite covers this with a stand-in `sudo`/
+  askpass-path script per test, never a real graphical prompt; a real-desktop
+  smoke is deferred.
 - Live remote SSH-tunnel smoke test.
 - Tag-triggered npm publish and draft-release creation (runs only after merge and
   tag push).

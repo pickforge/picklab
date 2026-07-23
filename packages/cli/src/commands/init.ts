@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { EnvLike, PicklabProfile } from "@pickforge/picklab-core";
+import { resolveAskpassCapability } from "../provision/askpass.js";
 import {
   evaluateChecks,
   formatCheckLine,
@@ -202,7 +203,7 @@ export async function runInit(
       log,
       privilege: {
         sudoPath: snapshot.sudo,
-        nonInteractive: process.stdin.isTTY !== true,
+        askpass: resolveAskpassCapability(env),
       },
     },
   );
