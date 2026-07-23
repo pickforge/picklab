@@ -109,4 +109,38 @@ describe("desktop input tools fail closed under human control", () => {
     expect(keyed.ok).toBe(false);
     expect(keyed.errors.join("\n")).toContain("human control is active");
   });
+
+  it("rejects desktop_launch too (a new client can grab focus on the shared display)", async () => {
+    dirs = makeLabDirs();
+    const env = { PICKLAB_HOME: dirs.home };
+    lab = await connectLab({ projectDir: dirs.projectDir, env });
+    const id = writeDesktopSessionRecord(dirs.home, dirs.projectDir);
+    const lease = await acquireHumanLease(id, env);
+
+    const launched = parseToolJson(
+      await lab.client.callTool({
+        name: "desktop_launch",
+        arguments: { session: id, command: "xterm" },
+      }),
+    );
+    expect(launched.ok).toBe(false);
+    expect(launched.errors.join("\n")).toContain("human control is active");
+
+    await releaseHumanLease(id, lease.leaseId, env);
+  });
+
+  it("leaves desktop_screenshot ungated (read-only, no input delivered)", async () => {
+    dirs = makeLabDirs();
+    const env = { PICKLAB_HOME: dirs.home };
+    lab = await connectLab({ projectDir: dirs.projectDir, env });
+    const id = writeDesktopSessionRecord(dirs.home, dirs.projectDir);
+    await acquireHumanLease(id, env);
+
+    const result = parseToolJson(
+      await lab.client.callTool({ name: "desktop_screenshot", arguments: { session: id } }),
+    );
+    // Not gated: it fails only because there is no real display/screenshot
+    // tool in this test environment, never because of the human lease.
+    expect(result.errors.join("\n")).not.toContain("human control is active");
+  });
 });

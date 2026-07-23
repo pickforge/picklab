@@ -8,7 +8,13 @@ import {
   releaseHumanLease,
   type EnvLike,
 } from "@pickforge/picklab-core";
-import { runDesktopClick, runDesktopType, runDesktopKey } from "../src/commands/desktop.js";
+import {
+  runDesktopClick,
+  runDesktopLaunch,
+  runDesktopScreenshot,
+  runDesktopType,
+  runDesktopKey,
+} from "../src/commands/desktop.js";
 
 let root: string;
 let env: EnvLike;
@@ -63,6 +69,30 @@ describe("desktop input commands fail closed under human control", () => {
       await runDesktopKey("Return", { session: id, projectDir: root, json: true }),
     ).toBe(1);
     expect(lastReport().errors[0]).toContain("human control is active");
+
+    await releaseHumanLease(id, lease.leaseId, env);
+  });
+
+  it("rejects desktop launch (a new client can grab focus on the shared display)", async () => {
+    const id = await createDesktop();
+    const lease = await acquireHumanLease(id, env);
+
+    expect(
+      await runDesktopLaunch("xterm", [], { session: id, projectDir: root, json: true }),
+    ).toBe(1);
+    expect(lastReport().errors[0]).toContain("human control is active");
+
+    await releaseHumanLease(id, lease.leaseId, env);
+  });
+
+  it("does not gate desktop screenshot (read-only)", async () => {
+    const id = await createDesktop();
+    const lease = await acquireHumanLease(id, env);
+
+    await runDesktopScreenshot({ session: id, projectDir: root, json: true });
+    // Fails only for lack of a real display/screenshot tool in this
+    // environment, never because of the human lease.
+    expect(lastReport().errors.join("\n")).not.toContain("human control is active");
 
     await releaseHumanLease(id, lease.leaseId, env);
   });
